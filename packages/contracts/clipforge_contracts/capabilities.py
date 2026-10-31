@@ -74,7 +74,7 @@ class ReplaceBackgroundParams(BaseModel):
     type: Literal["replace_background"] = "replace_background"
     prompt: str = Field(min_length=1, max_length=240)
     asset_source: Literal["local_asset", "mock_generated"] = "local_asset"
-    asset_id: str | None = Field(default=None, max_length=80)
+    asset_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,80}$")
     composition: Literal["centered", "rule_of_thirds"] = "centered"
 
 
@@ -364,3 +364,50 @@ def capability_summary_for_prompt() -> str:
         simulated = " (simulated)" if capability.simulated else ""
         lines.append(f"- {capability.capability_id} [{marker}{simulated}]: {capability.description}")
     return "\n".join(lines)
+
+
+# --- EDL projection policy -------------------------------------------------
+# The EDL is a declarative projection of registered capabilities. Timing fields are
+# only legal when the timeline capability that owns them is executable. While
+# `timeline.trim` is disabled, every EDL timing field is forbidden.
+
+EDL_ROLE: dict[str, str] = {
+    "subject.isolate": "prepare",
+    "background.blur": "transform",
+    "background.replace": "transform",
+    "audio.preserve": "finalize",
+    "video.render_mp4": "finalize",
+    "output.verify": "finalize",
+    "background.generate": "planned",
+    "scene.detect_cuts": "unavailable",
+    "timeline.trim": "unavailable",
+    "transition.apply": "unavailable",
+    "keyframe.animate": "unavailable",
+    "multitrack.edit": "unavailable",
+    "colour.grade": "unavailable",
+    "speed.ramp": "unavailable",
+    "audio.mix": "unavailable",
+    "captions.animate": "unavailable",
+}
+
+TIMING_OWNER_CAPABILITY_ID = "timeline.trim"
+
+
+def edl_role_for(capability_id: str) -> str:
+    return EDL_ROLE.get(capability_id, "unavailable")
+
+
+def edl_timing_allowed() -> bool:
+    """Timing is legal only when the owning timeline capability is executable."""
+    owner = CAPABILITIES.get(TIMING_OWNER_CAPABILITY_ID)
+    return bool(owner and owner.executable)
+
+
+def edl_handler_for(capability_id: str) -> str:
+    """Controlled handler resolution. Never accept a handler from model output."""
+    capability = CAPABILITIES.get(capability_id)
+    if capability is None or not capability.executable or not capability.backend_handler:
+        raise CapabilityRegistryError(
+            f"Capability {capability_id!r} has no executable backend handler."
+        )
+    return capability.backend_handler

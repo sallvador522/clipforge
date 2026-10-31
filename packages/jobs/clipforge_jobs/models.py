@@ -13,6 +13,7 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
 from clipforge_contracts import BackgroundResult, EditingPlan, RenderResult, SegmentationResult, TranscriptResult
+from clipforge_contracts.edl import EditHistoryEntry
 
 
 def utc_now() -> datetime:
@@ -68,6 +69,7 @@ class JobRecord(BaseModel):
     confirmed_transcript: str | None = None
     transcript_is_mock: bool = False
     transcription_session_id: str | None = None
+    edit_history: list[EditHistoryEntry] = Field(default_factory=list)
     result: JobResult | None = None
     error: JobError | None = None
     attempts: int = 0

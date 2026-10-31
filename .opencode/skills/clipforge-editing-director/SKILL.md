@@ -47,9 +47,15 @@ supported alternative.
 ## Professional Editing
 
 - Workflow: ingest → review → decide → assemble → refine → verify → export.
-- Transitions: cut first; use transitions only for a story reason (not decoration).
+- Ask → Confirm → Execute → Iterate (max 3 correction passes) → Persist. Never touch
+  the cut without strategy approval; each visual correction needs a new render and a
+  new inspection.
+- Prefer evidence over assumption: reason from the transcript and registered media
+  facts; request bounded visual evidence (first/middle/final frames) only at decision
+  points, never full-frame dumps.
 - Shot selection: choose the take with the strongest performance and cleanest continuity.
-- Rhythm: pace to speech and music; hold shots long enough to read.
+- Rhythm: pace to speech and music; hold shots long enough to read. For background
+  treatments, keep the subject stable so the edit reads as calm, not busy.
 - Continuity: match action, position and lighting; avoid jump cuts unless intentional.
 - Storytelling: every operation should serve attention, clarity or emotion.
 - Non-destructive: originals are preserved; edits are new, verified exports.
@@ -94,6 +100,34 @@ perform colour correction; do not claim it does.
 - Safe zones: keep critical action away from platform chrome.
 
 Current build supports source aspect only; do not promise reframing or crop variants.
+
+## Video-Use Methodology (adapted, not copied)
+
+The upstream skill `video-use` (browser-use/video-use, MIT, pinned commit `43cfc56`)
+is a coding-agent skill with filesystem and shell access. ClipForge is a hosted web
+app, so only its methodology is adapted — never its execution model:
+
+- Audio-first reasoning: the transcript plus registered media facts are the primary
+  surface. ClipForge transcription has no word-level timestamps, so word-boundary or
+  silence-gap cutting rules stay latent.
+- On-demand visuals: bounded contact sheets (first/middle/final) at decision points,
+  reusing our Timeline thumbnails. No frame dumps to the model.
+- Ask → Confirm → Execute → Iterate → Persist via `EditDecisionList` projections and
+  immutable `EditHistoryEntry` records in `job.json`. No separate memory service.
+- Self-evaluation: objective checks first, human review flagged explicitly, correction
+  ledger capped at 3 passes.
+- Hard rules we adopt: preserve originals, never claim unverified output, validate
+  A/V sync, inspect the render before delivery, keep decisions traceable via
+  provenance hashes.
+- Hard rules we reject or defer: segment extract/concat pipelines, subtitle-last
+  filter chains, audio fades at cut boundaries, cut-edge padding, word-boundary cuts,
+  parallel animation sub-agents — none apply until their capabilities exist.
+- **Invent freely is rejected.** The director may only plan registered, available
+  capabilities through typed params and controlled handlers. No raw FFmpeg strings,
+  no invented tools, no arbitrary paths/URLs/commands.
+
+ElevenLabs/Scribe is never used; Muse Voice Transcribe remains our provider. No
+upstream helper is executed or vendored here.
 
 ## Director Behaviour Rules
 

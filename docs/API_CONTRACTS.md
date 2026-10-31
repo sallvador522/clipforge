@@ -102,6 +102,10 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 `DirectorStage`: `REQUEST_RECEIVED`, `ANALYZING_REQUEST`, `PLAN_READY`, `WAITING_FOR_APPROVAL`, `EXECUTING`, `VERIFYING`, `COMPLETED`, `FAILED`, `NEEDS_CLARIFICATION`, `CANCELLED`. Transitions are validated; `stage_from_job_stage()` maps current worker stages. No percentages are defined.
 
+### Edit Decision Lists (6B-PREP-R)
+
+`EditDecisionList` (`edl.py`) projects a ready v2 plan: one `EditDecision` per operation, dependency-ordered, with capability-typed `params`, no timing while `timeline.trim` is disabled, `DecisionTransparency` (requested/understood/why/approval/operator message) and canonical `provenance_hash`. Handlers resolve from the registry (`edl_handler_for`), never from plan input. `EditHistoryEntry` (frozen, allow-listed refs) persists via `JobRecord.edit_history` in `job.json`. `OutputEvaluationReport` separates objective checks from human review and caps corrections at 3 passes.
+
 ### Approval / cancel / revision
 
 Prepared as contract fields only. **No endpoints or UI exist**; the current worker still auto-executes after transcript confirmation. A future milestone must add explicit approval gating before v2 is wired to execution.

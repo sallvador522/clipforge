@@ -57,4 +57,16 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
   - **Transparency:** ten validated director stages prepare truthful progress; approval, rejection, cancellation and revisions are contracts/documentation only until a plan actually gates execution.
 - **Consequences:** Muse Spark can be integrated later by loading the playbook and registry, emitting v2 plans, validating and adapting to v1 for execution. Unsupported capabilities cannot be invented. No live model, SAM or image generation call is made in this milestone; the worker and renderer are unchanged.
 
+## ADR-010: Video-Use Methodology Adaptation (6B-PREP-R)
+- **Status:** Approved. Read-only audit of browser-use/video-use at pinned commit `43cfc56`.
+- **Context:** The upstream skill is a coding-agent editing workstation with shell access, segment pipelines and hosted ElevenLabs transcription. ClipForge is a hosted web app with a capability registry, typed contracts and local rendering.
+- **Decision:**
+  - Adapt methodology only: audio-first reasoning, bounded on-demand visuals, Ask → Confirm → Execute → Iterate (max 3) → Persist, declarative EDL, objective self-evaluation with explicit human review.
+  - Reject execution model: no segment extract/concat, no subtitle/fade/cut-boundary rules, no invented tools or raw FFmpeg strings, no ElevenLabs, no animation engines, no new dependencies.
+  - EDL v2 is a projection of ready v2 plans with capability-typed params, registry-resolved handlers, timing forbidden while `timeline.trim` is disabled, and canonical provenance hashes.
+  - Evaluation separates objective media checks from subjective quality; visual corrections require a new render plus re-inspection.
+  - History reuses `job.json` via immutable `EditHistoryEntry`; no new database, memory service, read API or endpoint.
+  - Licensing: MIT text preserved in `LICENSES/video-use-MIT.txt` and attributed in `docs/THIRD_PARTY_NOTICES.md`; no upstream code copied.
+- **Consequences:** Spark can later reason with the adapted playbook while staying registry-gated. Timing/segment features remain disabled until their capabilities, handlers and verification exist.
+
 

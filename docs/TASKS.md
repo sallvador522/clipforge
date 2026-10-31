@@ -62,13 +62,14 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [ ] First live transcription call — **blocked on explicit user approval** after reviewing the cost estimate.
 
 ## Milestone 6B-PREP — Professional Editing Director
-- [x] Ninth skill `clipforge-editing-director` (9/10 project skills) with cinematography/editing/colour/audio/social guidance and hard capability-truth rules.
-- [x] Runtime playbook + validating loader (no model call).
+- [x] Ninth skill `clipforge-editing-director` (9/10 project skills) with cinematography/editing/colour/audio/social guidance and hard capability-truth rules; 6B-PREP-R adds the video-use methodology section.
+- [x] Runtime playbook + validating loader (no model call); v1.1 adds ClipForge Workflows, Hosted Model Tool Protocol, Edit Decision Lists, Output Self-Evaluation.
 - [x] Capability registry with five statuses, typed params, handlers, dependencies, verification, approval flags; local vs mock vs live distinguished.
 - [x] `ProfessionalEditingPlan` v2 + registry/approval/dependency validators + v1 adapter.
 - [x] Deterministic offline mock director scenarios A–E (blur, replacement, simulated cinematic background, clarification, unsupported).
-- [x] 10 director stages with validated transitions and job-stage mapper.
-- [x] 62 new tests (132 total); docs/ADR-009 updated.
+- [x] 10 director stages with validated transitions and job-stage mapper; operation status transitions validated.
+- [x] EDL v2 with capability-typed params, registry-resolved handlers, timing forbidden while trim disabled, canonical provenance; immutable history in `job.json`; evaluation report with 3-pass ledger (6B-PREP-R).
+- [x] 90 new tests (160 total); docs/ADR-009 and ADR-010 updated.
 - [ ] Muse Spark 1.3 integration — blocked on explicit approval; requires tool-calling/structured-output docs verification, budget plan and approval gate wiring.
 
 ## Milestone 6 — Live Integration Gate (blocked)

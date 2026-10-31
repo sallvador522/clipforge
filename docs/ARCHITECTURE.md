@@ -52,6 +52,7 @@ Mode selection: `CLIPFORGE_AI_MODE=mock` is the default; `live` there is still r
 - **Stages**: ten validated `DirectorStage` values and a mapper from current worker stages; no percentages are fabricated.
 - **Skills vs playbook**: `.opencode/skills/clipforge-editing-director` is development guidance for the coding agent; the playbook is runtime system content. They are intentionally separate.
 - **Approval/cancel/revision**: contracts and docs only; no endpoints or UI exist yet. The v2 plan carries `approval_status`; replacement requires approval.
+- **Video-use adaptation (6B-PREP-R)**: methodology adapted from browser-use/video-use at pinned commit `43cfc56` (see `docs/THIRD_PARTY_NOTICES.md` + `LICENSES/video-use-MIT.txt`); EDL v2 (`edl.py`) projects ready v2 plans with capability-typed params, registry-resolved handlers, timing forbidden while `timeline.trim` is disabled, canonical provenance hashes; immutable `EditHistoryEntry` persists in `job.json` via `JobRecord.edit_history`; `OutputEvaluationReport` separates objective checks from human review with a 3-pass correction ledger.
 
 ## Video Pipeline (ADR-001, ADR-002, ADR-005, ADR-006)
 

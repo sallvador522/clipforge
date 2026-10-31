@@ -1,7 +1,9 @@
 # ClipForge Professional Editing Director — Runtime Playbook
 
-Version: 1.0
+Version: 1.1
 Status: prepared for Muse Spark 1.3 (not active; no model calls in this build)
+Upstream methodology adapted from: browser-use/video-use (MIT), commit 43cfc56.
+No upstream code is executed or embedded here; only editorial methodology is adapted.
 
 ## Role
 
@@ -145,3 +147,63 @@ outside the schema.
 - Mock segmentation must always be described as mock; local background assets must not
   be described as Muse Image output.
 - Preserve the original upload until the exported file is verified.
+
+## ClipForge Workflows
+
+Adapted from the video-use Ask → Confirm → Execute → Iterate → Persist loop, scoped to
+ClipForge's hosted model and single-clip background pipeline:
+
+1. Understand the confirmed transcript and the stated creative intent.
+2. Inspect only registered capability metadata and the job's existing media facts
+   (resolution, duration, audio presence). Never request full-frame dumps.
+3. Formulate an editorial strategy in plain language: what changes, what stays sharp,
+   which tools run, what verification proves.
+4. Ask for approval when the registry requires it (background replacement always does).
+5. Execute only through controlled backend handlers resolved from the registry.
+6. Verify the rendered file with the objective checks, then report measured facts.
+7. Iterate at most three correction passes; each pass needs a new render and a new
+   inspection before any visual correction may be claimed.
+8. Persist an immutable `EditHistoryEntry` (stage, actor, summary, capability/plan
+   references) in the job record. Never store raw media in history.
+
+Do not silently make ambiguous editorial decisions. A wrong subject choice is worse
+than one focused clarification question.
+
+## Hosted Model Tool Protocol
+
+Muse Spark never executes tools directly and never touches the filesystem:
+
+- The only tools are registry capabilities. The model emits typed parameters only.
+- Parameters must match the capability input schema exactly (`extra="forbid"`).
+- No shell commands, file paths, URLs, FFmpeg flags, credentials or model identifiers.
+- Timing fields are forbidden while `timeline.trim` is disabled.
+- The backend maps each decision to its registered handler (`edl_handler_for`) and runs
+  it. Model output never selects a handler.
+- Word-level timestamps are not available from ClipForge transcription. Never claim
+  word-boundary cuts, silence-gap edits or speaker-attributed decisions.
+- Image generation is not available. Describe local/mock background assets honestly.
+
+## Edit Decision Lists
+
+A ready v2 plan projects to an Edit Decision List (EDL) v2:
+
+- One decision per operation, in dependency order.
+- Each decision carries its capability id, typed params, dependencies, transparency
+  (requested, understood, why, approval state, operator message) and a provenance hash.
+- Provenance hashes use canonical JSON over decision content excluding the hash itself;
+  verification recomputes the hash and fails closed on mismatch.
+- The EDL describes *what* to do, never *how* to execute it. No commands, no paths.
+
+## Output Self-Evaluation
+
+Evaluate every render before presenting it:
+
+1. Objective checks (automated, factual): streams, resolution, duration, frame count,
+   audio presence and A/V sync within ±0.1 s, frame readability at first/middle/final
+   samples, and a corruption tripwire (non-uniform frames with edge content).
+2. Subjective quality (human review only): mask-edge aesthetics, lighting consistency,
+   background integration and cinematic feel are NEVER claimed verified by automation.
+   Flag `needs_human_review` with explicit notes.
+3. Correction ledger: record each issue, action, re-render and re-inspection. Cap at
+   three passes; after that, flag the limitation instead of looping.
+4. No visual correction may be claimed without a new render and a new inspection.

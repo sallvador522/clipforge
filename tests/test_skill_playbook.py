@@ -74,7 +74,7 @@ def test_director_skill_covers_required_domains():
 
 def test_default_playbook_loads_with_all_sections():
     playbook = default_playbook()
-    assert playbook.version == "1.0"
+    assert playbook.version in ("1.0", "1.1")
     assert all(section in playbook.sections for section in REQUIRED_SECTIONS)
     for section in REQUIRED_SECTIONS:
         assert playbook.section(section), f"{section} is empty"
@@ -87,6 +87,8 @@ def test_playbook_defers_to_capability_registry_and_labels_limits():
     assert "muse image" in text
     assert "disabled" in text
     assert "never plan them" in text or "never plan" in text
+    assert "timeline.trim" in text
+    assert "three" in text or "3" in text
 
 
 def test_playbook_rejects_missing_section(tmp_path):

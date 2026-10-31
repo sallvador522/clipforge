@@ -100,9 +100,18 @@ class MockProfessionalEditingDirector:
     """Deterministic, offline professional editing director."""
 
     def create_plan(self, transcript: TranscriptResult) -> ProfessionalEditingPlan:
+        """Build a deterministic v2 plan. Pure local computation, no network."""
+        return self._create_plan_impl(transcript)
+
+    def create_edl(self, transcript: TranscriptResult) -> EditDecisionList:
+        """Project the mock v2 plan into an EDL. Still offline, still unwired."""
+        from clipforge_contracts.edl import edl_from_professional_plan
+
+        return edl_from_professional_plan(self._create_plan_impl(transcript))
+
+    def _create_plan_impl(self, transcript: TranscriptResult) -> ProfessionalEditingPlan:
         text = _normalize(transcript.text)
         request_id = _request_id(transcript.text)
-
         unsupported = self._unsupported_capabilities(text)
         if unsupported:
             return self._unsupported_plan(transcript, request_id, unsupported)
