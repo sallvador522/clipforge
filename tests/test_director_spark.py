@@ -323,6 +323,36 @@ def test_mock_path_makes_zero_external_calls(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", real_create)
 
 
+def test_server_request_id_captured_on_api_error():
+    text = "Keep me sharp and blur the background."
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            500,
+            headers={"x-request-id": "srv-req-123"},
+            json={"error": {"message": "boom", "type": "server_error"}},
+        )
+
+    with pytest.raises(DirectorAPIError) as exc:
+        provider(handler).create_plan(transcript(text))
+    assert exc.value.status_code == 500
+    assert exc.value.server_request_id == "srv-req-123"
+    assert calls["n"] == 1
+
+
+def test_server_request_id_absent_without_header():
+    text = "Keep me sharp and blur the background."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": {"message": "boom", "type": "server_error"}})
+
+    with pytest.raises(DirectorAPIError) as exc:
+        provider(handler).create_plan(transcript(text))
+    assert exc.value.server_request_id is None
+
+
 def test_contributor_mode_requires_exact_model_id():
     with pytest.raises(InvalidModelError):
         provider(lambda r: httpx.Response(500, json={}), model="muse-spark-1.3", require_contributor=True)

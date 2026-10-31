@@ -86,10 +86,19 @@ class DirectorRateLimitedError(SparkDirectorError):
 
 
 class DirectorAPIError(SparkDirectorError):
-    def __init__(self, status_code: int, message: str, error_type: str | None = None) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        error_type: str | None = None,
+        server_request_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.error_type = error_type
+        # Server-side correlation handle for panel reconciliation. Non-secret:
+        # safe to log, print and store. Never the API key.
+        self.server_request_id = server_request_id
 
 
 class DirectorValidationError(SparkDirectorError):
@@ -317,10 +326,18 @@ class MetaEditingDirectorProvider:
             )
         if response.status_code >= 400:
             message, error_type = self._safe_error(response)
+            server_request_id = response.headers.get("x-request-id")
+            logger.warning(
+                "director_api_error status=%d type=%s server_request_id=%s",
+                response.status_code,
+                error_type,
+                server_request_id or "absent",
+            )
             raise DirectorAPIError(
                 response.status_code,
                 f"Director failed with HTTP {response.status_code}: {message}",
                 error_type=error_type,
+                server_request_id=server_request_id,
             )
 
         try:

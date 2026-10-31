@@ -80,6 +80,7 @@ def main() -> int:
     from clipforge_api.playbook import default_playbook  # noqa: E402
     from clipforge_contracts import TranscriptResult, capability_summary_for_prompt  # noqa: E402
     from clipforge_director import DirectorVideoMetadata, MetaEditingDirectorProvider  # noqa: E402
+    from clipforge_director.spark import DirectorAPIError  # noqa: E402
 
     playbook = default_playbook()
     provider = MetaEditingDirectorProvider(
@@ -93,7 +94,31 @@ def main() -> int:
     transcript = TranscriptResult(text=INSTRUCTION, language="pt-BR", provider_name="user-confirmed", is_mock=False)
     video = DirectorVideoMetadata(**VIDEO)
 
-    plan = provider.create_plan(transcript, video)  # exactly one POST; raises on any failure
+    import datetime as _datetime
+
+    try:
+        plan = provider.create_plan(transcript, video)  # exactly one POST; raises on any failure
+    except DirectorAPIError as exc:
+        # No result file is written on failure (preserves the exactly-once guard).
+        # server_request_id is the panel-matchable handle; the key is never printed.
+        print(
+            json.dumps(
+                {
+                    "call": "LIVE-CALL 001",
+                    "outcome": "http_error_no_plan",
+                    "http_status": exc.status_code,
+                    "error_type": exc.error_type,
+                    "server_request_id": exc.server_request_id,
+                    "message": str(exc),
+                    "model": provider.model,
+                    "at_utc": _datetime.datetime.now(_datetime.timezone.utc).isoformat(),
+                    "usage": None,
+                    "note": "Match server_request_id against the Meta panel; usage on failed Spark calls is metered server-side.",
+                },
+                indent=2,
+            )
+        )
+        return 1
     assert provider.last_usage is not None and provider.last_request_id is not None
 
     record = {

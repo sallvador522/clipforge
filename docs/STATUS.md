@@ -3,9 +3,9 @@
 ## Current State
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- **Milestones 0–6B-PREP:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; real transcription provider + audio pipeline; **professional editing director intelligence, offline**).
+- **Milestones 0–6B-LIVE:** complete through LIVE-CALL 002 (two approved single POSTs, both HTTP 500). Billing under reconciliation — panel figures pending.
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** schema-reduction proposal for the director call (smaller schema / lower cap / plain-JSON control) — blocked on explicit approval. No SAM integration until the director path is proven. Transcription remains mock for development safety.
+- **Next milestone:** report panel figures when provided; schema-reduction proposal for the director call — blocked on explicit approval. No SAM integration until the director path is proven. Transcription remains mock for development safety.
 
 ## What Exists
 
@@ -13,7 +13,7 @@
 - Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **175 backend tests passing** (70 preserved pre-director + 105 director/registry/playbook/EDL/evaluation/Spark incl. Contributor-mode gating); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **177 backend tests passing** (70 preserved pre-director + 107 director/registry/playbook/EDL/evaluation/Spark incl. Contributor-mode gating and failure-context capture); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
 
 ### First live director test — LIVE-CALL 001 + 002 RETRY (EXECUTED, both HTTP 500)
 
@@ -24,7 +24,18 @@
 - Output cap 1500 tokens; reference valid plan ~3,659 chars (~914 est tokens).
 - Cost at Contributor rates ($0.10/1M in, $0.20/1M out): at cap ≈ **$0.00062** (0.062 US cents); typical 600-token output ≈ **$0.00044** (0.044 cents). Consumes ~0.002% of the $30 budget at cap.
 - Expected: ready v2 plan (isolate → replace → audio → render → verify, approval required) OR honest clarification; validated before any use; EDL/render **not** executed.
-- Outcome: **two POSTs total, both HTTP 500 `internal server error`** (LIVE-CALL 001, then RETRY 1 byte-identical). Real cost **$0.00** — no `usage` returned. Full log: `docs/LIVE_CALL_001_002_REPORT.md`. Repeat 500 implicates the request (prime suspect: ~8.4 KB schema), not a transient. No further calls without fresh approval + schema review.
+- Outcome: **two POSTs total, both HTTP 500 `internal server error`** (LIVE-CALL 001, then RETRY 1 byte-identical). Billed cost **under reconciliation — the earlier $0.00 claim is withdrawn** (see Billing reconciliation below). Full log: `docs/LIVE_CALL_001_002_REPORT.md`. Repeat 500 implicates the request (prime suspect: ~8.4 KB schema), not a transient. No further calls without fresh approval + schema review.
+
+### Billing reconciliation (LIVE-CALL 001 + 002)
+
+Correction: the $0.00 originally reported here wrongly generalized the Muse Voice Transcribe "failed requests are not billed" rule to Spark Chat Completions, where no such exemption is documented. The Meta panel is the source of truth and shows both calls billed. Local accounting gaps that caused the error: the provider raised before parsing any body (no `usage` captured) and never read the `x-request-id` response header (fixed afterwards: `DirectorAPIError.server_request_id` + structured failure print in the live-call script, no result file on failure). Reconciliation table with panel figures below — to be filled when the user provides them:
+
+| Call | Panel cost (USD) | Panel input tokens | Panel output tokens |
+|---|---|---|---|
+| LIVE-CALL 001 | _pending user_ | _pending user_ | _pending user_ |
+| LIVE-CALL 002 | _pending user_ | _pending user_ | _pending user_ |
+
+Until then, billed cost is UNKNOWN, bounded above by ≈ $0.00064 total (two ~3,215-token inputs at $0.10/1M; output unknowable locally).
 
 ## Professional Editing Director (Milestone 6B-PREP)
 

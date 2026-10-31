@@ -89,5 +89,6 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
   - Accounting at Contributor rates from actual `usage`; cached-token breakdown not modeled.
   - Exactly one POST, no retries; a second call needs fresh approval. Key never printed, logged or committed.
 - **Consequences:** Provider gains `require_contributor` and `reasoning_effort` options (defaults preserve Standard-only safety). All other providers stay mock; worker, renderer and UI unchanged.
+- **Correction (billing reconciliation):** the "no billed cost on 500" assumption in the 6B-LIVE reports was wrong — it generalized the Muse Voice Transcribe failed-request rule to Spark Chat Completions without documentation. Both calls may have been metered server-side; the Meta panel is source of truth. Provider now captures `x-request-id` into `DirectorAPIError.server_request_id` (non-secret) and the live-call script prints structured failure context without writing result files.
 
 
