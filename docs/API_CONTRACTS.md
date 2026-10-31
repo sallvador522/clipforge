@@ -109,10 +109,10 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 ### Muse Spark director provider (6B-LIVE, prepared not live-tested)
 
 `MetaEditingDirectorProvider` (`packages/director/clipforge_director/spark.py`):
-- Chat Completions `POST /v1/chat/completions`, model `muse-spark-1.3` (Standard; Contributor rejected), Bearer `MODEL_API_KEY`.
+- Chat Completions `POST /v1/chat/completions`, model `muse-spark-1.3` Standard by default (Contributor rejected); Contributor variant via `require_contributor=True`, which accepts exactly `muse-spark-1.3-contributor` and rejects Standard strings. Optional `reasoning_effort` (`minimal`/`low`/`medium`/`high`/`xhigh`; no `context` parameter exists in the verified contract). Bearer `MODEL_API_KEY`.
 - Messages: `developer` = playbook v1.1 + registry summary + output rules; `user` = confirmed transcript + video metadata + verbatim `request_id`/`raw_instruction` + ambiguity/unsupported rules.
 - `response_format: {type: "json_schema", json_schema: {name: "ProfessionalEditingPlan", schema: <v2 JSON Schema>, strict: false}}`, `max_completion_tokens` (default 1500). No `tools`, no web search, no audio.
-- Response: `choices[0].message.content` (JSON string) → `ProfessionalEditingPlan` validation; `finish_reason: length` and any `tool_calls` rejected; `request_id`/`raw_instruction` echo enforced; `usage` → Standard-rate cost.
+- Response: `choices[0].message.content` (JSON string) → `ProfessionalEditingPlan` validation; `finish_reason: length` and any `tool_calls` rejected; `request_id`/`raw_instruction` echo enforced; `usage` → Standard-rate cost (Contributor rates when `require_contributor=True`).
 - Errors: 401/5xx → safe `DirectorAPIError`, 429 → `DirectorRateLimitedError` (with `Retry-After`), timeout → `DirectorTimeoutError`, malformed/truncated/mismatch → `DirectorValidationError`. Exactly one POST; no retries; key/audio never logged.
 
 ### Approval / cancel / revision

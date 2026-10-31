@@ -79,4 +79,15 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
   - **Accounting:** `usage.{prompt,completion,total}_tokens` → cost at Standard rates; rough pre-request size estimate (`estimate_tokens`, chars/4, not a billing figure).
 - **Consequences:** The first live call remains blocked on explicit approval of the measured proposal. All other providers stay mock; the worker, renderer and UI are unchanged.
 
+## ADR-012: First Live Director Call — Contributor Medium (6B-LIVE LIVE-CALL 001)
+- **Status:** APPROVED for exactly one call; NOT yet executed (no key in `.env`).
+- **Context:** ADR-011 prepared a Standard-mode provider. The approved live call uses the Contributor variant with medium reasoning effort: model id `muse-spark-1.3-contributor` (verified in the Models and Pricing docs fetched the same day), Contributor rates $0.10/1M input + $0.20/1M output (150 RPM / 4M TPM for the Contributor variant row), `reasoning_effort: "medium"` (verified accepted value; `none` is rejected for Spark). There is NO `context`-size parameter in the verified Chat Completions contract — “medium context” is interpreted as the default 1,048,576-token window carrying a ~3.2k-token prompt, and only `reasoning_effort` is sent.
+- **Decision:**
+  - Model must be exactly `muse-spark-1.3-contributor` (`require_contributor=True`); every other model string, including Standard, is rejected in this mode.
+  - Endpoint `POST https://api.meta.ai/v1/chat/completions`, Bearer `MODEL_API_KEY` (canonical env var name per official docs and repo-wide use; no `META_API_KEY` exists anywhere).
+  - `response_format` json_schema `ProfessionalEditingPlan` (`strict: false`), `max_completion_tokens: 1500`, no tools, no web search, transcript text + benchmark-unit video metadata only.
+  - Accounting at Contributor rates from actual `usage`; cached-token breakdown not modeled.
+  - Exactly one POST, no retries; a second call needs fresh approval. Key never printed, logged or committed.
+- **Consequences:** Provider gains `require_contributor` and `reasoning_effort` options (defaults preserve Standard-only safety). All other providers stay mock; worker, renderer and UI unchanged.
+
 

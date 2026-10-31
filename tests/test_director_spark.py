@@ -321,3 +321,78 @@ def test_mock_path_makes_zero_external_calls(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", blocked)
     MockProfessionalEditingDirector().create_plan(transcript("Keep me sharp and blur the background."))
     monkeypatch.setattr(socket, "create_connection", real_create)
+
+
+def test_contributor_mode_requires_exact_model_id():
+    with pytest.raises(InvalidModelError):
+        provider(lambda r: httpx.Response(500, json={}), model="muse-spark-1.3", require_contributor=True)
+    with pytest.raises(InvalidModelError):
+        provider(
+            lambda r: httpx.Response(500, json={}),
+            model="muse-spark-1.3-contributor-v2",
+            require_contributor=True,
+        )
+    instance = provider(
+        lambda r: httpx.Response(500, json={}), model="muse-spark-1.3-contributor", require_contributor=True
+    )
+    assert instance.model == "muse-spark-1.3-contributor"
+
+
+def test_default_mode_still_rejects_contributor():
+    with pytest.raises(InvalidModelError):
+        provider(lambda r: httpx.Response(500, json={}), model="muse-spark-1.3-contributor")
+
+
+def test_reasoning_effort_payload_and_validation():
+    text = "Keep me sharp and blur the background."
+    plan_json = mock_plan_json(text)
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode()))
+        return ok_response(plan_json)
+
+    instance = provider(handler, reasoning_effort="medium")
+    instance.create_plan(transcript(text))
+    assert captured["reasoning_effort"] == "medium"
+    assert captured["model"] == DEFAULT_MODEL
+
+    default_instance = provider(lambda r: ok_response(plan_json))
+    body, _ = default_instance.request_payload(transcript(text))
+    assert "reasoning_effort" not in body
+
+    with pytest.raises(ValueError):
+        provider(lambda r: httpx.Response(500, json={}), reasoning_effort="ultra")
+    with pytest.raises(ValueError):
+        provider(lambda r: httpx.Response(500, json={}), reasoning_effort="none")
+
+
+def test_contributor_cost_math():
+    assert calculate_cost_usd(1000, 500, "contributor") == pytest.approx(0.0002)
+    assert calculate_cost_usd(3215, 1500, "contributor") == pytest.approx(0.000621)
+    with pytest.raises(ValueError):
+        calculate_cost_usd(10, 10, "enterprise")
+
+    text = "Keep me sharp and blur the background."
+    plan_json = mock_plan_json(text)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode())
+        assert body["model"] == "muse-spark-1.3-contributor"
+        assert body["reasoning_effort"] == "medium"
+        assert "tools" not in body
+        return ok_response(
+            plan_json, usage={"prompt_tokens": 3215, "completion_tokens": 914, "total_tokens": 4129}
+        )
+
+    instance = provider(
+        handler,
+        model="muse-spark-1.3-contributor",
+        reasoning_effort="medium",
+        require_contributor=True,
+    )
+    result = instance.create_plan(transcript(text), video_meta())
+    assert result.outcome == PlanOutcome.PLAN_READY
+    assert instance.last_usage is not None
+    assert instance.last_usage.prompt_tokens == 3215
+    assert instance.last_usage.cost_usd == pytest.approx(calculate_cost_usd(3215, 914, "contributor"))

@@ -5,7 +5,7 @@
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
 - **Milestones 0–6B-PREP:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; real transcription provider + audio pipeline; **professional editing director intelligence, offline**).
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** Muse Spark 1.3 integration — blocked on explicit approval, official tool-calling/structured-output verification, and wiring the approval gate. The first live transcription test already succeeded (user-verified); transcription is currently configured as mock for development safety.
+- **Next milestone:** LIVE-CALL 001 (one Contributor-Medium plan-generation POST) — user-approved, implementation + guard script ready, **blocked on a valid `MODEL_API_KEY` in gitignored `.env` (currently empty)**. The first live transcription test already succeeded (user-verified); transcription is currently configured as mock for development safety.
 
 ## What Exists
 
@@ -13,18 +13,18 @@
 - Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **171 backend tests passing** (70 preserved pre-director + 101 director/registry/playbook/EDL/evaluation/Spark); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **175 backend tests passing** (70 preserved pre-director + 105 director/registry/playbook/EDL/evaluation/Spark incl. Contributor-mode gating); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
 
-### Proposed first live director test (NOT RUN — awaiting explicit approval)
+### Proposed first live director test — LIVE-CALL 001 Contributor Medium (APPROVED, NOT RUN — key missing)
 
 - Instruction: "Keep me sharp, blur the people behind me and replace the background with a cinematic Luanda sunset."
-- Data sent: confirmed transcript text + source video metadata (dimensions/fps/duration/audio flag) + playbook v1.1 + registry summary. No audio bytes, no tools, no web search.
-- Endpoint: `POST https://api.meta.ai/v1/chat/completions`, model `muse-spark-1.3` (Standard), Bearer `MODEL_API_KEY`, `response_format` json_schema `ProfessionalEditingPlan`, `max_completion_tokens: 1500`.
+- Data sent: confirmed transcript text + benchmark-unit video metadata (1280×720 @ 30fps, 10.0s, 300 frames, audio present) + playbook v1.1 + registry summary. No audio bytes, no tools, no web search.
+- Endpoint: `POST https://api.meta.ai/v1/chat/completions`, model `muse-spark-1.3-contributor` (exact id enforced; Standard rejected), Bearer `MODEL_API_KEY`, `reasoning_effort: medium`, `response_format` json_schema `ProfessionalEditingPlan`, `max_completion_tokens: 1500`. (No `context` parameter exists in the verified contract.)
 - Measured prompt: developer 12,234 chars (~3,058 est tokens) + user 631 chars (~157 est) = ~3,215 input tokens (chars/4 heuristic, not billing).
 - Output cap 1500 tokens; reference valid plan ~3,659 chars (~914 est tokens).
-- Cost: at cap ≈ **$0.01039** (1.04 US cents); typical 600-token output ≈ **$0.00657** (0.66 cents). Standard rates $1.25/1M in + $4.25/1M out.
+- Cost at Contributor rates ($0.10/1M in, $0.20/1M out): at cap ≈ **$0.00062** (0.062 US cents); typical 600-token output ≈ **$0.00044** (0.044 cents). Consumes ~0.002% of the $30 budget at cap.
 - Expected: ready v2 plan (isolate → replace → audio → render → verify, approval required) OR honest clarification; validated before any use; EDL/render **not** executed.
-- Budget: $30 remaining; this test consumes ~0.03% at cap.
+- Blocked on: a valid `MODEL_API_KEY` in gitignored `.env` (currently empty). Exactly one POST when unblocked; any second call needs fresh approval.
 
 ## Professional Editing Director (Milestone 6B-PREP)
 

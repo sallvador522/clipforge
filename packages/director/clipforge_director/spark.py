@@ -4,14 +4,22 @@ Prepared but NOT live-tested: every test uses an injected httpx MockTransport.
 No request may reach api.meta.ai without explicit user approval.
 
 Official configuration verified against current Meta docs:
-- Models: `muse-spark-1.3` (Standard mode; never a `-contributor` variant here).
+- Models: `muse-spark-1.3` (Standard) and `muse-spark-1.3-contributor`
+  (Contributor). Default is Standard; Contributor only when explicitly required
+  with `require_contributor=True` (approved LIVE-CALL 001).
 - Protocol: Chat Completions, `POST https://api.meta.ai/v1/chat/completions`.
-- Auth: `Authorization: Bearer MODEL_API_KEY`.
+- Auth: `Authorization: Bearer MODEL_API_KEY` (canonical env var name; there is
+  no `META_API_KEY` in the verified docs or this repo).
+- `reasoning_effort`: documented values `minimal`/`low`/`medium`/`high`/`xhigh`
+  (`none` is rejected for Spark). There is no `context`-size parameter in the
+  verified Chat Completions contract.
 - Single-turn plan generation with structured output via `response_format`
   (`type: "json_schema"`, Pydantic-derived schema, `strict: false` default).
 - Response shape: `choices[0].message.content` (JSON string), `finish_reason`,
   `usage: {prompt_tokens, completion_tokens, total_tokens}`.
-- Pricing (Standard): $1.25 / 1M input tokens, $4.25 / 1M output tokens.
+- Pricing Standard: $1.25 / 1M input, $4.25 / 1M output. Contributor:
+  $0.10 / 1M input, $0.20 / 1M output (cached input $0.002; not modeled — usage
+  breakdown is reported raw and cached tokens are not assumed).
 - No `tools` are sent in the first test (plan generation only, no tool execution).
 - No web search grounding, no audio input (confirmed transcript text only).
 
@@ -43,11 +51,16 @@ logger = logging.getLogger("clipforge.director.spark")
 DEFAULT_BASE_URL = "https://api.meta.ai"
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 DEFAULT_MODEL = "muse-spark-1.3"
+CONTRIBUTOR_MODEL = "muse-spark-1.3-contributor"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_OUTPUT_TOKENS = 1500
 
+REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+
 INPUT_USD_PER_M = 1.25
 OUTPUT_USD_PER_M = 4.25
+CONTRIBUTOR_INPUT_USD_PER_M = 0.10
+CONTRIBUTOR_OUTPUT_USD_PER_M = 0.20
 
 
 class SparkDirectorError(Exception):
@@ -108,8 +121,14 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def calculate_cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
-    return round(prompt_tokens * INPUT_USD_PER_M / 1_000_000 + completion_tokens * OUTPUT_USD_PER_M / 1_000_000, 6)
+def calculate_cost_usd(prompt_tokens: int, completion_tokens: int, mode: str = "standard") -> float:
+    if mode == "contributor":
+        per_in, per_out = CONTRIBUTOR_INPUT_USD_PER_M, CONTRIBUTOR_OUTPUT_USD_PER_M
+    elif mode == "standard":
+        per_in, per_out = INPUT_USD_PER_M, OUTPUT_USD_PER_M
+    else:
+        raise ValueError(f"Unknown pricing mode {mode!r}; expected 'standard' or 'contributor'.")
+    return round(prompt_tokens * per_in / 1_000_000 + completion_tokens * per_out / 1_000_000, 6)
 
 
 def build_developer_prompt(*, playbook_text: str, capability_summary: str) -> str:
@@ -168,15 +187,28 @@ class MetaEditingDirectorProvider:
         base_url: str = DEFAULT_BASE_URL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_effort: str | None = None,
+        require_contributor: bool = False,
         client: httpx.Client | None = None,
     ) -> None:
         if not api_key or not api_key.strip():
             raise MissingCredentialsError(
                 "MODEL_API_KEY is required for the live director. It is server-side only."
             )
-        if "contributor" in model:
+        if require_contributor:
+            if model != CONTRIBUTOR_MODEL:
+                raise InvalidModelError(
+                    f"Contributor call requires exactly {CONTRIBUTOR_MODEL!r}; "
+                    f"refusing {model!r} (Standard strings rejected in this mode)."
+                )
+        elif "contributor" in model:
             raise InvalidModelError(
                 f"Refusing Contributor mode model {model!r}: Standard mode only ({DEFAULT_MODEL})."
+            )
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(
+                f"Unknown reasoning_effort {reasoning_effort!r}; verified values: "
+                f"{sorted(REASONING_EFFORTS)}."
             )
         if not playbook_text or not playbook_text.strip():
             raise ValueError("playbook_text is required.")
@@ -190,6 +222,8 @@ class MetaEditingDirectorProvider:
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._max_output_tokens = max_output_tokens
+        self._reasoning_effort = reasoning_effort
+        self._pricing_mode = "contributor" if require_contributor else "standard"
         self._owns_client = client is None
         self._client = client or httpx.Client(
             base_url=base_url,
@@ -243,6 +277,8 @@ class MetaEditingDirectorProvider:
             },
             "max_completion_tokens": self._max_output_tokens,
         }
+        if self._reasoning_effort is not None:
+            payload["reasoning_effort"] = self._reasoning_effort
         return payload, expected_request_id
 
     def create_plan(
@@ -338,7 +374,7 @@ class MetaEditingDirectorProvider:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            cost_usd=calculate_cost_usd(prompt_tokens, completion_tokens),
+            cost_usd=calculate_cost_usd(prompt_tokens, completion_tokens, self._pricing_mode),
         )
         logger.info(
             "director_ok outcome=%s ops=%d prompt=%d completion=%d cost_usd=%.6f",
