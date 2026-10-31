@@ -35,8 +35,8 @@ def probe_video(path: str | Path) -> SourceInfo:
     """Probe a video file and enforce MVP constraints. Raises UploadValidationError."""
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,avg_frame_rate,nb_frames",
+            "ffprobe", "-v", "error",
+            "-show_entries", "stream=codec_type,width,height,avg_frame_rate,nb_frames",
             "-show_entries", "format=duration",
             "-show_streams", "-of", "json", str(path),
         ],

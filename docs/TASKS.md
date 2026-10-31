@@ -29,9 +29,11 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Lifecycle tests incl. real cross-process verification (API + separate worker process). Deps added: fastapi, uvicorn, python-multipart, httpx (tests).
 
 ## Milestone 4 — Real Renderer
-- [ ] OpenCV compositing: alpha from masks, edge smoothing, background blur, background replacement, subject kept sharp.
-- [ ] FFmpeg encode preserving original audio; output verification (readable, duration, streams).
-- [ ] Run ADR-006 benchmark; record measurements + machine specs in STATUS.md.
+- [x] OpenCV compositing: alpha from masks, edge smoothing, background blur, background replacement, subject kept sharp. Bounded memory (streaming mask iterator, one frame at a time).
+- [x] FFmpeg encode preserving original audio; output verification (readable, duration, streams, exact frame count/resolution).
+- [x] Download endpoint serving only verified outputs.
+- [x] ADR-006 benchmark run (300f/720p/30fps, blur vs replacement separately); measurements + machine specs recorded in STATUS.md and benchmarks/results/benchmark_results.json.
+- [x] Renderer tests: missing/corrupt masks, corrupt source, frame mismatch, invalid backgrounds, verification rejection, audio preservation, download gating. Deps added: opencv-python-headless, psutil (benchmark).
 
 ## Milestone 5 — Frontend
 - [ ] Next.js voice-first UI per DESIGN_SYSTEM.md; before/after, real job states, download of verified MP4.

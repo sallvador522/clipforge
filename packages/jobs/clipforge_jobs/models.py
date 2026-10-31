@@ -12,7 +12,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clipforge_contracts import BackgroundResult, EditingPlan, SegmentationResult, TranscriptResult
+from clipforge_contracts import BackgroundResult, EditingPlan, RenderResult, SegmentationResult, TranscriptResult
 
 
 def utc_now() -> datetime:
@@ -50,8 +50,9 @@ class JobResult(BaseModel):
     plan: EditingPlan | None = None
     segmentation: SegmentationResult | None = None
     background: BackgroundResult | None = None
+    rendered: RenderResult | None = None  # set only after output verification passes
     requires_clarification: bool = False
-    render_status: str = "not_implemented"  # renderer is Milestone 4; never pretend otherwise
+    render_status: str = "not_implemented"  # becomes "verified" only with a verified output file
 
 
 class JobRecord(BaseModel):

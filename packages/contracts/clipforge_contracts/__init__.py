@@ -10,10 +10,11 @@ from clipforge_contracts.editing_plan import (
     SubjectSpec,
 )
 from clipforge_contracts.mask_manifest import MaskFrameEntry, MaskManifest
-from clipforge_contracts.responses import BackgroundResult, SegmentationResult, TranscriptResult
+from clipforge_contracts.responses import BackgroundResult, RenderResult, SegmentationResult, TranscriptResult
 
 __all__ = [
     "BackgroundResult",
+    "RenderResult",
     "BlurBackgroundOperation",
     "EditingIntent",
     "EditingPlan",

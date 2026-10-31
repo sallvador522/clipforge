@@ -31,6 +31,21 @@ class SegmentationResult(BaseModel):
     is_mock: bool
 
 
+class RenderResult(BaseModel):
+    """Verified facts about a rendered output file. Emitted only after ffprobe verification."""
+
+    model_config = ConfigDict(extra="forbid")
+    output_relative_path: str
+    mode: Literal["blur_background", "replace_background"]
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    fps: float = Field(gt=0)
+    frame_count: int = Field(gt=0)
+    duration_seconds: float = Field(gt=0)
+    file_size_bytes: int = Field(gt=0)
+    has_audio: bool
+
+
 class BackgroundResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     asset_id: str = Field(min_length=1)

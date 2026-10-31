@@ -1,9 +1,9 @@
 """Job processor: runs the mock AI pipeline for one claimed job.
 
 Pipeline: transcribe (fixture) -> plan -> segment (real local masks) ->
-optional mock background. Clarification plans complete without segmentation.
-Rendering is Milestone 4 and is NEVER faked here: the result carries
-render_status="not_implemented".
+optional mock background -> real render (renderer.py) -> verified output.
+Clarification plans complete without segmentation or rendering, and their
+result keeps render_status="not_implemented" honestly.
 
 Every exception is logged and recorded as a structured job error; the job is
 marked failed and its original upload is preserved. Nothing is swallowed.
@@ -18,6 +18,7 @@ from clipforge_contracts import EditingIntent
 from clipforge_jobs import JobError, JobResult, JobStatus, JobStore
 from clipforge_providers import ProviderBundle
 from clipforge_worker.masks import MaskLoader
+from clipforge_worker.renderer import RenderRequest, render_video
 
 logger = logging.getLogger("clipforge.worker")
 
@@ -69,7 +70,12 @@ class JobProcessor:
                 raise ValueError("Segmentation mask count does not match the segmentation result.")
 
             background = None
+            mode = "blur_background"
+            blur_strength = next(
+                (op.strength for op in plan.operations if op.type == "blur_background"), 0.8
+            )
             if plan.intent is EditingIntent.REPLACE_BACKGROUND:
+                mode = "replace_background"
                 self.store.update(job_id, stage="preparing_background")
                 prompt = next(
                     (op.prompt for op in plan.operations if op.type == "replace_background"),
@@ -80,11 +86,29 @@ class JobProcessor:
                     orientation="landscape" if info.width >= info.height else "portrait",
                 )
 
-            result = JobResult(
-                transcript=transcript, plan=plan, segmentation=segmentation, background=background
+            # Real rendering (Milestone 4). Failure raises and fails the job below;
+            # no simulated success is possible: render_status flips only after verification.
+            self.store.update(job_id, stage="rendering")
+            rendered = render_video(
+                RenderRequest(
+                    source_path=self.store.source_path(record),
+                    masks_dir=masks_dir,
+                    output_path=self.store.job_dir(job_id) / "output.mp4",
+                    output_relative_path=f"jobs/{job_id}/output.mp4",
+                    mode=mode,
+                    background_path=background.image_path if background else None,
+                    blur_strength=blur_strength,
+                    expect_audio=info.has_audio,
+                ),
+                on_stage=lambda stage: self.store.update(job_id, stage=stage),
             )
-            self.store.update(job_id, status=JobStatus.COMPLETED, stage="pipeline_completed", result=result)
-            logger.info("job_completed job_id=%s outcome=pipeline_completed render_status=not_implemented", job_id)
+
+            result = JobResult(
+                transcript=transcript, plan=plan, segmentation=segmentation, background=background,
+                rendered=rendered, render_status="verified",
+            )
+            self.store.update(job_id, status=JobStatus.COMPLETED, stage="completed", result=result)
+            logger.info("job_completed job_id=%s outcome=rendered_and_verified frames=%d", job_id, rendered.frame_count)
             return JobStatus.COMPLETED.value
 
         except Exception as exc:  # recorded + logged, never swallowed; original upload preserved

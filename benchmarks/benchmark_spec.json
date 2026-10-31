@@ -1,7 +1,7 @@
 {
   "name": "clipforge-cpu-render-benchmark",
-  "status": "prepared_not_run",
-  "note": "No performance has been measured or claimed. The renderer (Milestone 4) does not exist yet. See docs/DECISIONS.md ADR-006.",
+  "status": "run_at_milestone_4",
+  "note": "Baseline measurements recorded in benchmarks/results/benchmark_results.json and docs/STATUS.md (sequential renderer, pre-optimization, ADR-006).",
   "source": {
     "frames": 300,
     "width": 1280,

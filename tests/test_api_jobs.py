@@ -103,7 +103,9 @@ def test_complete_mock_job_lifecycle(env, tiny_video):
     assert result.status_code == 200
     data = result.json()
     assert data["plan"]["intent"] == "keep_sharp_blur_rest"
-    assert data["render_status"] == "not_implemented"  # no fake rendering (Milestone 4)
+    assert data["render_status"] == "verified"  # real renderer since Milestone 4
+    assert data["rendered"]["mode"] == "blur_background" and data["rendered"]["has_audio"] is True
+    assert (store.job_dir(job_id) / "output.mp4").stat().st_size > 0
     assert data["segmentation"]["is_mock"] is True
 
     # Masks on disk are real and valid; original upload is preserved.

@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from clipforge_api.media import UploadValidationError, probe_video
@@ -153,6 +153,25 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
     @app.get("/api/jobs")
     async def list_jobs() -> list[JobResponse]:
         return [_to_response(r) for r in store.list_jobs()]
+
+    @app.get("/api/jobs/{job_id}/download", response_model=None)
+    async def download(job_id: str) -> FileResponse | JSONResponse:
+        record = store.get(job_id)
+        # Only a verified, on-disk rendered output may ever be downloaded.
+        if (
+            record.status.value != "completed"
+            or record.result is None
+            or record.result.render_status != "verified"
+            or record.result.rendered is None
+        ):
+            return _error(409, "download_not_ready",
+                          f"Job {job_id} has no verified rendered output (status={record.status.value}).")
+        output_path = root / record.result.rendered.output_relative_path
+        if not output_path.is_file() or output_path.stat().st_size == 0:
+            return _error(409, "download_not_ready", f"Rendered output for job {job_id} is missing on disk.")
+        return FileResponse(
+            output_path, media_type="video/mp4", filename=f"clipforge-{job_id}.mp4"
+        )
 
     return app
 

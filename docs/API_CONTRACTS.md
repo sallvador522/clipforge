@@ -50,11 +50,11 @@ Every generated plan is validated against this schema. Model/provider output is 
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `completed`, `failed`, plus `stage` progress detail |
 | `GET /api/jobs` | live | List all jobs |
 | `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `render_status`); 409 until `completed` |
-| `GET /api/jobs/{job_id}/download` | **not implemented** | Download of the verified output MP4 arrives with the Milestone 4 renderer. No fake downloads. |
+| `GET /api/jobs/{job_id}/download` | live (Milestone 4) | Serves the rendered MP4 (`video/mp4`) **only** when the job is `completed`, `render_status` is `"verified"`, and the file exists on disk; otherwise 409 `download_not_ready`. No fake downloads. |
 
 Error shape: `{ "error": { "code": string, "message": string } }` (404 `job_not_found`, 409 conflicts, 422 upload validation, 413 oversize, 400 empty file).
 
-Note: `completed` means the mock AI pipeline (transcribe → plan → segment) finished. `render_status` is `"not_implemented"` until Milestone 4; no edited video exists yet and none is claimed.
+Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Clarification/unsupported jobs complete without rendering and keep `render_status="not_implemented"`.
 
 ## Live Provider Mapping (TBD)
 

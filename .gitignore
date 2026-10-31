@@ -6,5 +6,8 @@ node_modules/
 .next/
 storage/
 benchmarks/assets/*.mp4
+benchmarks/assets/masks/
+benchmarks/assets/masks30/
+benchmarks/outputs/
 .env
 *.log

@@ -107,7 +107,7 @@ class MaskWriter:
 class MaskLoader:
     """Loads and strictly validates a PNG mask sequence + manifest.json."""
 
-    def load(self, directory: str | Path) -> MaskSequence:
+    def load_manifest(self, directory: str | Path) -> tuple[Path, MaskManifest]:
         mask_dir = Path(directory)
         manifest_path = mask_dir / "manifest.json"
         if not manifest_path.is_file():
@@ -117,16 +117,26 @@ class MaskLoader:
             manifest = MaskManifest.model_validate(raw)
         except (json.JSONDecodeError, ValidationError) as exc:
             raise MaskValidationError(f"Invalid manifest.json in {mask_dir}: {exc}") from exc
-
         self._reject_unexpected_files(mask_dir, manifest)
+        return mask_dir, manifest
 
-        arrays: list[np.ndarray] = []
+    def iter_masks(self, directory: str | Path):
+        """Yield (index, mask) one frame at a time, fully validated, bounded memory.
+
+        Validation of each frame happens as it is yielded; a missing/corrupt/
+        mis-sized frame raises at exactly that frame. Use this in the renderer
+        instead of load() so 300-frame sequences are never held in RAM at once.
+        """
+        mask_dir, manifest = self.load_manifest(directory)
         for frame in manifest.frames:
             path = mask_dir / frame.filename
             if not path.is_file():
                 raise MissingMaskFrameError(f"Mask frame missing: {frame.filename} (index {frame.index}).")
-            arrays.append(self._load_frame(path, manifest))
+            yield frame.index, self._load_frame(path, manifest)
 
+    def load(self, directory: str | Path) -> MaskSequence:
+        _, manifest = self.load_manifest(directory)
+        arrays = [mask for _, mask in self.iter_masks(directory)]
         return MaskSequence(manifest=manifest, masks=np.stack(arrays))
 
     @staticmethod
