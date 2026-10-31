@@ -44,6 +44,14 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Five-area editor workspace: TopBar (project/state/export), Media panel (real source + metadata), central Viewer (custom transport, before/compare/after, fullscreen), AI Assistant panel (mic hero with real level, mock-labelled command confirmation, typed-instruction alternative, live job steps), Timeline (ruler, real filmstrip thumbnails, real WebAudio peaks, synced playhead/seek).
 - [x] web-design-guidelines audit applied (focus-visible, dark color-scheme, skip link, h1, labels, img dimensions). Browser-verified full flow on the redesign; 52 backend tests, typecheck, build pass.
 
+## Milestone 5.2 — Local QA & Editor Validation
+- [x] Desktop/mobile QA at 1440×900, 1280×800, 1024×768, 390×844 via system Chrome (`scripts/qa-editor.mjs`): five areas present, timeline inside viewport, no horizontal overflow, desktop page height == viewport.
+- [x] Real microphone validation on hardware (headed Chrome, actual default input): recording state, live analyser level (0–9% room level), 4 s recording, Blob playback advanced 0.63 s. Permission-denied path + fallback verified in headless.
+- [x] Both editing modes validated end-to-end with verified downloads and ffprobe re-probe (video+audio, 2.0 s). Real user footage (Facebook_2.mp4) tested via a 10 s excerpt.
+- [x] Interaction checks: export gating, play/pause, playhead sync, timeline seek, Before/After/Compare, compare split, polling stops after terminal.
+- [x] Fixes: grid-row height (timeline visibility), transport wrapping, viewer flex, ruler label clipping, mobile timeline header, revoked-blob request error.
+- Limitation confirmed: mock masks are synthetic ellipses and do not track the real person (ADR-007); real subject cutout requires live SAM at Milestone 6.
+
 ## Milestone 6 — Live Integration Gate (blocked)
 - [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
 - [ ] Implement live adapters behind existing interfaces; request logging, idempotency, budget tracking; no automatic billable retries.

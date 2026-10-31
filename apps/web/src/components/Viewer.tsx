@@ -30,10 +30,10 @@ export function Viewer({
   const stageRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLVideoElement>(null);
 
-  // Keep the edited overlay in sync with the primary video in compare mode.
+  // Keep the edited overlay in sync with the primary video in every mode.
   useEffect(() => {
     const overlay = overlayRef.current;
-    if (!overlay || mode !== "compare") return;
+    if (!overlay) return;
     if (Math.abs(overlay.currentTime - currentTime) > 0.35) overlay.currentTime = currentTime;
     if (playing && overlay.paused) void overlay.play().catch(() => {});
     if (!playing && !overlay.paused) overlay.pause();
@@ -50,8 +50,6 @@ export function Viewer({
     if (document.fullscreenElement) void document.exitFullscreen();
     else void el.requestFullscreen?.();
   }
-
-  const activeSrc = mode === "after" && resultReady ? editedUrl : originalUrl;
 
   return (
     <section id="viewer" aria-label="Viewer" className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#0B0906]">
@@ -74,9 +72,8 @@ export function Viewer({
         ) : (
           <>
             <video
-              key={activeSrc ?? "none"}
               ref={primaryRef}
-              src={activeSrc ?? undefined}
+              src={originalUrl ?? undefined}
               className="max-h-full w-full object-contain"
               style={{ aspectRatio: "auto" }}
               playsInline
@@ -85,12 +82,24 @@ export function Viewer({
               onLoadedMetadata={(e) => onTimeUpdate(e.currentTarget.currentTime, e.currentTarget.duration || 0)}
               onPlay={() => onPlayState(true)}
               onPause={() => onPlayState(false)}
-              aria-label={mode === "after" ? "Edited video" : "Original video"}
+              aria-label="Original video"
             />
-            {mode === "compare" && resultReady && editedUrl && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center" style={{ clipPath: `inset(0 0 0 ${split}%)` }}>
-                <video ref={overlayRef} src={editedUrl} muted playsInline preload="auto" className="max-h-full w-full object-contain" aria-label="Edited video overlay" />
-              </div>
+            {/* The edited render stays mounted once verified so mode switches
+                never abort an in-flight blob fetch (console-safe). */}
+            {resultReady && editedUrl && (
+              <video
+                ref={overlayRef}
+                src={editedUrl}
+                muted
+                playsInline
+                preload="auto"
+                aria-label="Edited video"
+                className="pointer-events-none absolute inset-0 m-auto max-h-full w-full object-contain"
+                style={{
+                  clipPath: mode === "compare" ? `inset(0 0 0 ${split}%)` : undefined,
+                  visibility: mode === "before" ? "hidden" : "visible",
+                }}
+              />
             )}
             {mode === "compare" && (
               <span className="pointer-events-none absolute left-3 top-3 rounded bg-black/70 px-2 py-0.5 font-mono text-[11px]">ORIGINAL</span>

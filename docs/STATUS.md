@@ -3,7 +3,7 @@
 ## Current State
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- **Milestones 0–5.1:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; **professional editor redesign, browser-verified**).
+- Milestones 0–5.2: complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; professional editor redesign; local QA & editor validation).
 - **Next milestone:** Milestone 6 — Live Integration Gate (blocked until Meta docs verified + explicit user approval). See TASKS.md.
 
 ## What Exists
@@ -24,9 +24,19 @@ Follow-up layout bug (reported by the user: "the timeline doesn't appear"): the 
 
 Ran the full stack (uvicorn + worker process + `next start`) and drove the real UI in the in-app Chromium: dropped a local clip → uploaded (201, job created) → microphone correctly reported denied in headless browser → used the labelled no-microphone mock fallback → submitted → job reached `completed` with verified render facts → download button fetched a real MP4. Two separate UI sessions both ended `completed`/`verified` server-side (worker log: `rendered_and_verified frames=20`). The downloaded file was re-probed locally: video+audio streams, 320×180, 2.0 s — matches the source. Zero browser console errors. API log confirms real endpoint usage (uploads, voice, polling, result, download range requests).
 
-## Measured Benchmark (ADR-006, from Milestone 4)
+## Milestone 5.2 QA (local, mock mode)
 
-i5-4330M (2C/4T), 7.9 GB RAM: blur 199.29 s (1.51 FPS), replacement 25.16 s (11.92 FPS), peak RAM ~360 MB, 300 frames 720p, outputs verified + visually inspected. Raw: `benchmarks/results/benchmark_results.json`. Blur optimization (downscale-blur) remains the first post-profiling candidate; no user-facing timing promises.
+**Viewports** (system Chrome, `apps/web/scripts/qa-editor.mjs`, genuinely configured 1440×900 / 1280×800 / 1024×768 / 390×844): all five areas present at every size; timeline fully inside the viewport; no horizontal overflow; desktop document height equals the viewport; transport buttons not clipped; 10 real filmstrip thumbnails after import; `Export MP4` disabled before verification and enabled after; zero browser console errors. Screenshots: `qa52/*.png` (blur at each size, replacement at 1440, empty states).
+
+**Microphone (real hardware)**: Windows exposes “Microphone (High Definition Audio Device)”. Headed Chrome with only the permission prompt auto-accepted (no fake audio device, `--use-fake-ui-for-media-stream`) reached the recording state, sampled the real analyser ring at 0–9% room level, recorded 4 s (UI timer 00:04), produced a Blob of 4.80 s, and playback advanced to 0.63 s. No console errors. Headless permission-denied path shows the explicit message plus the labelled fallback. Transcription remains mock-only; recording is validated, transcription is not.
+
+**Full editing workflows**: blur and background replacement both completed through the UI with the worker’s real FFmpeg render; downloads re-probed (video + audio, 2.000 s). Interaction QA: export gating, play/pause, playhead movement (37% at 0.88 s), seek to 1.5 s, Before/After/Compare (After source = verified download endpoint), compare split `inset(0 0 0 30%)`, polling stops exactly at terminal (4 requests, still 4 after 5 s).
+
+**Real user footage**: `Facebook_2.mp4` (360×640, 25 fps, 19.6 s) exceeds the 10 s MVP input limit, so a 10.0 s excerpt was made locally (original untouched; no external calls). Both blur and replacement rendered and verified (360×640, 250 frames, 10.00 s, audio preserved). **Honest limitation:** mock segmentation is a synthetic ellipse, so the sharp region does not follow the person — the result proves the pipeline, not subject tracking. Real person cutout requires live SAM at Milestone 6 (ADR-007).
+
+**Bugs fixed in 5.2**: ruler tick labels clipped at the right edge; mobile timeline header overflow; revoked filmstrip/probe blobs triggering `net::ERR_FILE_NOT_FOUND`; view-mode switches unmounting the playing video (now the verified render stays mounted as a synced overlay, so switching never aborts a blob fetch). Zero browser console errors after the fixes.
+
+## Measured Benchmark (ADR-006, from Milestone 4)
 
 ## How To Run The Demo
 
@@ -37,7 +47,7 @@ i5-4330M (2C/4T), 7.9 GB RAM: blur 199.29 s (1.51 FPS), replacement 25.16 s (11.
 ## Blockers / Uncertainties
 
 - All Meta integration details unverified; live adapters are placeholders. Gate: Milestone 6 (docs verification, budget/idempotency design, explicit approval, one controlled test). The recorded voice audio is not yet sent anywhere — it becomes the transcription input at that gate.
-- No licensed real-world footage with manual masks (ADR-007); quality on real people unproven.
+- No licensed real-world footage with manual masks (ADR-007); the Facebook_2 test confirms mock masks do not track a real person.
 - System FFmpeg is from 2018; upgrade recommended before production (not done silently).
 - No frontend unit-test runner yet (backend suite + browser verification cover behaviour); shadcn primitives are local customised components, not Radix-based CLI output.
 

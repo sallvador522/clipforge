@@ -9,4 +9,11 @@ Run the full local stack (mock mode):
 
 Flow: upload (real progress, server-side validation) → record a voice instruction with MediaRecorder → confirm the matching mock transcription command (clearly labelled simulated, ADR-004) → submit → watch real job stages (polling stops at completed/failed) → transcript/plan/verified-render facts → before/after/compare preview → download the verified MP4 (blob download; the backend only serves verified files).
 
-Checks: `npm run typecheck`, `npm run build`. Responsive QA (optional, dev-only): `npm install --no-save playwright-core` then `node scripts/responsive-check.mjs <outDir>` — drives system Chrome at 1440×900, 1280×800, 1024×768 and 390×844, runs the real mock flow, and writes layout facts + screenshots. `playwright-core` is not a shipped dependency. There is no frontend unit-test runner yet; behaviour is covered by the backend test suite plus real-browser verification (see docs/STATUS.md).
+Checks: `npm run typecheck`, `npm run build`. QA harnesses (dev-only, `npm install --no-save playwright-core`, system Chrome):
+
+- `node scripts/qa-editor.mjs <outDir>` — 1440×900 / 1280×800 / 1024×768 / 390×844 layout facts + screenshots, blur and replacement flows, verified downloads.
+- `node scripts/qa-interactions.mjs <outDir>` — export gating, playback/playhead sync, seek, view modes, compare split, polling stop, permission-denied microphone state.
+- `node scripts/qa-mic.mjs <outDir>` — real microphone (headed Chrome; only the permission prompt is auto-accepted, the actual input device is used).
+- `node scripts/qa-facebook.mjs <outDir>` — real-footage run against a 10 s excerpt (mock masks do not track people).
+
+There is no frontend unit-test runner yet; behaviour is covered by the backend test suite plus these browser verifications (see docs/STATUS.md).

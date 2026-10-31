@@ -61,6 +61,9 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek }: Prop
     });
     return () => {
       cancelled = true;
+      // Detach before revoking so the decoder never requests a revoked blob.
+      video.removeAttribute("src");
+      video.load();
       URL.revokeObjectURL(url);
     };
   }, [file]);
@@ -114,8 +117,8 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek }: Prop
     <section aria-label="Timeline" className="shrink-0 border-t border-border bg-surface">
       <div className="flex items-center justify-between px-3 pt-1.5">
         <h2 className="font-mono text-[11px] font-medium tracking-wider text-muted">TIMELINE</h2>
-        <span className="font-mono text-[11px] tabular-nums text-muted">
-          {formatTime(currentTime)} / {formatTime(duration)} · single clip (MVP)
+        <span className="ml-2 truncate font-mono text-[11px] tabular-nums text-muted">
+          {formatTime(currentTime)} / {formatTime(duration)} <span className="hidden sm:inline">· single clip (MVP)</span>
         </span>
       </div>
 
@@ -136,8 +139,12 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek }: Prop
       >
         {/* ruler */}
         <div className="relative h-4 border-b border-border/60">
-          {ticks.map((t) => (
-            <span key={t} className="absolute top-0 font-mono text-[9px] tabular-nums text-muted/70" style={{ left: `${duration ? (t / duration) * 100 : 0}%` }}>
+          {ticks.map((t, i) => (
+            <span
+              key={t}
+              className={`absolute top-0 font-mono text-[9px] tabular-nums text-muted/70 ${i === 0 ? "" : i === ticks.length - 1 ? "-translate-x-full" : "-translate-x-1/2"}`}
+              style={{ left: `${duration ? (t / duration) * 100 : 0}%` }}
+            >
               {t.toFixed(tickEvery < 1 ? 1 : 0)}s
             </span>
           ))}

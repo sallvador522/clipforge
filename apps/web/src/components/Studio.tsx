@@ -96,7 +96,11 @@ export function Studio() {
         duration: probe.duration || 0,
         hasAudio: null, // browsers cannot report this reliably; the API probe is authoritative
       });
-      URL.revokeObjectURL(probe.src);
+      // Detach before revoking so the hidden probe never requests a revoked blob.
+      const probeSrc = probe.src;
+      probe.removeAttribute("src");
+      probe.load();
+      URL.revokeObjectURL(probeSrc);
     };
     probe.src = url;
   }
