@@ -75,8 +75,8 @@ page.on("request", (r) => {
 
 await page.getByRole("button", { name: "Upload & create job" }).click();
 await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
-await page.getByRole("radio", { name: /Blur the background/ }).click();
-await page.getByRole("button", { name: /Use selected command as transcript/ }).click();
+await page.locator("#typed-instruction").fill("blur the background");
+await page.getByRole("button", { name: "Use", exact: true }).click();
 await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
 await page.waitForSelector("text=Status: completed", { timeout: 90_000 });
 const requestsAtCompletion = pollRequests.length;

@@ -84,11 +84,10 @@ export function uploadVideo(file: File, onProgress: (percent: number) => void): 
 export function transcribeRecording(
   blob: Blob,
   filename: string,
-  opts: { mockFixtureId?: string; onProgress: (percent: number) => void },
+  opts: { onProgress: (percent: number) => void },
 ): Promise<TranscriptData> {
   const form = new FormData();
   form.append("file", blob, filename);
-  if (opts.mockFixtureId) form.append("mock_fixture_id", opts.mockFixtureId);
   return xhrUpload<TranscriptData>("/api/transcribe", form, opts.onProgress);
 }
 

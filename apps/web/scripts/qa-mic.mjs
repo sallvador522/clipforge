@@ -87,16 +87,18 @@ if (state === "recording") {
   });
   result.steps.push({ step: "playback", playback });
 
-  // Mock transcription path: the real recording is uploaded to the local API,
-  // converted to WAV, and the explicitly selected mock command is returned.
-  await page.getByRole("button", { name: /Simulate transcription \(mock\)/ }).click();
-  await page.waitForSelector("text=RECOGNISED INSTRUCTION — REVIEW & CONFIRM", { timeout: 30_000 });
+  // Mock mode: recorded audio exists locally but is intentionally not transcribed.
+  // The transcribe control must be disabled and explain why; no paid request is made.
   result.steps.push({
-    step: "mock_transcription_after_real_recording",
-    provider: await page.evaluate(() => (document.body.innerText.match(/mock-transcription[^\n]*/) || [])[0] ?? null),
-    draft: await page.locator('textarea[aria-label="Transcript to confirm"]').inputValue(),
+    step: "mock_transcription_guard",
+    liveBadge: await page.evaluate(() => (document.body.innerText.match(/LIVE TRANSCRIPTION|MOCK TRANSCRIPTION/) || [])[0] ?? null),
+    transcribeControl: await page.evaluate(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((b) => /Live transcription not enabled|Transcribe recording/.test(b.textContent || ""));
+      return button ? { text: button.textContent?.trim(), disabled: button.disabled } : null;
+    }),
+    explanation: await page.evaluate(() => document.body.innerText.includes("recorded audio is not transcribed")),
   });
-  await page.screenshot({ path: join(outDir, "microphone-transcribed.png") });
+  await page.screenshot({ path: join(outDir, "microphone-recorded-mock-mode.png") });
   await page.screenshot({ path: join(outDir, "microphone-recorded.png") });
 }
 

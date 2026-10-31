@@ -56,7 +56,7 @@ async function layoutFacts(page) {
   });
 }
 
-async function runFlow(page, { fixture, label, screenshotBase, expectBackground }) {
+async function runFlow(page, { instruction, label, screenshotBase, expectBackground }) {
   const observedStages = new Set();
   page.on("response", async (res) => {
     if (res.url().match(/\/api\/jobs\/[a-f0-9]+\?*$/) && res.request().method() === "GET") {
@@ -72,8 +72,8 @@ async function runFlow(page, { fixture, label, screenshotBase, expectBackground 
   await page.getByRole("button", { name: "Upload & create job" }).click();
   await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
 
-  await page.getByRole("radio", { name: fixture }).click();
-  await page.getByRole("button", { name: /Use selected command as transcript/ }).click();
+  await page.locator("#typed-instruction").fill(instruction);
+  await page.getByRole("button", { name: "Use", exact: true }).click();
   await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
   await page.waitForSelector("text=Status: completed", { timeout: 90_000 });
   await page.waitForTimeout(800);
@@ -110,7 +110,7 @@ for (const vp of viewports) {
   collect(page2, vp.name + "-flow");
   await page2.goto("http://localhost:3000", { waitUntil: "networkidle" });
   const flow = await runFlow(page2, {
-    fixture: /Blur the background/,
+    instruction: "blur the background",
     label: "blur",
     screenshotBase: `${vp.name}-blur-result`,
     expectBackground: false,
@@ -126,7 +126,7 @@ for (const vp of viewports) {
   collect(page, "replace-1440");
   await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
   const flow = await runFlow(page, {
-    fixture: /Replace with a studio/,
+    instruction: "replace the background with a studio",
     label: "replace",
     screenshotBase: "1440x900-replace-result",
     expectBackground: true,

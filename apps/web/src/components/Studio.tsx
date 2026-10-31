@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, checkHealth, downloadUrl, getJob, getResult, submitTranscript, transcribeRecording, uploadVideo } from "@/lib/api";
 import type { JobResponse, JobResultData, TranscriptData } from "@/lib/types";
-import { VOICE_FIXTURES } from "@/lib/fixtures";
 import { TopBar } from "./TopBar";
 import { MediaPanel, type SourceMeta } from "./MediaPanel";
 import { Viewer } from "./Viewer";
@@ -25,7 +24,6 @@ export function Studio() {
 
   const [job, setJob] = useState<JobResponse | null>(null);
   const [result, setResult] = useState<JobResultData | null>(null);
-  const [fixtureId, setFixtureId] = useState(VOICE_FIXTURES[2].id);
   const [submitting, setSubmitting] = useState(false);
   const [voiceSubmitted, setVoiceSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -148,14 +146,14 @@ export function Studio() {
   }
 
   async function handleTranscribe() {
-    if (!recording || transcribeStatus === "uploading" || transcribeStatus === "transcribing") return;
+    if (!recording || !liveAvailable) return;
+    if (transcribeStatus === "uploading" || transcribeStatus === "transcribing") return;
     // One explicit request per click. No automatic retry of a billable call.
     setTranscriptionError(null);
     setTranscribeStatus("uploading");
     setTranscribeProgress(0);
     try {
       const data = await transcribeRecording(recording.blob, recording.filename, {
-        mockFixtureId: liveAvailable ? undefined : fixtureId,
         onProgress: (pct) => {
           setTranscribeProgress(pct);
           if (pct >= 100) setTranscribeStatus("transcribing");
@@ -163,31 +161,12 @@ export function Studio() {
       });
       setTranscript(data);
       setDraft(data.text);
-      setTranscriptSource(liveAvailable ? "live" : "mock-audio");
+      setTranscriptSource("live");
       setTranscribeStatus("done");
     } catch (e) {
       setTranscribeStatus("error");
       setTranscriptionError(e instanceof ApiClientError ? e.message : "Transcription failed.");
     }
-  }
-
-  function handleUseMockTranscript() {
-    const fixture = VOICE_FIXTURES.find((f) => f.id === fixtureId);
-    if (!fixture) return;
-    setTranscript({
-      text: fixture.transcript,
-      language: "pt-BR",
-      confidence: null,
-      provider_name: "mock-fixture",
-      is_mock: true,
-      session_id: null,
-      audio_duration_ms: null,
-      transcribe_mode: "mock",
-    });
-    setDraft(fixture.transcript);
-    setTranscriptSource("mock-fixture");
-    setTranscriptionError(null);
-    setTranscribeStatus("done");
   }
 
   function handleTypedInstruction(text: string) {
@@ -356,8 +335,6 @@ export function Studio() {
             job={job}
             result={result}
             liveAvailable={liveAvailable}
-            fixtureId={fixtureId}
-            onSelectFixture={setFixtureId}
             recorded={Boolean(recording)}
             recordingName={recording?.filename ?? null}
             onRecordingReady={(blob, filename) => {
@@ -381,7 +358,6 @@ export function Studio() {
             draft={draft}
             onDraftChange={setDraft}
             onTranscribe={handleTranscribe}
-            onUseMockTranscript={handleUseMockTranscript}
             onTypedInstruction={handleTypedInstruction}
             canConfirm={Boolean(job && job.status === "queued" && !job.ready)}
             confirming={submitting}

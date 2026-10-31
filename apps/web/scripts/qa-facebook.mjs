@@ -18,7 +18,7 @@ mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 
-async function run(label, fixture, fileBase) {
+async function run(label, instruction, fileBase) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
@@ -30,8 +30,8 @@ async function run(label, fixture, fileBase) {
 
   await page.getByRole("button", { name: "Upload & create job" }).click();
   await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
-  await page.getByRole("radio", { name: fixture }).click();
-  await page.getByRole("button", { name: /Use selected command as transcript/ }).click();
+  await page.locator("#typed-instruction").fill(instruction);
+  await page.getByRole("button", { name: "Use", exact: true }).click();
   await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
 
   await page.waitForSelector("text=Status: completed", { timeout: 240_000 });
@@ -54,7 +54,7 @@ async function run(label, fixture, fileBase) {
   return { label, facts, saved, consoleErrors: errors };
 }
 
-const blur = await run("blur", /Blur the background/, "facebook-blur");
-const replace = await run("replace", /Replace with a studio/, "facebook-replace");
+const blur = await run("blur", "blur the background", "facebook-blur");
+const replace = await run("replace", "replace the background with a studio", "facebook-replace");
 await browser.close();
 console.log(JSON.stringify({ blur, replace }, null, 2));

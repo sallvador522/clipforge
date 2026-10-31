@@ -4,7 +4,8 @@
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
 - **Milestones 0–6A:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; **real transcription provider + audio pipeline, live call not yet made**).
-- **Next milestone:** first controlled live transcription test — blocked on explicit user approval of the cost estimate.
+- **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
+- **Next milestone:** first controlled live transcription test — blocked on a valid `MODEL_API_KEY` in `.env` and explicit user approval of the cost estimate.
 
 ## What Exists
 
@@ -53,7 +54,7 @@ Ran the full stack (uvicorn + worker process + `next start`) and drove the real 
 
 ## How To Run The Demo
 
-1. `uvicorn clipforge_api.main:app --port 8000` (PYTHONPATH over `packages/*`, `apps/*`)
+1. `python scripts/dev_api.py` (loads `.env`, starts uvicorn on :8000 with reload)
 2. `python -m clipforge_worker.worker_process --storage storage`
 3. `cd apps/web && npm run dev` → http://localhost:3000 (API base override: `NEXT_PUBLIC_API_URL`)
 

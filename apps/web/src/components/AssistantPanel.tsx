@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { VOICE_FIXTURES } from "@/lib/fixtures";
 import type { JobResponse, JobResultData, TranscriptData } from "@/lib/types";
 import { Button } from "./ui/button";
 
@@ -27,8 +26,6 @@ interface Props {
   job: JobResponse | null;
   result: JobResultData | null;
   liveAvailable: boolean;
-  fixtureId: string;
-  onSelectFixture: (id: string) => void;
   recorded: boolean;
   recordingName: string | null;
   onRecordingReady: (blob: Blob, filename: string) => void;
@@ -41,7 +38,6 @@ interface Props {
   draft: string;
   onDraftChange: (value: string) => void;
   onTranscribe: () => void;
-  onUseMockTranscript: () => void;
   onTypedInstruction: (text: string) => void;
   canConfirm: boolean;
   confirming: boolean;
@@ -51,9 +47,9 @@ interface Props {
 }
 
 export function AssistantPanel({
-  job, result, liveAvailable, fixtureId, onSelectFixture, recorded, recordingName,
+  job, result, liveAvailable, recorded, recordingName,
   onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress, transcriptionError,
-  transcript, transcriptSource, draft, onDraftChange, onTranscribe, onUseMockTranscript,
+  transcript, transcriptSource, draft, onDraftChange, onTranscribe,
   onTypedInstruction, canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
 }: Props) {
   const [recState, setRecState] = useState<RecorderState>("idle");
@@ -204,27 +200,35 @@ export function AssistantPanel({
         )}
 
         {recState === "recorded" && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={onTranscribe} disabled={busy || submitted}>
-              {transcribeStatus === "uploading"
-                ? `Uploading audio… ${transcribeProgress ?? 0}%`
-                : transcribeStatus === "transcribing"
-                  ? "Transcribing…"
-                  : liveAvailable
-                    ? "Transcribe recording"
-                    : "Simulate transcription (mock)"}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setAudioUrl(null);
-                setRecState("idle");
-                onRecordingCleared();
-              }}
-              disabled={busy || submitted}
-            >
-              Discard recording
-            </Button>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={onTranscribe} disabled={busy || submitted || !liveAvailable}>
+                {!liveAvailable
+                  ? "Live transcription not enabled"
+                  : transcribeStatus === "uploading"
+                    ? `Uploading audio… ${transcribeProgress ?? 0}%`
+                    : transcribeStatus === "transcribing"
+                      ? "Transcribing…"
+                      : "Transcribe recording"}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setAudioUrl(null);
+                  setRecState("idle");
+                  onRecordingCleared();
+                }}
+                disabled={busy || submitted}
+              >
+                Discard recording
+              </Button>
+            </div>
+            {!liveAvailable && (
+              <p className="font-mono text-[11px] text-muted">
+                This server is in mock mode, so recorded audio is not transcribed. Use the typed instruction below, or
+                enable <span className="text-foreground">CLIPFORGE_TRANSCRIBE_MODE=live</span>.
+              </p>
+            )}
           </div>
         )}
 
@@ -249,35 +253,6 @@ export function AssistantPanel({
               )}
               <p className="self-center font-mono text-[11px] text-muted">No retry happens automatically.</p>
             </div>
-          </div>
-        )}
-
-        {!liveAvailable && (
-          <div className="space-y-2">
-            <p className="font-mono text-[11px] text-muted">
-              MOCK TRANSCRIPTION — simulated, never audio recognition. Pick the command you spoke:
-            </p>
-            <div className="grid gap-1.5" role="radiogroup" aria-label="Simulated voice command">
-              {VOICE_FIXTURES.map((fixture) => (
-                <button
-                  key={fixture.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={fixture.id === fixtureId}
-                  disabled={submitted}
-                  onClick={() => onSelectFixture(fixture.id)}
-                  className={`rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
-                    fixture.id === fixtureId ? "border-accent bg-raised" : "border-border hover:border-muted"
-                  }`}
-                >
-                  <span className="block text-[13px] font-medium">{fixture.label}</span>
-                  <span className="block font-mono text-[11px] text-muted">“{fixture.transcript}”</span>
-                </button>
-              ))}
-            </div>
-            <Button variant="secondary" onClick={onUseMockTranscript} disabled={submitted} className="w-full">
-              Use selected command as transcript (no audio sent)
-            </Button>
           </div>
         )}
 
