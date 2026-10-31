@@ -24,10 +24,11 @@ pythonpath = [
     "packages/contracts",
     "packages/providers",
     "packages/jobs",
+    "packages/director",
     "apps/worker",
     "apps/api",
 ]
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-where = ["packages/contracts", "packages/providers", "packages/jobs", "apps/worker", "apps/api"]
+where = ["packages/contracts", "packages/providers", "packages/jobs", "packages/director", "apps/worker", "apps/api"]

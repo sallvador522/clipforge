@@ -3,17 +3,29 @@
 ## Current State
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- **Milestones 0–6A:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; **real transcription provider + audio pipeline, live call not yet made**).
+- **Milestones 0–6B-PREP:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; real transcription provider + audio pipeline; **professional editing director intelligence, offline**).
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** first controlled live transcription test — blocked on a valid `MODEL_API_KEY` in `.env` and explicit user approval of the cost estimate.
+- **Next milestone:** Muse Spark 1.3 integration — blocked on explicit approval, official tool-calling/structured-output verification, and wiring the approval gate. The first live transcription test already succeeded (user-verified); transcription is currently configured as mock for development safety.
 
 ## What Exists
 
 - Docs: PRODUCT_SPEC, ARCHITECTURE, DESIGN_SYSTEM (tokens finalized), API_CONTRACTS, DECISIONS (ADR-001…ADR-007), TASKS, STATUS.
-- Skills: 8 project skills (≤10 limit) — 5 custom in `.opencode/skills/`, plus `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier installed via `npx motion-ai`; MCP configured; no Motion+ sign-in or purchase).
+- Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **70 backend tests passing**; frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **132 backend tests passing** (70 preserved + 62 director/registry/playbook); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+
+## Professional Editing Director (Milestone 6B-PREP)
+
+- Ninth skill: `.opencode/skills/clipforge-editing-director` (9/10 total). It is development guidance only; it is never sent to the runtime model.
+- Runtime playbook: `apps/api/clipforge_api/prompts/professional_editing_director.md`, loaded/validated by `clipforge_api/playbook.py` (12 required sections, versioned; no network/model call).
+- Capability registry: 6 executable capabilities (1 mock segmentation, 5 local), 1 planned (Muse Image), 9 disabled. Only available capabilities can be planned; disabled features are named in explanations but never executed.
+- v2 plan + v1 adapter: validation covers registry membership, typed params, dependency order, clarification/unsupported rules, approval requirements and forbidden fields. The worker still executes v1 only.
+- Mock director: deterministic offline scenarios A–E; replacement requires approval; cinematic background is labelled simulated; vague/subject-ambiguous requests ask one clarification; unsupported requests name disabled capabilities.
+- Stages: 10 validated `DirectorStage` values + mapping from worker stages; no fabricated percentages.
+- Approval/cancel/revision: contracts/docs only; no endpoints/UI, no fake execution.
+
+**Safety:** implementation and tests ran in `CLIPFORGE_AI_MODE=mock` with `CLIPFORGE_TRANSCRIBE_MODE=mock`; zero Meta/Muse Spark/SAM/Muse Image requests; no credentials printed or committed.
 
 ## Transcription (Milestone 6A)
 

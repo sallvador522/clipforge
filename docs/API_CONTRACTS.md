@@ -75,6 +75,37 @@ Error shape: `{ "error": { "code": string, "message": string } }` (404 `job_not_
 
 Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Clarification/unsupported jobs complete without rendering and keep `render_status="not_implemented"`.
 
+## Professional Editing Director Contracts (ADR-009, Milestone 6B-PREP)
+
+All director contracts are internal and not yet exposed through execution endpoints.
+
+### Capability registry
+
+`packages/contracts/clipforge_contracts/capabilities.py` is authoritative. Statuses:
+`available_mock`, `available_local`, `available_live`, `planned`, `disabled`.
+
+Executable now: `subject.isolate` (mock masks, **not SAM**), `background.blur`, `background.replace` (local/mock assets, **not Muse Image**), `audio.preserve`, `video.render_mp4`, `output.verify` — all local except mock segmentation. Planned: `background.generate`. Disabled: scene cuts, trimming, transitions, keyframes, multi-track, colour grading, speed ramps, audio mixing, animated captions. Disabled/planned capabilities can be named in explanations but cannot be planned or executed.
+
+### ProfessionalEditingPlan v2
+
+`schema_version: "2.0"`, `request_id`, `raw_instruction`, `interpreted_intention`, `outcome` (`plan_ready` / `needs_clarification` / `unsupported`), `subject` (strategy, description, ambiguity + question), `target` (mp4, aspect, resolution, preserve audio), operations, required providers, estimated stages, expected results, verification requirements, summary/per-operation explanations, clarification questions, unsupported capabilities, `approval_status`.
+
+Each operation: `operation_id`, `capability_id`, human title, explanation, typed params (discriminated union; no free-form commands/paths), dependencies (must appear earlier), status (`proposed` initially), expected output.
+
+Validators reject: unknown capability, disabled/planned capability, parameter/capability mismatch, duplicate IDs, forward or missing dependencies, missing render/verify/audio when required, ready-plan without a background operation, clarification with operations, unsupported with operations, approval inconsistencies, unknown fields.
+
+### v1 adapter
+
+`ProfessionalEditingPlan.to_execution_plan()` produces the existing v1 `EditingPlan` used by the worker: keep-subject-sharp + blur/replace, preserve audio; clarification and unsupported map to v1 intents. The worker is unchanged and does not execute v2.
+
+### Director stages
+
+`DirectorStage`: `REQUEST_RECEIVED`, `ANALYZING_REQUEST`, `PLAN_READY`, `WAITING_FOR_APPROVAL`, `EXECUTING`, `VERIFYING`, `COMPLETED`, `FAILED`, `NEEDS_CLARIFICATION`, `CANCELLED`. Transitions are validated; `stage_from_job_stage()` maps current worker stages. No percentages are defined.
+
+### Approval / cancel / revision
+
+Prepared as contract fields only. **No endpoints or UI exist**; the current worker still auto-executes after transcript confirmation. A future milestone must add explicit approval gating before v2 is wired to execution.
+
 ## Live Provider Mapping (TBD)
 
 To be completed only after official documentation verification of: request/response schemas, supported media inputs, mask encoding, sync vs async execution, polling, rate limits, pricing. Until then the mapping section stays empty by design.

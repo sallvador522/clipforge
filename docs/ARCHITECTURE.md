@@ -42,6 +42,17 @@ Mode selection: `CLIPFORGE_AI_MODE=mock` is the default; `live` there is still r
 4. The transcript is displayed and editable; only after explicit confirmation (`POST /api/jobs/{id}/voice` with `transcript`) does the planner run. Confirmed text is stored on the job; the worker never re-transcribes it.
 5. Failures are explicit (timeout/429/API error); retry requires a user click, protecting the API budget.
 
+## Professional Editing Director (Milestone 6B-PREP)
+
+- **Capability registry** (`packages/contracts/clipforge_contracts/capabilities.py`) is the single authority: IDs, names, descriptions, typed input/output schemas, required providers, backend handlers, dependencies, status (`available_mock` / `available_local` / `available_live` / `planned` / `disabled`), verification and approval requirements.
+- **v2 plan** (`director_plan.py`): `ProfessionalEditingPlan` with request id, raw instruction, interpretation, subject strategy, output target, typed operations (capability id, params, dependencies, status, expected output), providers, estimated stages, expected results, verification requirements, explanations, clarification and approval. Validators reject unknown/disabled capabilities, wrong parameter types, missing dependencies, dependency-order violations, arbitrary fields and invented approvals.
+- **v1 adapter**: `to_execution_plan()` converts ready v2 plans into the existing `EditingPlan` (blur/replace + keep-subject-sharp); clarification/unsupported map to v1 intents. The worker still executes v1 only; v2 is not wired into execution yet.
+- **Mock director** (`packages/director`): deterministic, offline scenarios A–E. Not part of the worker pipeline.
+- **Playbook**: `apps/api/clipforge_api/prompts/professional_editing_director.md`, validated by `clipforge_api/playbook.py`; runtime asset for future Muse Spark, never loaded during tests' inference (there is none).
+- **Stages**: ten validated `DirectorStage` values and a mapper from current worker stages; no percentages are fabricated.
+- **Skills vs playbook**: `.opencode/skills/clipforge-editing-director` is development guidance for the coding agent; the playbook is runtime system content. They are intentionally separate.
+- **Approval/cancel/revision**: contracts and docs only; no endpoints or UI exist yet. The v2 plan carries `approval_status`; replacement requires approval.
+
 ## Video Pipeline (ADR-001, ADR-002, ADR-005, ADR-006)
 
 1. Worker prepares the source video (FFmpeg decode/normalize).

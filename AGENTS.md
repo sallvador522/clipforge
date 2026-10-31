@@ -14,6 +14,14 @@ ClipForge is a voice-first AI video editing agent: upload a video, describe the 
 8. **Preserve originals.** Never overwrite or delete the original video/audio until the rendered output is verified (readable file, valid duration, valid video + audio streams).
 9. **No swallowed exceptions, no arbitrary code execution from model outputs.** Every provider output is validated against strict Pydantic schemas.
 10. **Ambiguity rule.** When the intended subject is ambiguous, the agent must ask a spoken clarification instead of silently choosing a person.
+11. **Capability registry is authoritative (ADR-009).** The Professional Editing Director may only plan capabilities marked available in `packages/contracts/clipforge_contracts/capabilities.py`. Never advertise disabled/planned features. Local rendering/audio/verification are `available_local`, not live AI; mock segmentation is not SAM; local/mock backgrounds are not Muse Image.
+12. **Director contracts.** v1 `EditingPlan` remains the worker's execution contract; v2 `ProfessionalEditingPlan` is director output and must pass registry validation before adaptation. Model output never contains paths, shell commands or arbitrary parameters. The mock director stays offline and unwired until Muse Spark integration is explicitly approved.
+
+## Editing Director Assets
+
+- Development guidance (coding agent only): `.opencode/skills/clipforge-editing-director/`.
+- Runtime system instructions (future Muse Spark only): `apps/api/clipforge_api/prompts/professional_editing_director.md`, loaded by `clipforge_api/playbook.py`.
+- These are different artefacts: the skill is never sent to the runtime model, and the playbook grants no development permissions.
 
 ## Stack
 
