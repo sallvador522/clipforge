@@ -91,4 +91,15 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
 - **Consequences:** Provider gains `require_contributor` and `reasoning_effort` options (defaults preserve Standard-only safety). All other providers stay mock; worker, renderer and UI unchanged.
 - **Correction (billing reconciliation):** the "no billed cost on 500" assumption in the 6B-LIVE reports was wrong — it generalized the Muse Voice Transcribe failed-request rule to Spark Chat Completions without documentation. Both calls may have been metered server-side; the Meta panel is source of truth. Provider now captures `x-request-id` into `DirectorAPIError.server_request_id` (non-secret) and the live-call script prints structured failure context without writing result files.
 
+## ADR-013: Lite Plan Schema + LIVE-CALL 003 (Contributor Medium)
+- **Status:** EXECUTED — one POST returned **HTTP 200 with `finish_reason: "length"`** at the 800-token cap. No plan accepted; no retry. Full log: `docs/LIVE_CALL_003_REPORT.md`.
+- **Context:** LIVE-CALL 001 + 002 returned identical HTTP 500s on the full v2 schema (~8.4 KB, 16 `$defs`). Prime suspect: schema size/shape on the Contributor tier.
+- **Decision:**
+  - Wire format is hand-written `ProfessionalEditingPlanLite` (zero `$refs`, 1,948 bytes, depth < 6, <100 properties): request id, raw/inferred text, outcome enum, flat subject fields, operations with capability enum (6 executable only) + fixed scalar params, no timing fields at all, approval enum.
+  - Abridged developer brief (playbook-derived, ~1.2k chars) + essential-only registry summary (~430 chars); developer message < 8k chars, total payload < 9k chars.
+  - Strictness preserved off-wire: response parsed as `LitePlan`, converted to full v2, all registry/dependency/approval validators run, then `to_execution_plan()` adapter available (not executed).
+  - Same endpoint/model/reasoning-effort/cap (`muse-spark-1.3-contributor`, `medium`, 1500 → **800** max tokens), no tools/audio/search; single POST, no retries; key never logged.
+- **Consequences:** If the lite call succeeds, the schema was the likely 500 cause and the full v2 schema stays server-side-unproven. If it 500s identically, the schema is exonerated and investigation moves to tier/model/payload factors. Either way no further calls without fresh approval.
+- **Result (LIVE-CALL 003):** HTTP **200**, `finish_reason: "length"` at 800 tokens → no plan accepted. This exonerates the full schema as the 500 cause (same model/tier/endpoint accepted the lite schema) and isolates the remaining issue to the output budget. Call is billable; local usage was lost pre-fix (bounded ≈ ≤ $0.00026). Observability fixed afterwards: usage recorded before validation; `DirectorValidationError.server_request_id` captured.
+
 

@@ -102,7 +102,9 @@ class DirectorAPIError(SparkDirectorError):
 
 
 class DirectorValidationError(SparkDirectorError):
-    pass
+    def __init__(self, message: str, server_request_id: str | None = None) -> None:
+        super().__init__(message)
+        self.server_request_id = server_request_id
 
 
 class DirectorVideoMetadata(BaseModel):
@@ -250,6 +252,12 @@ class MetaEditingDirectorProvider:
         if self._owns_client:
             self._client.close()
 
+    def _wire_schema(self) -> dict:
+        return ProfessionalEditingPlan.model_json_schema()
+
+    def _schema_name(self) -> str:
+        return "ProfessionalEditingPlan"
+
     def request_payload(
         self,
         transcript: TranscriptResult,
@@ -258,7 +266,6 @@ class MetaEditingDirectorProvider:
         request_id: str | None = None,
     ) -> tuple[dict[str, Any], str]:
         expected_request_id = request_id or ("req_" + hashlib.sha256(transcript.text.encode()).hexdigest()[:12])
-        schema = ProfessionalEditingPlan.model_json_schema()
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [
@@ -279,8 +286,8 @@ class MetaEditingDirectorProvider:
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "ProfessionalEditingPlan",
-                    "schema": schema,
+                    "name": self._schema_name(),
+                    "schema": self._wire_schema(),
                     "strict": False,
                 },
             },
@@ -345,41 +352,24 @@ class MetaEditingDirectorProvider:
         except ValueError as exc:
             raise DirectorAPIError(502, "Director returned invalid JSON.") from exc
 
-        try:
-            choice = body["choices"][0]
-            message = choice["message"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise DirectorValidationError("Director response has no choices[0].message.") from exc
+        server_request_id = response.headers.get("x-request-id")
+        # Record usage BEFORE validation: a truncated but successful (billed) call
+        # must still feed token accounting even though no plan is accepted.
+        self.last_usage = self._record_usage(body)
+        content = self._extract_content(body, server_request_id)
+        plan = self._validate_content(content, expected_request_id, transcript, server_request_id)
 
-        if message.get("tool_calls"):
-            raise DirectorValidationError(
-                "Director returned tool calls; this provider never executes tools."
-            )
-        if choice.get("finish_reason") == "length":
-            raise DirectorValidationError(
-                "Director output was truncated (finish_reason=length); no partial plan accepted."
-            )
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise DirectorValidationError("Director returned empty content.")
+        logger.info(
+            "director_ok outcome=%s ops=%d prompt=%d completion=%d cost_usd=%.6f",
+            plan.outcome.value,
+            len(plan.operations),
+            self.last_usage.prompt_tokens,
+            self.last_usage.completion_tokens,
+            self.last_usage.cost_usd,
+        )
+        return plan
 
-        try:
-            raw_plan = json.loads(content)
-        except ValueError as exc:
-            raise DirectorValidationError("Director content is not valid JSON.") from exc
-
-        try:
-            plan = ProfessionalEditingPlan.model_validate(raw_plan)
-        except Exception as exc:
-            raise DirectorValidationError(f"Director plan failed validation: {exc}") from exc
-
-        if plan.request_id != expected_request_id:
-            raise DirectorValidationError(
-                f"Director request_id {plan.request_id!r} does not match {expected_request_id!r}."
-            )
-        if plan.raw_instruction != transcript.text:
-            raise DirectorValidationError("Director raw_instruction must equal the confirmed transcript.")
-
+    def _record_usage(self, body: dict[str, Any]) -> DirectorUsage:
         usage = body.get("usage") or {}
         try:
             prompt_tokens = int(usage.get("prompt_tokens", 0))
@@ -387,20 +377,69 @@ class MetaEditingDirectorProvider:
             total_tokens = int(usage.get("total_tokens", prompt_tokens + completion_tokens))
         except (TypeError, ValueError):
             prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
-        self.last_usage = DirectorUsage(
+        return DirectorUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             cost_usd=calculate_cost_usd(prompt_tokens, completion_tokens, self._pricing_mode),
         )
-        logger.info(
-            "director_ok outcome=%s ops=%d prompt=%d completion=%d cost_usd=%.6f",
-            plan.outcome.value,
-            len(plan.operations),
-            prompt_tokens,
-            completion_tokens,
-            self.last_usage.cost_usd,
-        )
+
+    @staticmethod
+    def _extract_content(body: dict[str, Any], server_request_id: str | None = None) -> str:
+        try:
+            choice = body["choices"][0]
+            message = choice["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise DirectorValidationError(
+                "Director response has no choices[0].message.", server_request_id
+            ) from exc
+
+        if message.get("tool_calls"):
+            raise DirectorValidationError(
+                "Director returned tool calls; this provider never executes tools.",
+                server_request_id,
+            )
+        if choice.get("finish_reason") == "length":
+            raise DirectorValidationError(
+                "Director output was truncated (finish_reason=length); no partial plan accepted.",
+                server_request_id,
+            )
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise DirectorValidationError("Director returned empty content.", server_request_id)
+        return content
+
+    def _validate_content(
+        self,
+        content: str,
+        expected_request_id: str,
+        transcript: TranscriptResult,
+        server_request_id: str | None = None,
+    ) -> ProfessionalEditingPlan:
+        try:
+            raw_plan = json.loads(content)
+        except ValueError as exc:
+            raise DirectorValidationError(
+                "Director content is not valid JSON.", server_request_id
+            ) from exc
+
+        try:
+            plan = ProfessionalEditingPlan.model_validate(raw_plan)
+        except Exception as exc:
+            raise DirectorValidationError(
+                f"Director plan failed validation: {exc}", server_request_id
+            ) from exc
+
+        if plan.request_id != expected_request_id:
+            raise DirectorValidationError(
+                f"Director request_id {plan.request_id!r} does not match {expected_request_id!r}.",
+                server_request_id,
+            )
+        if plan.raw_instruction != transcript.text:
+            raise DirectorValidationError(
+                "Director raw_instruction must equal the confirmed transcript.",
+                server_request_id,
+            )
         return plan
 
     @staticmethod
@@ -425,3 +464,60 @@ class MetaEditingDirectorProvider:
                 error_type if isinstance(error_type, str) else None,
             )
         return "unexpected error response", None
+
+
+class LiteMetaEditingDirectorProvider(MetaEditingDirectorProvider):
+    """Contributor-Medium lite-schema variant (LIVE-CALL 003).
+
+    Same safety rails as the base provider (single POST, no retries, echo
+    enforcement, no key/audio logging). Differences: the wire carries the
+    hand-written minimal `LITE_WIRE_SCHEMA` (zero $refs) instead of the full
+    v2 JSON Schema, and the response is parsed as `LitePlan` then converted
+    and fully validated as a v2 `ProfessionalEditingPlan`.
+    """
+
+    provider_name = "meta-muse-spark-director-lite"
+
+    def _wire_schema(self) -> dict[str, Any]:
+        from clipforge_contracts.director_lite import LITE_WIRE_SCHEMA
+
+        return LITE_WIRE_SCHEMA
+
+    def _schema_name(self) -> str:
+        return "ProfessionalEditingPlanLite"
+
+    def _validate_content(
+        self,
+        content: str,
+        expected_request_id: str,
+        transcript: TranscriptResult,
+        server_request_id: str | None = None,
+    ) -> ProfessionalEditingPlan:
+        from clipforge_contracts.director_lite import LitePlan, lite_to_full_plan
+
+        try:
+            raw_lite = json.loads(content)
+        except ValueError as exc:
+            raise DirectorValidationError(
+                "Director content is not valid JSON.", server_request_id
+            ) from exc
+
+        try:
+            lite = LitePlan.model_validate(raw_lite)
+            plan = lite_to_full_plan(lite)
+        except Exception as exc:
+            raise DirectorValidationError(
+                f"Lite plan failed validation: {exc}", server_request_id
+            ) from exc
+
+        if plan.request_id != expected_request_id:
+            raise DirectorValidationError(
+                f"Director request_id {plan.request_id!r} does not match {expected_request_id!r}.",
+                server_request_id,
+            )
+        if plan.raw_instruction != transcript.text:
+            raise DirectorValidationError(
+                "Director raw_instruction must equal the confirmed transcript.",
+                server_request_id,
+            )
+        return plan

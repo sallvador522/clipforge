@@ -9,6 +9,14 @@ from clipforge_contracts.capabilities import (
     executable_capabilities,
     get_capability,
 )
+from clipforge_contracts.director_lite import (
+    LITE_BRIEF,
+    LITE_WIRE_SCHEMA,
+    LiteOperation,
+    LitePlan,
+    lite_capability_summary,
+    lite_to_full_plan,
+)
 from clipforge_contracts.director_plan import (
     ApprovalStatus,
     DirectorOperation,
@@ -75,6 +83,10 @@ __all__ = [
     "InvalidStageTransition",
     "InvalidOperationTransition",
     "KeepSubjectSharpOperation",
+    "LITE_BRIEF",
+    "LITE_WIRE_SCHEMA",
+    "LiteOperation",
+    "LitePlan",
     "MaskFrameEntry",
     "MaskManifest",
     "Operation",
@@ -101,6 +113,8 @@ __all__ = [
     "executable_capabilities",
     "build_decision",
     "get_capability",
+    "lite_capability_summary",
+    "lite_to_full_plan",
     "require_operation_transition",
     "require_transition",
     "stage_from_job_stage",

@@ -353,6 +353,47 @@ def test_server_request_id_absent_without_header():
     assert exc.value.server_request_id is None
 
 
+def test_truncated_200_records_usage_and_request_id():
+    text = "Keep me sharp and blur the background."
+    plan_json = mock_plan_json(text)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "srv-trunc-1"},
+            json={
+                "id": "chatcmpl-trunc",
+                "object": "chat.completion",
+                "model": DEFAULT_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": json.dumps(plan_json)[:40]},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3215, "completion_tokens": 800, "total_tokens": 4015},
+            },
+        )
+
+    instance = provider(
+        handler,
+        model="muse-spark-1.3-contributor",
+        require_contributor=True,
+    )
+    with pytest.raises(DirectorValidationError) as exc:
+        instance.create_plan(transcript(text))
+    assert calls["n"] == 1
+    assert exc.value.server_request_id == "srv-trunc-1"
+    # Billed 200: usage must be captured even though no plan was accepted.
+    assert instance.last_usage is not None
+    assert instance.last_usage.prompt_tokens == 3215
+    assert instance.last_usage.completion_tokens == 800
+    assert instance.last_usage.cost_usd == pytest.approx(0.000482)
+
+
 def test_contributor_mode_requires_exact_model_id():
     with pytest.raises(InvalidModelError):
         provider(lambda r: httpx.Response(500, json={}), model="muse-spark-1.3", require_contributor=True)

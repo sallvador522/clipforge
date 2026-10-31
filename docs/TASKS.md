@@ -81,7 +81,20 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] ADR-012: Contributor-Medium variant approved (`muse-spark-1.3-contributor`, `reasoning_effort: medium`, Contributor rates $0.10/1M in + $0.20/1M out); no `context` parameter exists in the verified contract; canonical env var is `MODEL_API_KEY`.
 - [x] LIVE-CALL 001 — executed exactly 1 POST → HTTP 500 `internal server error`; mapped to `DirectorAPIError`, no retry, no result file. Billed cost under reconciliation (panel is source of truth).
 - [x] LIVE-CALL 002 RETRY 1 (same payload) — executed exactly 1 POST → HTTP 500 again; repeat 500 on identical payload implicates the request (prime suspect: structured-output schema size/shape), not a transient fault. Stopped per approval. See `docs/LIVE_CALL_001_002_REPORT.md`.
-- [ ] Billing reconciliation with panel figures (user to provide) + schema-reduction proposal — blocked on explicit approval. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
+- [x] Billing reconciliation: withdrew the $0.00 claim; `x-request-id` captured; reconciliation table pending user panel figures.
+- [x] ADR-013 + lite contract (`director_lite.py`: 1,948-byte zero-$ref wire schema, abridged brief, essential registry summary, lite→full conversion with full v2 validation) + `LiteMetaEditingDirectorProvider` + guarded `scripts/live_call_003_spark_lite.py` + lite tests.
+- [x] LIVE-CALL 003 — exactly 1 POST → **HTTP 200, `finish_reason: "length"`** at 800-token cap; no plan accepted (truncation rejected), no retry. Schema accepted → full-schema 500 suspect confirmed; remaining blocker is output budget. Billable; local usage lost pre-fix (bounded ≈ ≤ $0.00026). See `docs/LIVE_CALL_003_REPORT.md`.
+- [x] Observability: usage recorded before validation; `DirectorValidationError.server_request_id` from `x-request-id`; script prints structured failure context; 183 tests.
+- [ ] LIVE-CALL 004 proposal: same lite payload with `max_completion_tokens: 1500` (or 1200) — blocked on explicit approval. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
+
+## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
+
+- Instruction: same as 001/002 + benchmark-unit video metadata. No audio bytes, no tools, no web search.
+- Endpoint: `POST https://api.meta.ai/v1/chat/completions`, `muse-spark-1.3-contributor`, `reasoning_effort: medium`, `response_format` `ProfessionalEditingPlanLite` (1,948-byte hand-written schema, 0 `$ref`s), `max_completion_tokens: 800`.
+- Wire: developer 1,987 chars + user 631 chars (2,618 total, ~654 est tokens); full payload 4,899 chars.
+- Result: **HTTP 200, `finish_reason: "length"`** → truncated output rejected; no plan, no EDL, no render. Schema accepted → the full v2 schema (~8.4 KB) is confirmed as the likely 500 cause; the remaining blocker is output budget. No retry.
+- Cost: billable; local usage lost pre-fix. Bounded ≤ ≈ $0.00026, realistic ≈ $0.0002 at Contributor rates.
+- Next (blocked): same lite payload with `max_completion_tokens: 1500` (or 1200) — one approved retry. Plain-JSON control no longer necessary.
 
 ## Milestone 6 — Live Integration Gate (blocked)
 - [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
