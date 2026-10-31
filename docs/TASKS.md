@@ -52,6 +52,15 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Fixes: grid-row height (timeline visibility), transport wrapping, viewer flex, ruler label clipping, mobile timeline header, revoked-blob request error.
 - Limitation confirmed: mock masks are synthetic ellipses and do not track the real person (ADR-007); real subject cutout requires live SAM at Milestone 6.
 
+## Milestone 6A — Real Voice Transcription (no live calls yet)
+- [x] Official docs verified (speech-to-text, transcribe reference, pricing/rate limits). Confirmed model `muse-voice-transcribe-1.0`, endpoint `POST https://api.meta.ai/v1/asr/transcribe`, multipart `request` JSON + `audio` WAV, `languageBias: ["Portuguese"]`, JSON response `{sessionId, transcript, audioDurationMs, turns}`, $0.18/audio-hour (whole seconds), 32 MB/10 min caps.
+- [x] `MetaVoiceTranscriptionProvider` with httpx, Bearer auth, exact multipart contract, normalization, timeout/429/API-error mapping, no retries, no key/audio logging.
+- [x] `POST /api/transcribe`: upload validation, ffprobe, FFmpeg → mono 16-bit PCM WAV 24 kHz, temp cleanup, mock isolation (fixture required; audio never interpreted).
+- [x] Scoped selection: `CLIPFORGE_TRANSCRIBE_MODE=live` + `MODEL_API_KEY`; other providers remain mock; missing key fails before any request.
+- [x] Frontend: real MediaRecorder audio uploaded, upload/transcribe states, editable transcript review, explicit confirm, failure + explicit retry, typed alternative; mock commands hidden in live mode, MOCK badge retained in mock mode.
+- [x] Tests (18 new): multipart construction, language bias, normalization, invalid audio, missing credentials, timeout, 429, API errors, mock isolation, provider selection, single-request/no-retry, confirmed-transcript planning.
+- [ ] First live transcription call — **blocked on explicit user approval** after reviewing the cost estimate.
+
 ## Milestone 6 — Live Integration Gate (blocked)
 - [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
 - [ ] Implement live adapters behind existing interfaces; request logging, idempotency, budget tracking; no automatic billable retries.

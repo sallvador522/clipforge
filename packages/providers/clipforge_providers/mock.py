@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
@@ -71,6 +72,12 @@ class MockTranscriptionProvider:
             ) from exc
         return TranscriptResult(
             text=text, language="pt-BR", confidence=0.99, provider_name=self.provider_name, is_mock=True
+        )
+
+    def transcribe_audio(self, audio_path: str | Path, *, language_bias: Sequence[str] = ("Portuguese",)) -> TranscriptResult:
+        raise ValueError(
+            "Mock transcription cannot interpret audio. Select a mock fixture explicitly "
+            "(the UI labels it as simulated); live transcription requires CLIPFORGE_TRANSCRIBE_MODE=live."
         )
 
 

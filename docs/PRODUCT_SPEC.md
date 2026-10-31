@@ -40,7 +40,7 @@ The product is a single editing workspace, not a dashboard: import a clip into t
 - Backend: Python, FastAPI, Pydantic.
 - Video: Python worker with FFmpeg (decode, normalize, audio preservation, encode, export) + OpenCV (frame processing, masks, compositing). MediaBunny is excluded (ADR-003).
 - Infrastructure: local storage, persistent worker process for rendering.
-- AI (provider adapters, mock-first): speech transcription, reasoning/planning, SAM segmentation, image generation.
+- AI (provider adapters, mock-first): speech transcription (live-capable, ADR-008), reasoning/planning, SAM segmentation, image generation (all three still mocked).
 
 ## Out of Scope
 

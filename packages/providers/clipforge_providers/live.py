@@ -8,6 +8,7 @@ explicit user approval (ADR-004 live integration gate, Milestone 6).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence
 
 from clipforge_contracts import BackgroundResult, EditingPlan, SegmentationResult, TranscriptResult
 
@@ -24,6 +25,9 @@ _MESSAGE = (
 
 class LiveTranscriptionProvider:
     def transcribe(self, audio_fixture_id: str) -> TranscriptResult:
+        raise LiveProviderNotImplementedError(_MESSAGE)
+
+    def transcribe_audio(self, audio_path: str | Path, *, language_bias: Sequence[str] = ("Portuguese",)) -> TranscriptResult:
         raise LiveProviderNotImplementedError(_MESSAGE)
 
 

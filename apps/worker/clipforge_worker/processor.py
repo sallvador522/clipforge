@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from clipforge_contracts import EditingIntent
+from clipforge_contracts import EditingIntent, TranscriptResult
 from clipforge_jobs import JobError, JobResult, JobStatus, JobStore
 from clipforge_providers import ProviderBundle
 from clipforge_worker.masks import MaskLoader
@@ -32,12 +32,23 @@ class JobProcessor:
         """Process one job to completion or failure. Returns the final status value."""
         record = self.store.get(job_id)
         try:
-            if not record.audio_fixture_id:
+            if not record.audio_fixture_id and not record.confirmed_transcript:
                 raise ValueError("Job has no voice instruction attached.")
-            self.store.update(job_id, stage="transcribing")
-            transcript = self.providers.transcription.transcribe(record.audio_fixture_id)
+            if record.confirmed_transcript:
+                # The user reviewed and confirmed this text; the planner consumes it
+                # directly. No transcription call is repeated here (no duplicate billing).
+                self.store.update(job_id, stage="planning")
+                transcript = TranscriptResult(
+                    text=record.confirmed_transcript,
+                    language="pt-BR",
+                    provider_name="user-confirmed",
+                    is_mock=record.transcript_is_mock,
+                    session_id=record.transcription_session_id,
+                )
+            else:
+                self.store.update(job_id, stage="transcribing")
+                transcript = self.providers.transcription.transcribe(record.audio_fixture_id or "")
 
-            self.store.update(job_id, stage="planning")
             plan = self.providers.planner.create_plan(transcript)
 
             if plan.intent is EditingIntent.CLARIFICATION_NEEDED:

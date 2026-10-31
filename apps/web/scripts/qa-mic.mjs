@@ -86,6 +86,17 @@ if (state === "recording") {
     return { advancedTo: t, paused: el.paused };
   });
   result.steps.push({ step: "playback", playback });
+
+  // Mock transcription path: the real recording is uploaded to the local API,
+  // converted to WAV, and the explicitly selected mock command is returned.
+  await page.getByRole("button", { name: /Simulate transcription \(mock\)/ }).click();
+  await page.waitForSelector("text=RECOGNISED INSTRUCTION — REVIEW & CONFIRM", { timeout: 30_000 });
+  result.steps.push({
+    step: "mock_transcription_after_real_recording",
+    provider: await page.evaluate(() => (document.body.innerText.match(/mock-transcription[^\n]*/) || [])[0] ?? null),
+    draft: await page.locator('textarea[aria-label="Transcript to confirm"]').inputValue(),
+  });
+  await page.screenshot({ path: join(outDir, "microphone-transcribed.png") });
   await page.screenshot({ path: join(outDir, "microphone-recorded.png") });
 }
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Sequence, runtime_checkable
 
 from clipforge_contracts import BackgroundResult, EditingPlan, SegmentationResult, TranscriptResult
 
@@ -11,6 +11,8 @@ from clipforge_contracts import BackgroundResult, EditingPlan, SegmentationResul
 @runtime_checkable
 class TranscriptionProvider(Protocol):
     def transcribe(self, audio_fixture_id: str) -> TranscriptResult: ...
+
+    def transcribe_audio(self, audio_path: str | Path, *, language_bias: Sequence[str] = ...) -> TranscriptResult: ...
 
 
 @runtime_checkable

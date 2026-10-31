@@ -65,6 +65,9 @@ class JobRecord(BaseModel):
     source_relative_path: str  # relative to the storage root, forward slashes
     source_info: SourceInfo
     audio_fixture_id: str | None = None
+    confirmed_transcript: str | None = None
+    transcript_is_mock: bool = False
+    transcription_session_id: str | None = None
     result: JobResult | None = None
     error: JobError | None = None
     attempts: int = 0

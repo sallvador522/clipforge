@@ -15,18 +15,34 @@ from clipforge_providers.mock import (
     MockSegmentationProvider,
     MockTranscriptionProvider,
 )
+from clipforge_providers.transcription_meta import (
+    InvalidAudioError,
+    MetaVoiceTranscriptionProvider,
+    MissingCredentialsError,
+    TranscriptionAPIError,
+    TranscriptionError,
+    TranscriptionRateLimitedError,
+    TranscriptionTimeoutError,
+)
 
 __all__ = [
     "BackgroundGenerationProvider",
     "EditingPlannerProvider",
     "FixtureNotFoundError",
+    "InvalidAudioError",
     "LiveProviderNotImplementedError",
+    "MetaVoiceTranscriptionProvider",
+    "MissingCredentialsError",
     "MockBackgroundGenerationProvider",
     "MockEditingPlannerProvider",
     "MockSegmentationProvider",
     "MockTranscriptionProvider",
     "ProviderBundle",
     "SegmentationProvider",
+    "TranscriptionAPIError",
+    "TranscriptionError",
     "TranscriptionProvider",
+    "TranscriptionRateLimitedError",
+    "TranscriptionTimeoutError",
     "get_providers",
 ]

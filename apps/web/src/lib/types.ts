@@ -31,9 +31,12 @@ export interface JobResponse {
 export interface TranscriptData {
   text: string;
   language: string;
-  confidence: number;
+  confidence: number | null;
   provider_name: string;
   is_mock: boolean;
+  session_id: string | null;
+  audio_duration_ms: number | null;
+  transcribe_mode?: "mock" | "live";
 }
 
 export interface PlanData {

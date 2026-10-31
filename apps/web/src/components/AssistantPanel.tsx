@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { VOICE_FIXTURES, matchFixtureByText } from "@/lib/fixtures";
-import type { JobResponse, JobResultData } from "@/lib/types";
+import { VOICE_FIXTURES } from "@/lib/fixtures";
+import type { JobResponse, JobResultData, TranscriptData } from "@/lib/types";
 import { Button } from "./ui/button";
 
 type RecorderState = "idle" | "recording" | "recorded" | "unsupported" | "denied";
+export type TranscribeStatus = "idle" | "uploading" | "transcribing" | "done" | "error";
+type TranscriptSource = "live" | "mock-audio" | "mock-fixture" | "typed" | null;
 
 const STEPS = [
   { key: "transcribing", label: "Transcribe voice" },
@@ -24,21 +26,40 @@ const STAGE_INDEX: Record<string, number> = {
 interface Props {
   job: JobResponse | null;
   result: JobResultData | null;
+  liveAvailable: boolean;
   fixtureId: string;
   onSelectFixture: (id: string) => void;
-  canSubmit: boolean;
-  submitting: boolean;
+  recorded: boolean;
+  recordingName: string | null;
+  onRecordingReady: (blob: Blob, filename: string) => void;
+  onRecordingCleared: () => void;
+  transcribeStatus: TranscribeStatus;
+  transcribeProgress: number | null;
+  transcriptionError: string | null;
+  transcript: TranscriptData | null;
+  transcriptSource: TranscriptSource;
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onTranscribe: () => void;
+  onUseMockTranscript: () => void;
+  onTypedInstruction: (text: string) => void;
+  canConfirm: boolean;
+  confirming: boolean;
   submitted: boolean;
-  onSubmit: () => void;
+  onConfirmTranscript: () => void;
   onRetry: () => void;
 }
 
-export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSubmit, submitting, submitted, onSubmit, onRetry }: Props) {
+export function AssistantPanel({
+  job, result, liveAvailable, fixtureId, onSelectFixture, recorded, recordingName,
+  onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress, transcriptionError,
+  transcript, transcriptSource, draft, onDraftChange, onTranscribe, onUseMockTranscript,
+  onTypedInstruction, canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
+}: Props) {
   const [recState, setRecState] = useState<RecorderState>("idle");
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [micFallback, setMicFallback] = useState(false);
   const [typedText, setTypedText] = useState("");
   const [typeNotice, setTypeNotice] = useState<string | null>(null);
 
@@ -59,7 +80,6 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Real input level drives the microphone ring — never a fake waveform.
       const ctx = new AudioContext();
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
@@ -82,9 +102,12 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
         setLevel(0);
         stream.getTracks().forEach((t) => t.stop());
         void ctx.close();
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const type = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type });
         setAudioUrl(URL.createObjectURL(blob));
         setRecState("recorded");
+        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+        onRecordingReady(blob, `instruction.${ext}`);
       };
       recorderRef.current = recorder;
       setSeconds(0);
@@ -101,36 +124,31 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
     recorderRef.current?.stop();
   }
 
-  function applyTypedInstruction() {
-    const match = matchFixtureByText(typedText);
-    if (!match) {
-      setTypeNotice("The mock editor doesn't recognise that phrasing yet. Try “blur the background”, “keep me sharp”, or “replace the background with a studio”.");
-      return;
-    }
+  function applyTyped() {
+    if (!typedText.trim()) return;
     setTypeNotice(null);
-    onSelectFixture(match.id);
-    setMicFallback(true); // typed instruction is the accessible alternative to the microphone
+    onTypedInstruction(typedText.trim());
   }
 
-  const selected = VOICE_FIXTURES.find((f) => f.id === fixtureId);
-  const readyToSubmit = (recState === "recorded" || micFallback) && Boolean(selected);
-  const transcript = result?.transcript ?? job?.result?.transcript ?? null;
-  const plan = result?.plan ?? job?.result?.plan ?? null;
+  const busy = transcribeStatus === "uploading" || transcribeStatus === "transcribing";
   const stageIndex = job ? STAGE_INDEX[job.stage] ?? (job.status === "queued" ? -1 : 0) : -1;
+  const plan = result?.plan ?? job?.result?.plan ?? null;
 
   return (
     <section aria-label="AI editing assistant" className="flex min-h-0 flex-col bg-surface lg:h-full">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="font-mono text-[11px] font-medium tracking-wider text-muted">AI ASSISTANT</h2>
-        <span className="rounded border border-accent/50 px-1.5 py-0.5 font-mono text-[10px] text-accent">MOCK MODE</span>
+        <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${liveAvailable ? "border-success/60 text-success" : "border-accent/50 text-accent"}`}>
+          {liveAvailable ? "LIVE TRANSCRIPTION" : "MOCK TRANSCRIPTION"}
+        </span>
       </div>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
         <div>
           <p className="text-[15px] font-semibold leading-snug">Tell ClipForge what to change.</p>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            Speak an instruction, review what was recognised, then confirm. Transcription is simulated in mock mode — the
-            transcript returned by the backend appears below after processing.
+            Record your instruction, review the transcript, then confirm. Only the confirmed sentence reaches the editing
+            planner.
           </p>
         </div>
 
@@ -169,7 +187,9 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
                 <div className="h-full bg-danger transition-[width] duration-100" style={{ width: `${Math.round(level * 100)}%` }} />
               </div>
             )}
-            <p className="mt-1 font-mono text-[11px] text-muted">The ring reacts to your actual voice level.</p>
+            <p className="mt-1 font-mono text-[11px] text-muted">
+              {recorded && recordingName ? `Audio captured: ${recordingName}` : "The ring reacts to your actual voice level."}
+            </p>
           </div>
         </div>
 
@@ -183,10 +203,111 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
           />
         )}
 
-        {(recState === "unsupported" || recState === "denied") && !micFallback && (
-          <button type="button" className="text-sm text-accent underline" onClick={() => setMicFallback(true)}>
-            Continue without a microphone
-          </button>
+        {recState === "recorded" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={onTranscribe} disabled={busy || submitted}>
+              {transcribeStatus === "uploading"
+                ? `Uploading audio… ${transcribeProgress ?? 0}%`
+                : transcribeStatus === "transcribing"
+                  ? "Transcribing…"
+                  : liveAvailable
+                    ? "Transcribe recording"
+                    : "Simulate transcription (mock)"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setAudioUrl(null);
+                setRecState("idle");
+                onRecordingCleared();
+              }}
+              disabled={busy || submitted}
+            >
+              Discard recording
+            </Button>
+          </div>
+        )}
+
+        {transcribeStatus === "uploading" && transcribeProgress !== null && (
+          <div>
+            <div className="h-1 overflow-hidden rounded bg-border">
+              <div className="h-full bg-accent transition-[width]" style={{ width: `${transcribeProgress}%` }} />
+            </div>
+            <p className="mt-1 font-mono text-[11px] text-muted">Sending audio to the local API… {transcribeProgress}%</p>
+          </div>
+        )}
+
+        {transcriptionError && (
+          <div className="rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
+            <p className="text-[13px] font-medium text-danger">Transcription failed</p>
+            <p className="mt-1 text-[13px]">{transcriptionError}</p>
+            <div className="mt-2 flex gap-2">
+              {recorded && (
+                <Button variant="danger" onClick={onTranscribe} disabled={busy}>
+                  Retry transcription
+                </Button>
+              )}
+              <p className="self-center font-mono text-[11px] text-muted">No retry happens automatically.</p>
+            </div>
+          </div>
+        )}
+
+        {!liveAvailable && (
+          <div className="space-y-2">
+            <p className="font-mono text-[11px] text-muted">
+              MOCK TRANSCRIPTION — simulated, never audio recognition. Pick the command you spoke:
+            </p>
+            <div className="grid gap-1.5" role="radiogroup" aria-label="Simulated voice command">
+              {VOICE_FIXTURES.map((fixture) => (
+                <button
+                  key={fixture.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={fixture.id === fixtureId}
+                  disabled={submitted}
+                  onClick={() => onSelectFixture(fixture.id)}
+                  className={`rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                    fixture.id === fixtureId ? "border-accent bg-raised" : "border-border hover:border-muted"
+                  }`}
+                >
+                  <span className="block text-[13px] font-medium">{fixture.label}</span>
+                  <span className="block font-mono text-[11px] text-muted">“{fixture.transcript}”</span>
+                </button>
+              ))}
+            </div>
+            <Button variant="secondary" onClick={onUseMockTranscript} disabled={submitted} className="w-full">
+              Use selected command as transcript (no audio sent)
+            </Button>
+          </div>
+        )}
+
+        {(transcript || draft) && (
+          <div className="space-y-2 border-t border-border pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-mono text-[11px] text-muted">RECOGNISED INSTRUCTION — REVIEW & CONFIRM</p>
+              {transcript?.is_mock && <span className="rounded border border-accent/50 px-1.5 py-0.5 font-mono text-[10px] text-accent">MOCK</span>}
+              {transcriptSource === "typed" && <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted">TYPED</span>}
+            </div>
+            <textarea
+              value={draft}
+              onChange={(e) => onDraftChange(e.target.value)}
+              rows={3}
+              maxLength={500}
+              disabled={submitted}
+              aria-label="Transcript to confirm"
+              className="w-full resize-none rounded-md border border-border bg-raised p-2.5 text-sm outline-none focus:border-accent disabled:opacity-70"
+            />
+            <p className="font-mono text-[11px] text-muted">
+              {transcript?.provider_name ?? (transcriptSource === "typed" ? "typed by you" : "pending")}
+              {transcript?.session_id ? ` · session ${transcript.session_id}` : ""}
+              {transcript?.audio_duration_ms ? ` · ${transcript.audio_duration_ms} ms audio` : ""}
+              {transcript?.confidence != null ? ` · confidence ${transcript.confidence.toFixed(2)}` : ""}
+            </p>
+            <Button onClick={onConfirmTranscript} disabled={!canConfirm || confirming || submitted || !draft.trim()} className="w-full">
+              {submitted ? "Editing in progress…" : confirming ? "Confirming…" : "Confirm transcript & start editing"}
+            </Button>
+            {!job && <p className="font-mono text-[11px] text-muted">Upload a clip first — the job is created in the Media panel.</p>}
+          </div>
         )}
 
         <div className="space-y-2">
@@ -200,53 +321,17 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
               autoComplete="off"
               value={typedText}
               onChange={(e) => setTypedText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applyTypedInstruction()}
+              onKeyDown={(e) => e.key === "Enter" && applyTyped()}
               placeholder="e.g. blur the background"
               disabled={submitted}
               className="min-w-0 flex-1 rounded-md border border-border bg-raised px-2.5 py-2 text-sm outline-none placeholder:text-muted/60 focus:border-accent"
             />
-            <Button variant="secondary" onClick={applyTypedInstruction} disabled={submitted || !typedText.trim()}>
+            <Button variant="secondary" onClick={applyTyped} disabled={submitted || !typedText.trim()}>
               Use
             </Button>
           </div>
-          {typeNotice && (
-            <p className="text-[13px] text-accent" role="status">{typeNotice}</p>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          <p className="font-mono text-[11px] text-muted">CONFIRM THE RECOGNISED COMMAND (SIMULATED)</p>
-          <div className="grid gap-1.5" role="radiogroup" aria-label="Recognised voice command">
-            {VOICE_FIXTURES.map((fixture) => (
-              <button
-                key={fixture.id}
-                type="button"
-                role="radio"
-                aria-checked={fixture.id === fixtureId}
-                disabled={submitted}
-                onClick={() => onSelectFixture(fixture.id)}
-                className={`rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
-                  fixture.id === fixtureId ? "border-accent bg-raised" : "border-border hover:border-muted"
-                }`}
-              >
-                <span className="block text-[13px] font-medium">{fixture.label}</span>
-                <span className="block font-mono text-[11px] text-muted">“{fixture.transcript}”</span>
-              </button>
-            ))}
-          </div>
-          <Button onClick={onSubmit} disabled={!canSubmit || !readyToSubmit || submitting || submitted} className="w-full">
-            {job?.status === "completed"
-              ? "Editing complete — preview & export"
-              : submitted
-                ? "Editing in progress…"
-                : submitting
-                  ? "Submitting…"
-                  : "Confirm & start editing"}
-          </Button>
-          {!job && <p className="font-mono text-[11px] text-muted">Upload a clip first — the job is created in the Media panel.</p>}
-          {job && !readyToSubmit && !submitted && (
-            <p className="font-mono text-[11px] text-muted">Record (or type) an instruction, with a command confirmed, to enable editing.</p>
-          )}
+          {typeNotice && <p className="text-[13px] text-accent" role="status">{typeNotice}</p>}
+          <p className="font-mono text-[11px] text-muted">Typed text is used verbatim; it is not transcription.</p>
         </div>
 
         <AnimatePresence>
@@ -301,10 +386,10 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
                 </div>
               )}
 
-              {transcript && (
+              {result?.transcript && (
                 <div className="mt-3 border-t border-border pt-3">
-                  <p className="font-mono text-[11px] text-muted">TRANSCRIPTION {transcript.is_mock ? "(MOCK)" : ""}</p>
-                  <p className="mt-1 text-sm">“{transcript.text}”</p>
+                  <p className="font-mono text-[11px] text-muted">PLANNED FROM {result.transcript.is_mock ? "MOCK TRANSCRIPT" : "CONFIRMED TRANSCRIPT"}</p>
+                  <p className="mt-1 text-sm">“{result.transcript.text}”</p>
                   {plan && (
                     <p className="mt-1 font-mono text-[11px] text-muted">
                       plan: {plan.intent} · {plan.operations.map((o) => o.type).join(", ") || "no operations"}

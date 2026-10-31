@@ -33,9 +33,10 @@ await page.waitForSelector("text=SOURCE — selected");
 await page.getByRole("button", { name: "Start voice recording" }).click();
 await page.waitForSelector("text=Microphone permission denied", { timeout: 10_000 });
 report.deniedStateShown = true;
-report.fallbackOffered = await page.getByRole("button", { name: /Continue without a microphone/ }).isVisible();
+report.mockTranscriptAlternativeVisible = await page
+  .getByRole("button", { name: /Use selected command as transcript/ })
+  .isVisible();
 await page.screenshot({ path: join(outDir, "mic-permission-denied.png") });
-await page.getByRole("button", { name: /Continue without a microphone/ }).click();
 
 // Playback + playhead sync before any job exists.
 await page.getByRole("button", { name: "Play", exact: true }).click();
@@ -75,7 +76,8 @@ page.on("request", (r) => {
 await page.getByRole("button", { name: "Upload & create job" }).click();
 await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
 await page.getByRole("radio", { name: /Blur the background/ }).click();
-await page.getByRole("button", { name: /Confirm & start editing/ }).click();
+await page.getByRole("button", { name: /Use selected command as transcript/ }).click();
+await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
 await page.waitForSelector("text=Status: completed", { timeout: 90_000 });
 const requestsAtCompletion = pollRequests.length;
 await page.waitForTimeout(5000);

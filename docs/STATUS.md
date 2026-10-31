@@ -3,8 +3,8 @@
 ## Current State
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- Milestones 0–5.2: complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; professional editor redesign; local QA & editor validation).
-- **Next milestone:** Milestone 6 — Live Integration Gate (blocked until Meta docs verified + explicit user approval). See TASKS.md.
+- **Milestones 0–6A:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; **real transcription provider + audio pipeline, live call not yet made**).
+- **Next milestone:** first controlled live transcription test — blocked on explicit user approval of the cost estimate.
 
 ## What Exists
 
@@ -12,7 +12,20 @@
 - Skills: 8 project skills (≤10 limit) — 5 custom in `.opencode/skills/`, plus `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier installed via `npx motion-ai`; MCP configured; no Motion+ sign-in or purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **52 backend tests passing**; frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **70 backend tests passing**; frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+
+## Transcription (Milestone 6A)
+
+- Provider: `MetaVoiceTranscriptionProvider` (`packages/providers/clipforge_providers/transcription_meta.py`), interface `transcription.transcribe_audio(path)`. Verified contract from official docs (model `muse-voice-transcribe-1.0`, `POST https://api.meta.ai/v1/asr/transcribe`, Bearer, multipart `request` JSON + `audio` WAV, `mode=PUSH_TO_TALK`, `languageBias=["Portuguese"]`, response `{sessionId, transcript, audioDurationMs, turns}`).
+- Audio pipeline: browser MediaRecorder → `POST /api/transcribe` → extension/size/stream/duration validation → FFmpeg mono 16-bit PCM WAV 24 kHz → ffprobe verification → provider called **once** → normalized transcript → user reviews/edits → `POST /api/jobs/{id}/voice` with confirmed text → planner. Temp audio deleted after each request.
+- Mode selection: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) / `live` + `MODEL_API_KEY`. Missing key fails before any request. Other providers stay mock. No silent fallback.
+- Safety: no automatic retries, timeouts mapped to 504, 429 mapped to `transcription_rate_limited`, API errors to 502; `sessionId` logged (never key/audio); mock never interprets audio (requires explicit fixture, labelled MOCK).
+- Tests: 18 new (multipart/language bias/normalization, invalid audio, missing key, timeout, 429, API error, mock network isolation, provider selection, exactly-one-request, confirmed-transcript planning).
+- **No live call has been made.** Cost of the proposed first test (5 s recording): 5 whole seconds × $0.18 / 3600 s ≈ **$0.00025** (0.025 US cents).
+
+### Live UI readiness (no calls)
+
+Verified with a dummy key and `TRANSCRIBE_MODE=live`: the studio shows the LIVE badge, hides mock commands, and does not call Meta on load. The transcription button is only enabled after a recording exists.
 
 ## Browser Verification (Milestone 5.1 redesign)
 

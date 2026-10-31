@@ -11,9 +11,11 @@ class TranscriptResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1)
     language: str = "pt-BR"
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     provider_name: str
     is_mock: bool
+    session_id: str | None = None
+    audio_duration_ms: int | None = Field(default=None, ge=0)
 
 
 class SegmentationResult(BaseModel):

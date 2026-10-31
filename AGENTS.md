@@ -4,9 +4,9 @@ ClipForge is a voice-first AI video editing agent: upload a video, describe the 
 
 ## Non-Negotiable Rules
 
-1. **Mock-first (ADR-004).** `CLIPFORGE_AI_MODE=mock` is the default and only active mode. No external AI API calls during development, tests, debugging, or demos. No Meta credentials are requested, required, or stored in this phase. Mock mode must never silently fall back to live inference.
+1. **Mock-first (ADR-004).** `CLIPFORGE_AI_MODE=mock` is the default. Transcription may run live only when explicitly enabled with `CLIPFORGE_TRANSCRIBE_MODE=live` and a server-side `MODEL_API_KEY` (ADR-008); planning, segmentation and image generation remain mocked. No live request may be made without explicit user approval of a cost estimate. No other external AI calls during development.
 2. **Mocks simulate AI only, never rendering.** Video rendering is real FFmpeg + OpenCV (ADR-002). No fake output videos, no placeholder downloads.
-3. **No invented integrations.** Meta request/response schemas are unverified. Do not hardcode undocumented endpoints, fields, or response shapes. Live providers stay as explicit placeholders until official documentation is verified and the user approves a controlled test.
+3. **No invented integrations.** Use only verified official schemas (transcription is verified, see ADR-008). Any unverified provider stays an explicit placeholder until its official documentation is verified and the user approves a controlled test.
 4. **Server-side secrets only.** Never expose API credentials to the frontend. No secrets in frontend bundles, no hardcoded credentials anywhere.
 5. **Budget protection.** Remaining Meta API budget is ~$30. No automatic retries that could cause billable requests. Live execution requires explicit user approval.
 6. **MediaBunny is excluded from the MVP (ADR-003).** Do not install MediaBunny or `@mediabunny/server`.

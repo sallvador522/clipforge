@@ -12,12 +12,17 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from clipforge_api.media import UploadValidationError, probe_video
+from clipforge_api.transcribe import (
+    AudioValidationError,
+    ensure_ffmpeg_available,
+    transcribe_upload,
+)
 from clipforge_jobs import JobNotFoundError, JobRecord, JobStore
 from clipforge_providers import ProviderBundle, get_providers
 
@@ -29,7 +34,15 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # generous local cap; MVP media limits enf
 
 class VoiceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    audio_fixture_id: str = Field(min_length=1)
+    audio_fixture_id: str | None = Field(default=None, min_length=1)
+    transcript: str | None = Field(default=None, min_length=1, max_length=500)
+    transcription_session_id: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "VoiceRequest":
+        if bool(self.audio_fixture_id) == bool(self.transcript):
+            raise ValueError("Provide exactly one of audio_fixture_id (mock) or transcript (reviewed text).")
+        return self
 
 
 class JobResponse(BaseModel):
@@ -94,9 +107,19 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
     async def _invalid_upload(_: Request, exc: UploadValidationError) -> JSONResponse:
         return _error(exc.status_code, exc.code, str(exc))
 
+    @app.exception_handler(AudioValidationError)
+    async def _invalid_audio(_: Request, exc: AudioValidationError) -> JSONResponse:
+        return _error(exc.status_code, exc.code, str(exc))
+
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok", "ai_mode": bundle.mode, "storage_root": str(root)}
+        return {
+            "status": "ok",
+            "ai_mode": bundle.mode,
+            "transcribe_mode": bundle.transcription_mode,
+            "live_transcription_available": bundle.transcription_mode == "live",
+            "storage_root": str(root),
+        }
 
     @app.post("/api/uploads", status_code=201, response_model=None)
     async def upload(file: UploadFile = File(...)) -> JobResponse | JSONResponse:
@@ -141,9 +164,37 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         if record.status.value != "queued" or record.ready:
             return _error(409, "job_not_accepting_voice",
                           f"Job {job_id} is {record.status.value} (stage={record.stage}) and cannot accept voice input.")
-        record = store.update(job_id, audio_fixture_id=body.audio_fixture_id, ready=True, stage="queued")
-        logger.info("voice_attached job_id=%s fixture=%s", job_id, body.audio_fixture_id)
+        if body.transcript:
+            record = store.update(
+                job_id,
+                confirmed_transcript=body.transcript.strip(),
+                transcript_is_mock=bundle.transcription_mode == "mock",
+                transcription_session_id=body.transcription_session_id,
+                ready=True,
+                stage="queued",
+            )
+            logger.info("transcript_confirmed job_id=%s chars=%d", job_id, len(body.transcript.strip()))
+        else:
+            record = store.update(job_id, audio_fixture_id=body.audio_fixture_id, ready=True, stage="queued")
+            logger.info("voice_attached job_id=%s fixture=%s", job_id, body.audio_fixture_id)
         return _to_response(record)
+
+    @app.post("/api/transcribe", response_model=None)
+    async def transcribe(file: UploadFile = File(...), mock_fixture_id: str | None = Form(default=None)):
+        """One recording in, one transcript out. No retries, no paid call in mock mode."""
+        ensure_ffmpeg_available()
+        upload_bytes = await file.read()
+        result, mode = transcribe_upload(
+            upload_bytes,
+            file.filename or "",
+            providers=bundle,
+            mock_fixture_id=mock_fixture_id,
+        )
+        logger.info(
+            "transcribe_completed mode=%s provider=%s session=%s",
+            mode, result.provider_name, result.session_id or "n/a",
+        )
+        return {**result.model_dump(), "transcribe_mode": mode}
 
     @app.get("/api/jobs/{job_id}")
     async def job_status(job_id: str) -> JobResponse:

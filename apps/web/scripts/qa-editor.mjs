@@ -73,16 +73,13 @@ async function runFlow(page, { fixture, label, screenshotBase, expectBackground 
   await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
 
   await page.getByRole("radio", { name: fixture }).click();
-  // No microphone permission in headless QA: use the labelled fallback so the
-  // confirm action reflects the real "permission denied" UX.
-  await page.getByRole("button", { name: "Start voice recording" }).click();
-  await page.getByRole("button", { name: /Continue without a microphone/ }).click({ timeout: 10_000 });
-  await page.getByRole("button", { name: /Confirm & start editing/ }).click();
+  await page.getByRole("button", { name: /Use selected command as transcript/ }).click();
+  await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
   await page.waitForSelector("text=Status: completed", { timeout: 90_000 });
   await page.waitForTimeout(800);
 
   const facts = await page.evaluate(() => ({
-    transcript: (document.body.innerText.match(/TRANSCRIPTION \(MOCK\)\s*\n([^\n]+)/) || [])[1] ?? null,
+    transcript: (document.body.innerText.match(/PLANNED FROM [A-Z ]*TRANSCRIPT\s*\n([^\n]+)/) || [])[1] ?? null,
     plan: (document.body.innerText.match(/plan: [^\n]+/) || [])[0] ?? null,
     render: (document.body.innerText.match(/render: [^\n]+/) || [])[0] ?? null,
     thumbnails: document.querySelectorAll('section[aria-label="Timeline"] img').length,

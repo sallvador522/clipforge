@@ -5,6 +5,7 @@ import { Button } from "./ui/button";
 interface Props {
   projectName: string;
   aiMode: string | null;
+  liveTranscription: boolean;
   apiError: string | null;
   resolution: string | null;
   durationLabel: string | null;
@@ -16,7 +17,7 @@ interface Props {
 }
 
 export function TopBar({
-  projectName, aiMode, apiError, resolution, durationLabel, jobStatus, canExport, exporting, onExport, exportError,
+  projectName, aiMode, liveTranscription, apiError, resolution, durationLabel, jobStatus, canExport, exporting, onExport, exportError,
 }: Props) {
   return (
     <header className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-surface px-4">
@@ -41,6 +42,7 @@ export function TopBar({
       <div className="flex items-center gap-4">
         <span className="hidden font-mono text-[11px] text-muted lg:inline">
           {resolution ?? "—"} {durationLabel ? `· ${durationLabel}` : ""} · AI {aiMode ?? "…"}
+          {liveTranscription ? " · ASR live" : " · ASR mock"}
         </span>
         <div className="relative">
           <Button onClick={onExport} disabled={!canExport || exporting} className="h-8 shrink-0 whitespace-nowrap px-3.5 text-[13px]">

@@ -23,16 +23,24 @@ FastAPI requests never block on rendering. Uploads create jobs; the persistent w
 | Providers | `packages/providers/` | Typed provider interfaces, deterministic mocks, live placeholders |
 | Jobs | `packages/jobs/` | Shared `JobRecord` state machine + atomic file-based `JobStore` used by API and worker |
 
-## Provider Architecture (ADR-004)
+## Provider Architecture (ADR-004, ADR-008)
 
-Four typed interfaces, each with a deterministic mock and an unimplemented live placeholder, all sharing normalized internal contracts from `packages/contracts`:
+Four typed interfaces, each with a deterministic mock and shared normalized internal contracts from `packages/contracts`:
 
-- `TranscriptionProvider` — voice audio fixture → normalized transcript.
-- `EditingPlannerProvider` — transcript → validated `EditingPlan` (deterministic mapping, no LLM in mock mode).
+- `TranscriptionProvider` — voice audio → normalized transcript. **Live-capable** via `MetaVoiceTranscriptionProvider` (Muse Voice Transcribe). `transcribe(fixture_id)` remains the mock fixture path; `transcribe_audio(path)` is the real path.
+- `EditingPlannerProvider` — transcript → validated `EditingPlan` (deterministic mapping; no LLM).
 - `SegmentationProvider` — video reference → normalized segmentation result backed by real local mask data (ADR-005).
 - `BackgroundGenerationProvider` — prompt → real local background image asset + simulated generation metadata.
 
-Mode selection: `CLIPFORGE_AI_MODE=mock` (default). The factory in `packages/providers/clipforge_providers/factory.py` returns mocks in mock mode, raises an explicit error for `live` (live adapters are placeholders until documentation is verified), and never silently falls back. The frontend never talks to a provider directly and never sees credentials.
+Mode selection: `CLIPFORGE_AI_MODE=mock` is the default; `live` there is still rejected. Transcription can be enabled in isolation with `CLIPFORGE_TRANSCRIBE_MODE=live` + `MODEL_API_KEY`; every other provider remains the mock. There is no silent fallback and no automatic live activation. The frontend never talks to a provider directly and never sees credentials.
+
+## Voice Pipeline (Milestone 6A)
+
+1. Browser records with MediaRecorder and keeps the audio locally until the user clicks Transcribe.
+2. `POST /api/transcribe` validates the upload, converts via FFmpeg to mono 16-bit PCM WAV at 24 kHz, verifies the WAV with ffprobe, and calls the provider **once** (temp files deleted afterwards).
+3. Live: the Meta adapter posts the documented multipart request and normalizes `{sessionId, transcript, audioDurationMs, turns}`; no confidence is invented. Mock: the explicitly selected fixture is returned, labelled simulated.
+4. The transcript is displayed and editable; only after explicit confirmation (`POST /api/jobs/{id}/voice` with `transcript`) does the planner run. Confirmed text is stored on the job; the worker never re-transcribes it.
+5. Failures are explicit (timeout/429/API error); retry requires a user click, protecting the API budget.
 
 ## Video Pipeline (ADR-001, ADR-002, ADR-005, ADR-006)
 

@@ -1,19 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiClientError, checkHealth, downloadUrl, getJob, getResult, submitVoice, uploadVideo } from "@/lib/api";
-import type { JobResponse, JobResultData } from "@/lib/types";
+import { ApiClientError, checkHealth, downloadUrl, getJob, getResult, submitTranscript, transcribeRecording, uploadVideo } from "@/lib/api";
+import type { JobResponse, JobResultData, TranscriptData } from "@/lib/types";
 import { VOICE_FIXTURES } from "@/lib/fixtures";
 import { TopBar } from "./TopBar";
 import { MediaPanel, type SourceMeta } from "./MediaPanel";
 import { Viewer } from "./Viewer";
-import { AssistantPanel } from "./AssistantPanel";
+import { AssistantPanel, type TranscribeStatus } from "./AssistantPanel";
 import { Timeline } from "./Timeline";
 
 const TERMINAL = new Set(["completed", "failed"]);
 
 export function Studio() {
   const [apiMode, setApiMode] = useState<string | null>(null);
+  const [liveAvailable, setLiveAvailable] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -29,6 +30,14 @@ export function Studio() {
   const [voiceSubmitted, setVoiceSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [recording, setRecording] = useState<{ blob: Blob; filename: string } | null>(null);
+  const [transcribeStatus, setTranscribeStatus] = useState<TranscribeStatus>("idle");
+  const [transcribeProgress, setTranscribeProgress] = useState<number | null>(null);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptData | null>(null);
+  const [transcriptSource, setTranscriptSource] = useState<"live" | "mock-audio" | "mock-fixture" | "typed" | null>(null);
+  const [draft, setDraft] = useState("");
+
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -42,6 +51,7 @@ export function Studio() {
     checkHealth()
       .then((h) => {
         setApiMode(h.ai_mode);
+        setLiveAvailable(h.live_transcription_available);
         setApiError(null);
       })
       .catch((e) => setApiError(e instanceof ApiClientError ? e.message : "Backend unreachable."));
@@ -122,19 +132,69 @@ export function Studio() {
   }
 
   async function handleSubmitVoice() {
-    if (!job) return;
+    if (!job || !draft.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const updated = await submitVoice(job.job_id, fixtureId);
+      const updated = await submitTranscript(job.job_id, draft.trim(), transcript?.session_id ?? null);
       setJob(updated);
       setVoiceSubmitted(true);
       pollJob(job.job_id);
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Could not submit the instruction.");
+      setError(e instanceof ApiClientError ? e.message : "Could not submit the confirmed transcript.");
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleTranscribe() {
+    if (!recording || transcribeStatus === "uploading" || transcribeStatus === "transcribing") return;
+    // One explicit request per click. No automatic retry of a billable call.
+    setTranscriptionError(null);
+    setTranscribeStatus("uploading");
+    setTranscribeProgress(0);
+    try {
+      const data = await transcribeRecording(recording.blob, recording.filename, {
+        mockFixtureId: liveAvailable ? undefined : fixtureId,
+        onProgress: (pct) => {
+          setTranscribeProgress(pct);
+          if (pct >= 100) setTranscribeStatus("transcribing");
+        },
+      });
+      setTranscript(data);
+      setDraft(data.text);
+      setTranscriptSource(liveAvailable ? "live" : "mock-audio");
+      setTranscribeStatus("done");
+    } catch (e) {
+      setTranscribeStatus("error");
+      setTranscriptionError(e instanceof ApiClientError ? e.message : "Transcription failed.");
+    }
+  }
+
+  function handleUseMockTranscript() {
+    const fixture = VOICE_FIXTURES.find((f) => f.id === fixtureId);
+    if (!fixture) return;
+    setTranscript({
+      text: fixture.transcript,
+      language: "pt-BR",
+      confidence: null,
+      provider_name: "mock-fixture",
+      is_mock: true,
+      session_id: null,
+      audio_duration_ms: null,
+      transcribe_mode: "mock",
+    });
+    setDraft(fixture.transcript);
+    setTranscriptSource("mock-fixture");
+    setTranscriptionError(null);
+    setTranscribeStatus("done");
+  }
+
+  function handleTypedInstruction(text: string) {
+    setTranscript(null);
+    setDraft(text);
+    setTranscriptSource("typed");
+    setTranscriptionError(null);
   }
 
   function reset() {
@@ -152,6 +212,13 @@ export function Studio() {
     setCurrentTime(0);
     setDuration(0);
     setPlaying(false);
+    setRecording(null);
+    setTranscribeStatus("idle");
+    setTranscribeProgress(null);
+    setTranscriptionError(null);
+    setTranscript(null);
+    setTranscriptSource(null);
+    setDraft("");
   }
 
   const handleSeek = useCallback((time: number) => {
@@ -213,6 +280,7 @@ export function Studio() {
       <TopBar
         projectName={file ? file.name.replace(/\.[^.]+$/, "") : "Untitled project"}
         aiMode={apiMode}
+        liveTranscription={liveAvailable}
         apiError={apiError}
         resolution={resolution}
         durationLabel={effectiveDuration ? `${effectiveDuration.toFixed(1)}s` : null}
@@ -287,12 +355,38 @@ export function Studio() {
           <AssistantPanel
             job={job}
             result={result}
+            liveAvailable={liveAvailable}
             fixtureId={fixtureId}
             onSelectFixture={setFixtureId}
-            canSubmit={Boolean(job && job.status === "queued" && !job.ready)}
-            submitting={submitting}
+            recorded={Boolean(recording)}
+            recordingName={recording?.filename ?? null}
+            onRecordingReady={(blob, filename) => {
+              setRecording({ blob, filename });
+              setTranscript(null);
+              setTranscriptSource(null);
+              setDraft("");
+              setTranscriptionError(null);
+              setTranscribeStatus("idle");
+            }}
+            onRecordingCleared={() => {
+              setRecording(null);
+              setTranscribeStatus("idle");
+              setTranscriptionError(null);
+            }}
+            transcribeStatus={transcribeStatus}
+            transcribeProgress={transcribeProgress}
+            transcriptionError={transcriptionError}
+            transcript={transcript}
+            transcriptSource={transcriptSource}
+            draft={draft}
+            onDraftChange={setDraft}
+            onTranscribe={handleTranscribe}
+            onUseMockTranscript={handleUseMockTranscript}
+            onTypedInstruction={handleTypedInstruction}
+            canConfirm={Boolean(job && job.status === "queued" && !job.ready)}
+            confirming={submitting}
             submitted={voiceSubmitted}
-            onSubmit={handleSubmitVoice}
+            onConfirmTranscript={handleSubmitVoice}
             onRetry={reset}
           />
         </div>
