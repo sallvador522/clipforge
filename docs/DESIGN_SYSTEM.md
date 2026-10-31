@@ -4,7 +4,7 @@ Editorial cinematic editing studio. The video preview is the composition; voice 
 
 ## Tokens
 
-- Foundation: dark charcoal (e.g. `#16130F`-family, warm-tinted near-black). Exact hex values are finalized at the frontend milestone and recorded here before implementation.
+- Foundation (finalized Milestone 5): background `#14110C`, surface `#1C1813`, raised `#242019`, border `#2E2820`, foreground `#F3EDE3` (warm off-white), muted `#A79E8F`, signal orange accent `#FF7659`, danger `#FF6B57`, success `#9BC49B`.
 - Typography: warm light (off-white, warm grey scale). Manrope for interface text; IBM Plex Mono for technical metadata (timecodes, job IDs, stream info).
 - Accent: signal orange, used sparingly for primary actions, recording state, and progress.
 - No purple/blue AI gradients, no decorative glassmorphism, no random illustrations, no emoji icons.

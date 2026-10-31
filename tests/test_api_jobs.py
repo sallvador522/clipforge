@@ -56,6 +56,12 @@ def test_health_reports_mock_mode(env):
     assert body["status"] == "ok" and body["ai_mode"] == "mock"
 
 
+def test_cors_allows_local_studio_origin(env):
+    client, _, _ = env
+    resp = client.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
 def test_upload_validation_rejects_bad_inputs(env, tmp_path):
     client, _, _ = env
     bad = tmp_path / "notes.txt"

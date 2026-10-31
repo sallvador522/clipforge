@@ -1,9 +1,8 @@
-"""ClipForge FastAPI application (Milestone 3).
+"""ClipForge FastAPI application (Milestones 3-5).
 
 Non-blocking by design: uploads create queued jobs, the persistent worker
-(apps/worker) processes them. No route performs provider or rendering work.
-There is intentionally NO download endpoint yet: no rendered MP4 exists until
-Milestone 4, and a fake download is prohibited.
+(apps/worker) processes and renders them. No route performs provider or
+rendering work. The download endpoint serves only verified rendered outputs.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -75,6 +75,13 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
     bundle = providers if providers is not None else get_providers()  # mock by default; live raises explicitly
 
     app = FastAPI(title="ClipForge API", version="0.1.0")
+    # Local studio frontend only (Milestone 5). No credentials are involved in mock mode.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
     app.state.store = store
     app.state.providers = bundle
     app.state.storage_root = root

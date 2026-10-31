@@ -16,7 +16,7 @@ FastAPI requests never block on rendering. Uploads create jobs; the persistent w
 
 | Component | Path | Responsibility |
 |---|---|---|
-| Web frontend | `apps/web/` | Voice-first UI (later milestone; only scaffold definition exists now) |
+| Web frontend | `apps/web/` | Next.js studio: upload, voice recording, job monitoring, before/after preview, verified download (Milestone 5) |
 | API | `apps/api/` | FastAPI REST endpoints, upload validation (ffprobe), non-blocking job submission |
 | Worker | `apps/worker/` | Mask writer/loader/validation, fixtures, job processor, persistent worker process, FFmpeg+OpenCV renderer |
 | Contracts | `packages/contracts/` | Single source of truth: `EditingPlan`, normalized provider responses, mask manifest |
@@ -68,7 +68,12 @@ storage/
   jobs/<job_id>/output.mp4        (verified rendered output)
 ```
 
+## Frontend Integration (Milestone 5)
+
+- The studio talks only to the contracted REST endpoints via a typed client (`apps/web/src/lib/api.ts`, types mirror `docs/API_CONTRACTS.md`). Upload uses XMLHttpRequest for real progress; job polling runs every 1.5 s and stops at terminal states; downloads fetch the verified endpoint as a Blob (cross-origin `download` attributes are ignored by browsers).
+- Voice: the browser records real audio with MediaRecorder (with playback). Because transcription is a mock fixture provider (ADR-004), the user confirms which representative command they spoke; the UI labels this as simulated transcription everywhere, and the authoritative transcript is the one returned by the backend in the job result. When live transcription is integrated (Milestone 6), the recorded audio replaces the fixture selection.
+- CORS: the API allows only `http://localhost:3000` / `http://127.0.0.1:3000` (GET/POST). No credentials exist in mock mode; nothing provider-specific reaches the frontend.
+
 ## Deferred / Placeholder
 
 - Live Meta adapters: placeholders raising `LiveProviderNotImplementedError`. No endpoint, field, or schema is assumed (see `docs/API_CONTRACTS.md`).
-- Frontend: Milestone 5.
