@@ -79,7 +79,9 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Cost control: Standard only, usage + per-request cost from actual usage, rough pre-request estimate, no web search, transcript text only, no background retries/duplicates.
 - [x] 15 new tests (mocked transport: contract, validation, clarification, unsupported, malformed, timeout/429/API errors, isolation, selection, single-request, accounting, contributor-mode gating, reasoning_effort, contributor pricing); 175 total preserved + new.
 - [x] ADR-012: Contributor-Medium variant approved (`muse-spark-1.3-contributor`, `reasoning_effort: medium`, Contributor rates $0.10/1M in + $0.20/1M out); no `context` parameter exists in the verified contract; canonical env var is `MODEL_API_KEY`.
-- [ ] LIVE-CALL 001 (exactly one POST) — blocked on a valid `MODEL_API_KEY` in gitignored `.env` (currently empty). No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
+- [x] LIVE-CALL 001 — executed exactly 1 POST → HTTP 500 `internal server error`; mapped to `DirectorAPIError`, no retry, no result file, $0.00 billed.
+- [x] LIVE-CALL 002 RETRY 1 (same payload) — executed exactly 1 POST → HTTP 500 again; repeat 500 on identical payload implicates the request (prime suspect: structured-output schema size/shape), not a transient fault. Stopped per approval. See `docs/LIVE_CALL_001_002_REPORT.md`.
+- [ ] Schema-reduction proposal (smaller schema / lower token cap / plain-JSON control) — blocked on explicit approval. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
 
 ## Milestone 6 — Live Integration Gate (blocked)
 - [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).

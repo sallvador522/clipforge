@@ -80,7 +80,7 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
 - **Consequences:** The first live call remains blocked on explicit approval of the measured proposal. All other providers stay mock; the worker, renderer and UI are unchanged.
 
 ## ADR-012: First Live Director Call — Contributor Medium (6B-LIVE LIVE-CALL 001)
-- **Status:** APPROVED for exactly one call; NOT yet executed (no key in `.env`).
+- **Status:** EXECUTED twice (LIVE-CALL 001 + 002 RETRY 1, same payload) — both returned HTTP 500 `internal server error`. NO further calls without fresh approval + schema review. Full log: `docs/LIVE_CALL_001_002_REPORT.md`.
 - **Context:** ADR-011 prepared a Standard-mode provider. The approved live call uses the Contributor variant with medium reasoning effort: model id `muse-spark-1.3-contributor` (verified in the Models and Pricing docs fetched the same day), Contributor rates $0.10/1M input + $0.20/1M output (150 RPM / 4M TPM for the Contributor variant row), `reasoning_effort: "medium"` (verified accepted value; `none` is rejected for Spark). There is NO `context`-size parameter in the verified Chat Completions contract — “medium context” is interpreted as the default 1,048,576-token window carrying a ~3.2k-token prompt, and only `reasoning_effort` is sent.
 - **Decision:**
   - Model must be exactly `muse-spark-1.3-contributor` (`require_contributor=True`); every other model string, including Standard, is rejected in this mode.

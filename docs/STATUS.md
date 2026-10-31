@@ -5,7 +5,7 @@
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
 - **Milestones 0–6B-PREP:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; editor redesign; local QA; real transcription provider + audio pipeline; **professional editing director intelligence, offline**).
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** LIVE-CALL 001 (one Contributor-Medium plan-generation POST) — user-approved, implementation + guard script ready, **blocked on a valid `MODEL_API_KEY` in gitignored `.env` (currently empty)**. The first live transcription test already succeeded (user-verified); transcription is currently configured as mock for development safety.
+- **Next milestone:** schema-reduction proposal for the director call (smaller schema / lower cap / plain-JSON control) — blocked on explicit approval. No SAM integration until the director path is proven. Transcription remains mock for development safety.
 
 ## What Exists
 
@@ -15,7 +15,7 @@
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
 - Tests: **175 backend tests passing** (70 preserved pre-director + 105 director/registry/playbook/EDL/evaluation/Spark incl. Contributor-mode gating); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
 
-### Proposed first live director test — LIVE-CALL 001 Contributor Medium (APPROVED, NOT RUN — key missing)
+### First live director test — LIVE-CALL 001 + 002 RETRY (EXECUTED, both HTTP 500)
 
 - Instruction: "Keep me sharp, blur the people behind me and replace the background with a cinematic Luanda sunset."
 - Data sent: confirmed transcript text + benchmark-unit video metadata (1280×720 @ 30fps, 10.0s, 300 frames, audio present) + playbook v1.1 + registry summary. No audio bytes, no tools, no web search.
@@ -24,7 +24,7 @@
 - Output cap 1500 tokens; reference valid plan ~3,659 chars (~914 est tokens).
 - Cost at Contributor rates ($0.10/1M in, $0.20/1M out): at cap ≈ **$0.00062** (0.062 US cents); typical 600-token output ≈ **$0.00044** (0.044 cents). Consumes ~0.002% of the $30 budget at cap.
 - Expected: ready v2 plan (isolate → replace → audio → render → verify, approval required) OR honest clarification; validated before any use; EDL/render **not** executed.
-- Blocked on: a valid `MODEL_API_KEY` in gitignored `.env` (currently empty). Exactly one POST when unblocked; any second call needs fresh approval.
+- Outcome: **two POSTs total, both HTTP 500 `internal server error`** (LIVE-CALL 001, then RETRY 1 byte-identical). Real cost **$0.00** — no `usage` returned. Full log: `docs/LIVE_CALL_001_002_REPORT.md`. Repeat 500 implicates the request (prime suspect: ~8.4 KB schema), not a transient. No further calls without fresh approval + schema review.
 
 ## Professional Editing Director (Milestone 6B-PREP)
 
