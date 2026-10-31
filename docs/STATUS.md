@@ -3,16 +3,20 @@
 ## Current State
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- **Milestones 0–5:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; **frontend studio, browser-verified**).
+- **Milestones 0–5.1:** complete (foundation; providers/mocks/masks; benchmark prep; job system + API + worker; real renderer + benchmark; frontend studio; **professional editor redesign, browser-verified**).
 - **Next milestone:** Milestone 6 — Live Integration Gate (blocked until Meta docs verified + explicit user approval). See TASKS.md.
 
 ## What Exists
 
 - Docs: PRODUCT_SPEC, ARCHITECTURE, DESIGN_SYSTEM (tokens finalized), API_CONTRACTS, DECISIONS (ADR-001…ADR-007), TASKS, STATUS.
-- Skills: 5 custom skills in `.opencode/skills/`. Note: external `frontend-design`/`web-design-guidelines`/`motion` skills are not installed in this environment; DESIGN_SYSTEM.md was followed directly.
+- Skills: 8 project skills (≤10 limit) — 5 custom in `.opencode/skills/`, plus `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier installed via `npx motion-ai`; MCP configured; no Motion+ sign-in or purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
-- Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. Studio flow: drag/drop upload with real progress → MediaRecorder voice capture (real recording + playback; mock command confirmation, honestly labelled) → submit → live stage polling (stops at terminal) → backend transcript/plan/render facts → before/after/compare preview → blob download of verified MP4. Error banners with recovery, failed-job and clarification states rendered from real API data.
-- Tests: **52 backend tests passing**; frontend `tsc` clean and `next build` succeeding.
+- Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
+- Tests: **52 backend tests passing**; frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+
+## Browser Verification (Milestone 5.1 redesign)
+
+Full flow re-verified in the in-app Chromium on the redesigned UI: dropped a clip onto the Media panel (source selected, real 320×180/2.0s metadata), Timeline populated with 10 real frame thumbnails + audio peaks, timeline click-seek landed exactly (75% → 1.5/2.0s), typed instruction "blur the background please" matched the correct mock command, upload → confirm → job `completed` with backend transcript/plan and verified render facts, TopBar Export downloaded a real MP4 (`clipforge-1dba7953….mp4`, 36,817 bytes, video/mp4). Zero console errors; all five workspace areas present in the accessibility tree. Screenshot of the redesigned empty state captured at the available 781×582 browser window (stacked layout); the desktop app window size limits the in-app browser viewport, so 1440/1280/1024 screenshots could not be forced — desktop grid engages at the `lg` (1024px) breakpoint by CSS and remains to be eyeballed at full width.
 
 ## Browser Verification (Milestone 5)
 

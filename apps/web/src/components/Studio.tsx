@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClientError, checkHealth, downloadUrl, getJob, getResult, submitVoice, uploadVideo } from "@/lib/api";
 import type { JobResponse, JobResultData } from "@/lib/types";
 import { VOICE_FIXTURES } from "@/lib/fixtures";
-import { UploadPanel } from "./UploadPanel";
-import { VoiceRecorder } from "./VoiceRecorder";
-import { JobStatusPanel } from "./JobStatusPanel";
-import { ComparePreview } from "./ComparePreview";
-import { Button } from "./ui/button";
+import { TopBar } from "./TopBar";
+import { MediaPanel, type SourceMeta } from "./MediaPanel";
+import { Viewer } from "./Viewer";
+import { AssistantPanel } from "./AssistantPanel";
+import { Timeline } from "./Timeline";
 
 const TERMINAL = new Set(["completed", "failed"]);
 
@@ -18,6 +18,7 @@ export function Studio() {
 
   const [file, setFile] = useState<File | null>(null);
   const [originalUrl, setOriginalUrl] = useState<string | null>(null);
+  const [localMeta, setLocalMeta] = useState<SourceMeta | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
@@ -28,6 +29,13 @@ export function Studio() {
   const [voiceSubmitted, setVoiceSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const primaryRef = useRef<HTMLVideoElement | null>(null);
   const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -58,9 +66,7 @@ export function Studio() {
           setJob(latest);
           if (TERMINAL.has(latest.status)) {
             stopPolling();
-            if (latest.status === "completed") {
-              setResult(await getResult(jobId));
-            }
+            if (latest.status === "completed") setResult(await getResult(jobId));
           }
         } catch (e) {
           stopPolling();
@@ -74,8 +80,25 @@ export function Studio() {
   function handleFile(selected: File) {
     setFile(selected);
     setError(null);
+    setLocalMeta(null);
     if (originalUrl) URL.revokeObjectURL(originalUrl);
-    setOriginalUrl(URL.createObjectURL(selected));
+    const url = URL.createObjectURL(selected);
+    setOriginalUrl(url);
+    setCurrentTime(0);
+    setPlaying(false);
+    // Local metadata straight from the file itself (the API re-probes on upload).
+    const probe = document.createElement("video");
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => {
+      setLocalMeta({
+        width: probe.videoWidth,
+        height: probe.videoHeight,
+        duration: probe.duration || 0,
+        hasAudio: null, // browsers cannot report this reliably; the API probe is authoritative
+      });
+      URL.revokeObjectURL(probe.src);
+    };
+    probe.src = url;
   }
 
   async function handleUpload() {
@@ -115,100 +138,161 @@ export function Studio() {
     setFile(null);
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setOriginalUrl(null);
+    setLocalMeta(null);
     setJob(null);
     setResult(null);
     setVoiceSubmitted(false);
     setUploadProgress(null);
     setError(null);
+    setExportError(null);
+    setCurrentTime(0);
+    setDuration(0);
+    setPlaying(false);
   }
 
+  const handleSeek = useCallback((time: number) => {
+    const video = primaryRef.current;
+    if (video) video.currentTime = time;
+    setCurrentTime(time);
+  }, []);
+
+  const handleTogglePlay = useCallback(() => {
+    const video = primaryRef.current;
+    if (!video) return;
+    if (video.paused) void video.play().catch(() => {});
+    else video.pause();
+  }, []);
+
   const resultReady = Boolean(job?.status === "completed" && result?.render_status === "verified" && result?.rendered);
-  const isWorking = Boolean(job && !TERMINAL.has(job.status));
+  const editedUrl = job && resultReady ? downloadUrl(job.job_id) : null;
+
+  async function handleExport() {
+    if (!job || !resultReady) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const response = await fetch(downloadUrl(job.job_id));
+      if (!response.ok) throw new Error(`Export failed (${response.status}) — the verified file may have been removed.`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `clipforge-${job.job_id}.mp4`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const jobMeta = job
+    ? {
+        width: job.source_info.width,
+        height: job.source_info.height,
+        duration_seconds: job.source_info.duration_seconds,
+        has_audio: job.source_info.has_audio,
+        frame_count: job.source_info.frame_count,
+        fps: job.source_info.fps,
+      }
+    : null;
+  const effectiveDuration = duration || jobMeta?.duration_seconds || localMeta?.duration || 0;
+  const resolution = jobMeta ? `${jobMeta.width}×${jobMeta.height}` : localMeta ? `${localMeta.width}×${localMeta.height}` : null;
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-5 pb-16 sm:px-8">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border py-6">
-        <div>
-          <p className="font-mono text-xs tracking-[0.3em] text-accent">CLIPFORGE STUDIO</p>
-          <h1 className="mt-1 text-3xl font-extrabold tracking-tight sm:text-4xl">Your voice. Your vision. Your video.</h1>
-        </div>
-        <div className="font-mono text-xs text-muted" aria-live="polite">
-          {apiError ? (
-            <span className="text-danger">API offline — {apiError}</span>
-          ) : apiMode ? (
-            <span>
-              API connected · AI mode: <span className="text-accent">{apiMode}</span> (simulated providers, real rendering)
-            </span>
-          ) : (
-            "Connecting to API…"
-          )}
-        </div>
-      </header>
+    <main className="flex min-h-screen flex-col bg-background lg:h-screen lg:overflow-hidden">
+      <h1 className="sr-only">ClipForge — cinematic AI video editing studio</h1>
+      <a href="#viewer" className="sr-only focus:not-sr-only focus:bg-accent focus:px-3 focus:py-1.5 focus:text-sm focus:font-semibold focus:text-[#14110C]">
+        Skip to video viewer
+      </a>
+      <TopBar
+        projectName={file ? file.name.replace(/\.[^.]+$/, "") : "Untitled project"}
+        aiMode={apiMode}
+        apiError={apiError}
+        resolution={resolution}
+        durationLabel={effectiveDuration ? `${effectiveDuration.toFixed(1)}s` : null}
+        jobStatus={job?.status ?? null}
+        canExport={resultReady}
+        exporting={exporting}
+        onExport={handleExport}
+        exportError={exportError}
+      />
 
+      {apiError && (
+        <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[13px]" role="alert">
+          <span className="font-medium text-danger">API offline.</span> {apiError} Start the backend, then reload.
+        </div>
+      )}
       {error && (
-        <div className="mt-5 rounded-md border border-danger/40 bg-danger/10 p-4" role="alert">
-          <p className="text-sm font-medium text-danger">Something went wrong</p>
-          <p className="mt-1 text-sm">{error}</p>
-          <Button variant="danger" className="mt-3" onClick={reset}>
+        <div className="flex items-center gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-[13px]" role="alert">
+          <span>
+            <span className="font-medium text-danger">Something went wrong:</span> {error}
+          </span>
+          <button type="button" onClick={reset} className="ml-auto shrink-0 font-medium text-danger underline">
             Start over
-          </Button>
+          </button>
         </div>
       )}
 
-      <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        <div className="space-y-10">
-          <UploadPanel
-            fileName={file?.name ?? null}
-            fileSize={file?.size ?? null}
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[248px_minmax(0,1fr)_328px] xl:grid-cols-[264px_minmax(0,1fr)_344px]">
+        <div className="order-3 border-t border-border lg:order-1 lg:border-r lg:border-t-0">
+          <MediaPanel
+            file={file}
+            originalUrl={originalUrl}
+            localMeta={localMeta}
+            jobMeta={jobMeta}
+            jobId={job?.job_id ?? null}
             uploading={uploading}
             uploadProgress={uploadProgress}
             jobCreated={Boolean(job)}
             onFile={handleFile}
             onUpload={handleUpload}
+            onReplace={reset}
           />
-          <VoiceRecorder
-            selectedFixtureId={fixtureId}
+        </div>
+
+        <div className="order-1 flex min-h-[52vh] flex-col lg:order-2 lg:min-h-0">
+          <Viewer
+            originalUrl={originalUrl}
+            editedUrl={editedUrl}
+            resultReady={resultReady}
+            primaryRef={primaryRef}
+            currentTime={currentTime}
+            duration={effectiveDuration}
+            playing={playing}
+            onTogglePlay={handleTogglePlay}
+            onSeek={handleSeek}
+            onTimeUpdate={(t, d) => {
+              setCurrentTime(t);
+              if (d > 0) setDuration(d);
+            }}
+            onPlayState={setPlaying}
+            onFileDrop={handleFile}
+          />
+          <Timeline
+            file={file}
+            duration={effectiveDuration}
+            currentTime={currentTime}
+            hasAudio={jobMeta ? jobMeta.has_audio : null}
+            onSeek={handleSeek}
+          />
+        </div>
+
+        <div className="order-2 border-t border-border lg:border-l lg:border-t-0">
+          <AssistantPanel
+            job={job}
+            result={result}
+            fixtureId={fixtureId}
             onSelectFixture={setFixtureId}
             canSubmit={Boolean(job && job.status === "queued" && !job.ready)}
             submitting={submitting}
             submitted={voiceSubmitted}
             onSubmit={handleSubmitVoice}
+            onRetry={reset}
           />
-          {(job || isWorking) && (
-            <Button variant="ghost" onClick={reset} className="px-0">
-              Start a new session
-            </Button>
-          )}
-        </div>
-
-        <div className="space-y-8">
-          <ComparePreview
-            originalUrl={originalUrl}
-            resultUrl={job && resultReady ? downloadUrl(job.job_id) : null}
-            resultReady={resultReady}
-            downloadJobId={job && resultReady ? job.job_id : null}
-          />
-          <JobStatusPanel job={job} result={result} />
-          {!job && (
-            <div className="rounded-lg border border-border bg-surface p-6">
-              <p className="text-lg font-semibold">Edit with your voice</p>
-              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-muted">
-                <li>Upload a short clip (up to 10 s, 720p).</li>
-                <li>Record what you want changed and confirm the matching command.</li>
-                <li>Watch the real job stages, then preview and download the verified MP4.</li>
-              </ol>
-              <p className="mt-3 font-mono text-xs text-muted">
-                Development build: transcription, planning, segmentation and backgrounds are deterministic mocks (ADR-004).
-                Rendering and downloads are real.
-              </p>
-            </div>
-          )}
         </div>
       </div>
-
-      <footer className="mt-14 border-t border-border pt-4 font-mono text-xs text-muted">
-        ClipForge · mock AI mode · local rendering · originals preserved · no external AI calls
-      </footer>
     </main>
   );
 }

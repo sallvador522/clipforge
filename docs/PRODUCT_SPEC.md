@@ -23,6 +23,10 @@ Users upload a video and describe what they want changed through natural speech.
 
 Nothing outside this list is MVP scope. Do not implement unrelated features.
 
+## Editing Experience (Milestone 5.1)
+
+The product is a single editing workspace, not a dashboard: import a clip into the Media panel, preview it in the central Viewer, speak (or type) an instruction in the AI Assistant panel, confirm the recognised command, watch the real processing stages, compare before/after in the Viewer, and export the verified MP4 from the TopBar. A bottom Timeline (ruler, real frame thumbnails, real audio peaks, playhead) stays in sync with playback. The MVP edits one clip; the interface must never advertise multitrack, trimming, keyframes, or transitions it cannot perform.
+
 ## Constraints
 
 - Source clips: 10 seconds, 720p, up to 30 FPS (300 frames max benchmark unit).

@@ -9,6 +9,24 @@ export interface VoiceFixture {
   transcript: string;
 }
 
+/**
+ * Deterministic text→fixture matching for the typed-instruction alternative.
+ * Mirrors the mock planner's keyword mapping; unmatched text is reported
+ * honestly as unrecognised instead of being silently reinterpreted.
+ */
+export function matchFixtureByText(text: string): VoiceFixture | null {
+  const t = text.toLowerCase();
+  if (/\bele\b/.test(t) || t.includes("him") || t.includes("that person")) return VOICE_FIXTURES[3];
+  if (t.includes("fundo") || t.includes("background") || t.includes("estúdio") || t.includes("estudio") || t.includes("studio")) {
+    return t.includes("substitu") || t.includes("replace") || t.includes("studio") || t.includes("estúd")
+      ? VOICE_FIXTURES[1]
+      : VOICE_FIXTURES[0];
+  }
+  if (t.includes("nítid") || t.includes("nitid") || t.includes("sharp")) return VOICE_FIXTURES[2];
+  if (t.includes("desfoc") || t.includes("blur")) return VOICE_FIXTURES[0];
+  return null;
+}
+
 export const VOICE_FIXTURES: VoiceFixture[] = [
   {
     id: "pt_blur_people_behind",

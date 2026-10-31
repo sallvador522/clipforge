@@ -16,6 +16,7 @@
 
 html {
   background: var(--color-background);
+  color-scheme: dark;
 }
 
 body {
