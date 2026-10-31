@@ -1,3 +1,5 @@
-# apps/api — FastAPI (Milestone 3, not yet implemented)
+# apps/api — FastAPI (Milestone 3, implemented)
 
-Endpoints, job states, and error shape are defined in `docs/API_CONTRACTS.md` and rules in the `clipforge-fastapi-jobs` skill. No routes exist yet; nothing here should be presented as a working API. Implementation order: upload + job creation + local storage layout, status polling, result/download of verified outputs only. FastAPI/uvicorn dependencies are added at that milestone, not before.
+Run: `uvicorn clipforge_api.main:app` (with the repo `PYTHONPATH` covering `packages/*` and `apps/*`, storage root from `CLIPFORGE_STORAGE_ROOT`, default `storage/`).
+
+Endpoints: `GET /health`, `POST /api/uploads` (validated multipart upload → queued job), `POST /api/jobs/{id}/voice`, `GET /api/jobs/{id}`, `GET /api/jobs`, `GET /api/jobs/{id}/result`. Contracts in `docs/API_CONTRACTS.md`. The API never processes jobs itself — the persistent worker does. There is no download endpoint until the Milestone 4 renderer produces a verified MP4.

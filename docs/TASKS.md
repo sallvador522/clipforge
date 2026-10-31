@@ -22,10 +22,11 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Preparation script generating the deterministic benchmark source clip locally with FFmpeg.
 - [x] Benchmark harness stub that refuses to report numbers until the renderer exists. No performance claims.
 
-## Milestone 3 — Job System + API (next recommended)
-- [ ] FastAPI app: upload, job creation, local storage layout, job state machine, status/result/download endpoints per API_CONTRACTS.md.
-- [ ] Persistent worker process consuming jobs without blocking API requests.
-- [ ] Error states (provider timeout, failed segmentation) with originals preserved.
+## Milestone 3 — Job System + API
+- [x] FastAPI app: upload + ffprobe validation, job creation, local storage layout, state machine (queued/processing/completed/failed + stage), status/list/result endpoints per API_CONTRACTS.md. Download endpoint deferred to Milestone 4 (no fake downloads).
+- [x] Persistent worker process (`clipforge_worker.worker_process`) consuming ready jobs without blocking API requests; atomic cross-process job claiming.
+- [x] Error states with structured `{code, message}` errors, per-job isolation, logging; originals preserved on failure.
+- [x] Lifecycle tests incl. real cross-process verification (API + separate worker process). Deps added: fastapi, uvicorn, python-multipart, httpx (tests).
 
 ## Milestone 4 — Real Renderer
 - [ ] OpenCV compositing: alpha from masks, edge smoothing, background blur, background replacement, subject kept sharp.

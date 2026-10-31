@@ -40,17 +40,21 @@ Every generated plan is validated against this schema. Model/provider output is 
 - Timestamp derivation rule: `timestamp_ms = round(index * 1000 / fps)` when explicit timestamps are absent; the rule used is recorded in `timestamp_rule`.
 - Loader validation rejects: missing frames, corrupt/invalid files, dimension mismatches (**never silently resized**), unexpected or duplicate frame indices, manifest/frame-count disagreement. Explicit resize is a separate operation using nearest-neighbour only; edge smoothing happens in the renderer, not the loader.
 
-## Internal REST API (defined here; implemented at the API milestone — not yet live)
+## Internal REST API (implemented Milestone 3, except download)
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /api/uploads` | Upload source video, creates a job |
-| `POST /api/jobs/{job_id}/voice` | Submit voice instruction fixture/audio reference |
-| `GET /api/jobs/{job_id}` | Job status (`queued`, `transcribing`, `planning`, `segmenting`, `rendering`, `verifying`, `completed`, `failed`, `needs_clarification`) |
-| `GET /api/jobs/{job_id}/result` | Before/after metadata |
-| `GET /api/jobs/{job_id}/download` | Download the verified output MP4 |
+| Endpoint | Status | Purpose |
+|---|---|---|
+| `GET /health` | live | `{status, ai_mode, storage_root}` |
+| `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
+| `POST /api/jobs/{job_id}/voice` | live | Body `{audio_fixture_id}`; attaches the voice instruction and makes the job claimable; 409 if not queued/awaiting |
+| `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `completed`, `failed`, plus `stage` progress detail |
+| `GET /api/jobs` | live | List all jobs |
+| `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `render_status`); 409 until `completed` |
+| `GET /api/jobs/{job_id}/download` | **not implemented** | Download of the verified output MP4 arrives with the Milestone 4 renderer. No fake downloads. |
 
-Error shape: `{ "error": { "code": string, "message": string } }`. No route exists until implemented and tested; this table is the contract to implement, not a claim of functionality.
+Error shape: `{ "error": { "code": string, "message": string } }` (404 `job_not_found`, 409 conflicts, 422 upload validation, 413 oversize, 400 empty file).
+
+Note: `completed` means the mock AI pipeline (transcribe → plan → segment) finished. `render_status` is `"not_implemented"` until Milestone 4; no edited video exists yet and none is claimed.
 
 ## Live Provider Mapping (TBD)
 
