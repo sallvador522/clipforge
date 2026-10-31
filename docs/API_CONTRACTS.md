@@ -106,6 +106,15 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 `EditDecisionList` (`edl.py`) projects a ready v2 plan: one `EditDecision` per operation, dependency-ordered, with capability-typed `params`, no timing while `timeline.trim` is disabled, `DecisionTransparency` (requested/understood/why/approval/operator message) and canonical `provenance_hash`. Handlers resolve from the registry (`edl_handler_for`), never from plan input. `EditHistoryEntry` (frozen, allow-listed refs) persists via `JobRecord.edit_history` in `job.json`. `OutputEvaluationReport` separates objective checks from human review and caps corrections at 3 passes.
 
+### Muse Spark director provider (6B-LIVE, prepared not live-tested)
+
+`MetaEditingDirectorProvider` (`packages/director/clipforge_director/spark.py`):
+- Chat Completions `POST /v1/chat/completions`, model `muse-spark-1.3` (Standard; Contributor rejected), Bearer `MODEL_API_KEY`.
+- Messages: `developer` = playbook v1.1 + registry summary + output rules; `user` = confirmed transcript + video metadata + verbatim `request_id`/`raw_instruction` + ambiguity/unsupported rules.
+- `response_format: {type: "json_schema", json_schema: {name: "ProfessionalEditingPlan", schema: <v2 JSON Schema>, strict: false}}`, `max_completion_tokens` (default 1500). No `tools`, no web search, no audio.
+- Response: `choices[0].message.content` (JSON string) → `ProfessionalEditingPlan` validation; `finish_reason: length` and any `tool_calls` rejected; `request_id`/`raw_instruction` echo enforced; `usage` → Standard-rate cost.
+- Errors: 401/5xx → safe `DirectorAPIError`, 429 → `DirectorRateLimitedError` (with `Retry-After`), timeout → `DirectorTimeoutError`, malformed/truncated/mismatch → `DirectorValidationError`. Exactly one POST; no retries; key/audio never logged.
+
 ### Approval / cancel / revision
 
 Prepared as contract fields only. **No endpoints or UI exist**; the current worker still auto-executes after transcript confirmation. A future milestone must add explicit approval gating before v2 is wired to execution.

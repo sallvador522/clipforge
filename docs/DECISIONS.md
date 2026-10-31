@@ -69,4 +69,14 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
   - Licensing: MIT text preserved in `LICENSES/video-use-MIT.txt` and attributed in `docs/THIRD_PARTY_NOTICES.md`; no upstream code copied.
 - **Consequences:** Spark can later reason with the adapted playbook while staying registry-gated. Timing/segment features remain disabled until their capabilities, handlers and verification exist.
 
+## ADR-011: Muse Spark Director Integration Prep (6B-LIVE, no live call)
+- **Status:** Prepared, NOT live-tested. No request sent; no approval granted yet.
+- **Context:** Muse Spark 1.3 is verified on Model API (`muse-spark-1.3`, base `https://api.meta.ai/v1`, Bearer `MODEL_API_KEY`, Standard mode $1.25/1M in + $4.25/1M out). ClipForge needs plan generation only for the first test — no tool execution, rendering, SAM, image or audio input.
+- **Decision:**
+  - **Protocol: Chat Completions** (`POST /v1/chat/completions`), not Responses API. Single-turn plan generation needs no reasoning replay or server-managed history; structured output via `response_format` (`json_schema`, Pydantic-derived, `strict: false`) has a documented guaranteed-conformance contract; stateless with no `store`/`previous_response_id`. Responses `text.format` must never be sent here.
+  - **Provider:** `MetaEditingDirectorProvider` (`packages/director/.../spark.py`) loads the v1.1 playbook + registry summary, takes the confirmed transcript text plus registered video metadata, emits one validated v2 plan. No `tools` are sent (plan generation only), no web search, no audio bytes, Standard model only (Contributor variants rejected).
+  - **Security:** Pydantic + registry validation, capability/param match, dependency order, approval rules, echo enforcement (`request_id`, `raw_instruction`), truncation/tool-call rejection, safe error mapping, single POST, no retries, key never logged.
+  - **Accounting:** `usage.{prompt,completion,total}_tokens` → cost at Standard rates; rough pre-request size estimate (`estimate_tokens`, chars/4, not a billing figure).
+- **Consequences:** The first live call remains blocked on explicit approval of the measured proposal. All other providers stay mock; the worker, renderer and UI are unchanged.
+
 

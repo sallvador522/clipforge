@@ -13,7 +13,18 @@
 - Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **160 backend tests passing** (70 preserved + 90 director/registry/playbook/EDL/evaluation); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **171 backend tests passing** (70 preserved pre-director + 101 director/registry/playbook/EDL/evaluation/Spark); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+
+### Proposed first live director test (NOT RUN — awaiting explicit approval)
+
+- Instruction: "Keep me sharp, blur the people behind me and replace the background with a cinematic Luanda sunset."
+- Data sent: confirmed transcript text + source video metadata (dimensions/fps/duration/audio flag) + playbook v1.1 + registry summary. No audio bytes, no tools, no web search.
+- Endpoint: `POST https://api.meta.ai/v1/chat/completions`, model `muse-spark-1.3` (Standard), Bearer `MODEL_API_KEY`, `response_format` json_schema `ProfessionalEditingPlan`, `max_completion_tokens: 1500`.
+- Measured prompt: developer 12,234 chars (~3,058 est tokens) + user 631 chars (~157 est) = ~3,215 input tokens (chars/4 heuristic, not billing).
+- Output cap 1500 tokens; reference valid plan ~3,659 chars (~914 est tokens).
+- Cost: at cap ≈ **$0.01039** (1.04 US cents); typical 600-token output ≈ **$0.00657** (0.66 cents). Standard rates $1.25/1M in + $4.25/1M out.
+- Expected: ready v2 plan (isolate → replace → audio → render → verify, approval required) OR honest clarification; validated before any use; EDL/render **not** executed.
+- Budget: $30 remaining; this test consumes ~0.03% at cap.
 
 ## Professional Editing Director (Milestone 6B-PREP)
 

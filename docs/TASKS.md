@@ -70,7 +70,15 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] 10 director stages with validated transitions and job-stage mapper; operation status transitions validated.
 - [x] EDL v2 with capability-typed params, registry-resolved handlers, timing forbidden while trim disabled, canonical provenance; immutable history in `job.json`; evaluation report with 3-pass ledger (6B-PREP-R).
 - [x] 90 new tests (160 total); docs/ADR-009 and ADR-010 updated.
-- [ ] Muse Spark 1.3 integration — blocked on explicit approval; requires tool-calling/structured-output docs verification, budget plan and approval gate wiring.
+
+## Milestone 6B-LIVE — Muse Spark Director (prepared, no live call)
+- [x] Official docs verified (models, tool-calling, structured-output, Responses protocol, pricing/rate-limits). Confirmed `muse-spark-1.3`, base `https://api.meta.ai/v1`, Bearer auth, Chat Completions vs Responses distinction, `response_format` vs `text.format`, Standard pricing ($1.25/1M in, $4.25/1M out), 3000 RPM / 4M TPM.
+- [x] Protocol selected: Chat Completions (single-turn plan generation; no reasoning replay, stateless, documented Pydantic structured-output flow).
+- [x] `MetaEditingDirectorProvider` with mocked transport: playbook + registry loading, transcript + video metadata, one validated v2 plan, clarification/unsupported handling, concise explanations, no arbitrary tools/params.
+- [x] Security: Pydantic + registry + echo enforcement, truncation/tool-call rejection, safe errors, single POST, no retries, no key/audio logging.
+- [x] Cost control: Standard only, usage + per-request cost from actual usage, rough pre-request estimate, no web search, transcript text only, no background retries/duplicates.
+- [x] 11 new tests (mocked transport: contract, validation, clarification, unsupported, malformed, timeout/429/API errors, isolation, selection, single-request, accounting); 171 total preserved + new.
+- [ ] First live plan-generation call — blocked on explicit user approval of the proposal below. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
 
 ## Milestone 6 — Live Integration Gate (blocked)
 - [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
