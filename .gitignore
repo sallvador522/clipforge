@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 node_modules/
 .next/
+*.tsbuildinfo
 storage/
 benchmarks/assets/*.mp4
 benchmarks/assets/masks/
