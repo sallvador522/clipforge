@@ -3,9 +3,9 @@
 ## Current State
 
 - **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- **Milestones 0–6B-LIVE:** complete through LIVE-CALL 003 (HTTP 200, truncated at 800 cap). Schema lite accepted; output budget is the remaining blocker. Billing panel figures still pending.
+- **Milestones 0–6B-LIVE:** complete through LIVE-CALL 004 (HTTP 200, truncated at 1500 cap). Real usage measured: 951 in / 1500 out = **$0.000395**. Schema accepted; output budget still insufficient.
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** LIVE-CALL 004 proposal (same lite payload, `max_completion_tokens: 1500` or 1200) — blocked on explicit approval. No SAM integration until the director path is proven. Transcription remains mock for development safety.
+- **Next milestone:** LIVE-CALL 005 proposal (cap 3000, or low effort + 2000) — blocked on explicit approval. No SAM integration until the director path is proven. Transcription remains mock for development safety.
 
 ## What Exists
 
@@ -13,13 +13,14 @@
 - Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
 - Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **183 backend tests passing** (70 preserved pre-director + 113 director/registry/playbook/EDL/evaluation/Spark/lite); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **184 backend tests passing** (70 preserved pre-director + 114 director/registry/playbook/EDL/evaluation/Spark/lite); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
 
 ### First live director test — LIVE-CALL 001/002 (500) and 003 (200 truncated)
 
 - 001/002: two POSTs, both HTTP 500 with the full v2 schema (~8.4 KB). Billing under reconciliation (panel is source of truth); $0.00 claim withdrawn.
 - 003: one POST with the lite schema (1,948 bytes) → **HTTP 200, `finish_reason: "length"`** at 800 tokens. No plan accepted; no retry. This confirms the full schema as the 500 cause and isolates the remaining blocker to output budget. Billable; local usage lost pre-fix (bounded ≤ ≈ $0.00026). Observability fixed: usage recorded before validation, `server_request_id` captured.
-- Full log: `docs/LIVE_CALL_001_002_REPORT.md`, `docs/LIVE_CALL_003_REPORT.md`.
+- 004: one POST, same lite schema, cap 1500 → **HTTP 200, still truncated**. Measured usage 951 in / 1500 out = **$0.000395** (Contributor rates), `x-request-id 134244ba-83c9-4721-95ae-a5677de9c34c`. No plan. Schema accepted twice; reasoning+plan output exceeds 1500.
+- Full log: `docs/LIVE_CALL_001_002_REPORT.md`, `docs/LIVE_CALL_003_REPORT.md`, `docs/LIVE_CALL_004_REPORT.md`.
 
 ## Professional Editing Director (Milestone 6B-PREP)
 

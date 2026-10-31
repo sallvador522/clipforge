@@ -56,9 +56,14 @@ VIDEO = {"width": 1280, "height": 720, "fps": 30.0, "duration_seconds": 10.0, "f
 
 
 def main() -> int:
-    if "--execute-live-call-003" not in sys.argv[1:]:
-        print("Refusing: pass --execute-live-call-003 to confirm this single approved call.")
+    if "--execute-live-call-003" in sys.argv[1:]:
+        print(
+            "Refusing: LIVE-CALL 003 was already executed (HTTP 200, truncated). "
+            "Use scripts/live_call_004_spark_lite.py under a fresh approval."
+        )
         return 2
+    print("Refusing: pass --execute-live-call-003 to confirm this single approved call.")
+    return 2
 
     load_env(ROOT / ".env")
 

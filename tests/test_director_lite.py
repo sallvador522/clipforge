@@ -234,3 +234,20 @@ def test_full_capability_summary_still_available_for_audit():
     summary = capability_summary_for_prompt()
     assert "subject.isolate" in summary
     assert len(summary) > len(lite_capability_summary())
+
+
+def test_lite_provider_1500_cap_payload():
+    provider = LiteMetaEditingDirectorProvider(
+        "test-key",
+        LITE_BRIEF,
+        lite_capability_summary(),
+        model="muse-spark-1.3-contributor",
+        reasoning_effort="medium",
+        require_contributor=True,
+        max_output_tokens=1500,
+    )
+    payload, _ = provider.request_payload(transcript("Keep me sharp and blur the background."), None)
+    assert payload["max_completion_tokens"] == 1500
+    assert payload["model"] == "muse-spark-1.3-contributor"
+    assert payload["reasoning_effort"] == "medium"
+    assert payload["response_format"]["json_schema"]["name"] == "ProfessionalEditingPlanLite"

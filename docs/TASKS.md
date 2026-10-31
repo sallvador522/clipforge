@@ -85,7 +85,8 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] ADR-013 + lite contract (`director_lite.py`: 1,948-byte zero-$ref wire schema, abridged brief, essential registry summary, lite→full conversion with full v2 validation) + `LiteMetaEditingDirectorProvider` + guarded `scripts/live_call_003_spark_lite.py` + lite tests.
 - [x] LIVE-CALL 003 — exactly 1 POST → **HTTP 200, `finish_reason: "length"`** at 800-token cap; no plan accepted (truncation rejected), no retry. Schema accepted → full-schema 500 suspect confirmed; remaining blocker is output budget. Billable; local usage lost pre-fix (bounded ≈ ≤ $0.00026). See `docs/LIVE_CALL_003_REPORT.md`.
 - [x] Observability: usage recorded before validation; `DirectorValidationError.server_request_id` from `x-request-id`; script prints structured failure context; 183 tests.
-- [ ] LIVE-CALL 004 proposal: same lite payload with `max_completion_tokens: 1500` (or 1200) — blocked on explicit approval. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
+- [x] LIVE-CALL 004 — exactly 1 POST, cap 1500 → **HTTP 200, still `finish_reason: length`**. Real usage 951 in / 1500 out = 2451, **$0.000395**, `x-request-id 134244ba-83c9-4721-95ae-a5677de9c34c`. No plan accepted, no retry. Schema proven accepted twice; budget still insufficient. See `docs/LIVE_CALL_004_REPORT.md`.
+- [ ] LIVE-CALL 005 proposal: same lite payload, cap **3000** (recommended) or `reasoning_effort: low` + cap 2000 — blocked on explicit approval. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
 
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 
