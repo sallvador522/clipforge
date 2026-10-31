@@ -48,7 +48,7 @@ export function MediaPanel({
   const hasAudio = jobMeta?.has_audio ?? localMeta?.hasAudio;
 
   return (
-    <section aria-label="Media" className="flex min-h-0 flex-col bg-surface">
+    <section aria-label="Media" className="flex min-h-0 flex-col bg-surface lg:h-full">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="font-mono text-[11px] font-medium tracking-wider text-muted">MEDIA</h2>
         <span className="font-mono text-[11px] text-muted">{file ? "1 clip" : "empty"}</span>

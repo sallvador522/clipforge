@@ -235,8 +235,8 @@ export function Studio() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[248px_minmax(0,1fr)_328px] xl:grid-cols-[264px_minmax(0,1fr)_344px]">
-        <div className="order-3 border-t border-border lg:order-1 lg:border-r lg:border-t-0">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[248px_minmax(0,1fr)_328px] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[264px_minmax(0,1fr)_344px]">
+        <div className="order-3 min-h-0 border-t border-border lg:order-1 lg:overflow-hidden lg:border-r lg:border-t-0">
           <MediaPanel
             file={file}
             originalUrl={originalUrl}
@@ -252,7 +252,7 @@ export function Studio() {
           />
         </div>
 
-        <div className="order-1 flex min-h-[52vh] flex-col lg:order-2 lg:min-h-0">
+        <div className="order-1 flex min-h-[52vh] flex-col lg:order-2 lg:h-full lg:min-h-0">
           <Viewer
             originalUrl={originalUrl}
             editedUrl={editedUrl}
@@ -279,7 +279,7 @@ export function Studio() {
           />
         </div>
 
-        <div className="order-2 border-t border-border lg:border-l lg:border-t-0">
+        <div className="order-2 min-h-0 border-t border-border lg:overflow-hidden lg:border-l lg:border-t-0">
           <AssistantPanel
             job={job}
             result={result}

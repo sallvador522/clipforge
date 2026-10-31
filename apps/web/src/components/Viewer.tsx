@@ -54,7 +54,7 @@ export function Viewer({
   const activeSrc = mode === "after" && resultReady ? editedUrl : originalUrl;
 
   return (
-    <section id="viewer" aria-label="Viewer" className="flex min-h-0 min-w-0 flex-col bg-[#0B0906]">
+    <section id="viewer" aria-label="Viewer" className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#0B0906]">
       <div
         ref={stageRef}
         className="relative flex min-h-0 flex-1 items-center justify-center bg-black"
@@ -115,12 +115,12 @@ export function Viewer({
       </div>
 
       <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <button
             type="button"
             onClick={onTogglePlay}
             disabled={!originalUrl}
-            className="flex h-8 w-8 items-center justify-center rounded-md bg-raised text-foreground transition-colors hover:bg-border disabled:opacity-30"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-raised text-foreground transition-colors hover:bg-border disabled:opacity-30"
             aria-label={playing ? "Pause" : "Play"}
           >
             {playing ? (
@@ -129,7 +129,7 @@ export function Viewer({
               <svg width="11" height="12" viewBox="0 0 11 12" aria-hidden><path d="M1 1.5v9l9-4.5-9-4.5Z" fill="currentColor" /></svg>
             )}
           </button>
-          <span className="font-mono text-xs tabular-nums">
+          <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
             {formatTime(currentTime)} <span className="text-muted">/ {formatTime(duration)}</span>
           </span>
           <input
@@ -143,7 +143,7 @@ export function Viewer({
             className="min-w-0 flex-1"
             aria-label="Seek"
           />
-          <div className="flex overflow-hidden rounded-md border border-border" role="tablist" aria-label="View mode">
+          <div className="flex shrink-0 overflow-hidden rounded-md border border-border" role="tablist" aria-label="View mode">
             {(["before", "compare", "after"] as ViewMode[]).map((m) => (
               <button
                 key={m}
@@ -151,7 +151,7 @@ export function Viewer({
                 aria-selected={mode === m}
                 disabled={!originalUrl || (m !== "before" && !resultReady)}
                 onClick={() => setMode(m)}
-                className={`px-2.5 py-1.5 font-mono text-[11px] capitalize transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                className={`px-2 py-1.5 font-mono text-[11px] capitalize transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
                   mode === m ? "bg-accent font-semibold text-[#14110C]" : "text-muted hover:text-foreground disabled:opacity-30"
                 }`}
               >
@@ -163,7 +163,7 @@ export function Viewer({
             type="button"
             onClick={toggleFullscreen}
             disabled={!originalUrl}
-            className="hidden h-8 items-center rounded-md px-2 font-mono text-[11px] text-muted transition-colors hover:text-foreground disabled:opacity-30 sm:flex"
+            className="hidden h-8 shrink-0 items-center rounded-md px-2 font-mono text-[11px] text-muted transition-colors hover:text-foreground disabled:opacity-30 xl:flex"
             aria-label="Fullscreen preview"
           >
             Fullscreen

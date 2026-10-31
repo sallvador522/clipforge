@@ -119,7 +119,7 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
   const stageIndex = job ? STAGE_INDEX[job.stage] ?? (job.status === "queued" ? -1 : 0) : -1;
 
   return (
-    <section aria-label="AI editing assistant" className="flex min-h-0 flex-col bg-surface">
+    <section aria-label="AI editing assistant" className="flex min-h-0 flex-col bg-surface lg:h-full">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="font-mono text-[11px] font-medium tracking-wider text-muted">AI ASSISTANT</h2>
         <span className="rounded border border-accent/50 px-1.5 py-0.5 font-mono text-[10px] text-accent">MOCK MODE</span>
@@ -173,7 +173,15 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
           </div>
         </div>
 
-        {audioUrl && recState === "recorded" && <audio controls src={audioUrl} className="w-full" aria-label="Your recorded instruction" />}
+        {audioUrl && recState === "recorded" && (
+          <audio
+            controls
+            src={audioUrl}
+            className="w-full rounded-md border border-border bg-raised"
+            style={{ colorScheme: "dark" }}
+            aria-label="Your recorded instruction"
+          />
+        )}
 
         {(recState === "unsupported" || recState === "denied") && !micFallback && (
           <button type="button" className="text-sm text-accent underline" onClick={() => setMicFallback(true)}>
@@ -227,7 +235,13 @@ export function AssistantPanel({ job, result, fixtureId, onSelectFixture, canSub
             ))}
           </div>
           <Button onClick={onSubmit} disabled={!canSubmit || !readyToSubmit || submitting || submitted} className="w-full">
-            {submitted ? "Editing in progress…" : submitting ? "Submitting…" : "Confirm & start editing"}
+            {job?.status === "completed"
+              ? "Editing complete — preview & export"
+              : submitted
+                ? "Editing in progress…"
+                : submitting
+                  ? "Submitting…"
+                  : "Confirm & start editing"}
           </Button>
           {!job && <p className="font-mono text-[11px] text-muted">Upload a clip first — the job is created in the Media panel.</p>}
           {job && !readyToSubmit && !submitted && (
