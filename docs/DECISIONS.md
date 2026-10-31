@@ -1,0 +1,41 @@
+# ClipForge — Architecture Decision Records
+
+Decisions are never silently changed. Superseding a decision requires a new ADR referencing the old one.
+
+## ADR-001: Hosted SAM 3.1 via Meta Model API
+- **Status:** Approved (integration deferred, see ADR-004).
+- **Decision:** Subject segmentation/tracking will use SAM 3.1 through Meta hosted inference, accessed only from server-side code with a Bearer API key held server-side. A dedicated SAM provider adapter isolates the integration so it can change without rewriting the video pipeline.
+- **Consequences:** The Python worker must NOT download, install, or host SAM checkpoints. No PyTorch, CUDA, or local SAM inference dependencies. The worker prepares input video, submits segmentation requests, decodes results into the internal mask contract (ADR-005), and passes masks to rendering.
+- **Uncertainty:** User-supplied integration details (model name, base URL, endpoint) are recorded as unverified. Request/response schema, mask encoding, sync vs async execution, and polling must be confirmed against current official Meta documentation before any live code is written. Until then the live adapter is an explicit placeholder.
+
+## ADR-002: FFmpeg + OpenCV Python Video Stack
+- **Status:** Approved.
+- **Decision:** Python worker uses FFmpeg for video decoding, normalization, audio preservation, encoding and final export; OpenCV for frame processing, mask operations, compositing, and visual transformations.
+- **Consequences:** Rendering is CPU-based; no GPU/CUDA infrastructure unless profiling demonstrates necessity (ADR-006). Original video/audio preserved until output is verified.
+
+## ADR-003: MediaBunny Excluded from MVP
+- **Status:** Approved.
+- **Decision:** MediaBunny (including `@mediabunny/server`) is removed from the MVP architecture and must not be installed.
+- **Consequences:** All media processing is Python FFmpeg + OpenCV. MediaBunny may only be reconsidered when a clearly justified browser-side media processing requirement appears, via a new ADR.
+
+## ADR-004: Mock-First Development
+- **Status:** Approved. Mandatory.
+- **Context:** Remaining external AI API budget is ~$30. The entire application must be completed and validated without consuming external AI credits.
+- **Decision:** All AI functionality is implemented with deterministic local mocks and fixtures behind typed provider interfaces (`TranscriptionProvider`, `EditingPlannerProvider`, `SegmentationProvider`, `BackgroundGenerationProvider`), each with a deterministic mock, an unimplemented live placeholder, and a shared normalized internal contract. Default configuration is `CLIPFORGE_AI_MODE=mock`. Rendering is never mocked.
+- **Consequences:** Mock mode makes zero external requests (verified by tests), needs no credentials, never silently falls back to live, and uses deterministic fixtures for repeatable tests. Live mode requires an explicit configuration change plus explicit user approval.
+- **Live integration gate:** Real providers are activated only after frontend, backend, mocks end-to-end, FFmpeg/OpenCV rendering, error handling, automated tests, and documentation are complete; then official docs (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing) are verified, and a single controlled integration test is proposed. No automatic retries that could cause billable requests; request logging, idempotency where supported, and application-level budget tracking are required for live mode.
+
+## ADR-005: PNG Mask Sequence + manifest.json
+- **Status:** Approved.
+- **Decision:** Canonical internal mask representation is one lossless 8-bit grayscale PNG per frame (`frame_%06d.png`, 0=background, 255=subject, intermediate=soft alpha/confidence) plus `manifest.json` recording video dimensions, frame count, FPS, frame timestamps or the derivation rule `timestamp_ms = round(index * 1000 / fps)`, subject identifier, mask encoding, filenames/frame indices, and source video identifier or hash. Never lossy JPEG for masks.
+- **Consequences:** A mask writer and validating loader are implemented in the worker. The loader rejects missing frames, invalid files, wrong dimensions (never silently resized), unexpected indices, and corrupt masks; both binary and grayscale masks are accepted. Explicit resize, when necessary, uses nearest-neighbour only. Edge smoothing is applied separately during rendering, never in the loader. No alternative format (FFV1, packed arrays) until profiling demonstrates a concrete need.
+
+## ADR-006: CPU Rendering Performance
+- **Status:** Approved.
+- **Decision:** CPU rendering is mandatory. No processing times are promised before benchmarks. The benchmark unit is 300 frames, 1280x720, 30 FPS, 10-second source, measured independently for background blur and background replacement, capturing: total processing time, FPS, peak RAM, CPU usage, output file size, audio synchronization, frame integrity. Test machine specifications are recorded with measurements.
+- **Consequences:** Implementation starts with sequential frame processing and bounded memory. Bounded frame pipelining, parallel processing, downscale-blur, and other optimizations are introduced only after profiling, and never by sacrificing mask correctness or visual quality without measuring the trade-off.
+
+## ADR-007: Synthetic Testing Limitations
+- **Status:** Approved. Limitation accepted for MVP.
+- **Decision:** Mock segmentation uses deterministic synthetic fixtures covering: static subject, moving subject, multiple subjects crossing, partial occlusion, missing masks, mask holes, irregular edges, temporal mask jitter, and different foreground/background lighting conditions.
+- **Consequences:** These fixtures validate the rendering pipeline and mask-handling behaviour, **not** real SAM tracking quality. This limitation is accepted. Where suitable licensed footage is available, at least one real-world video with manually prepared masks should be added; this must not trigger any AI API request.

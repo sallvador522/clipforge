@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "video_width": 64,
+  "video_height": 36,
+  "frame_count": 12,
+  "fps": 30.0,
+  "timestamp_rule": "timestamp_ms = round(index * 1000 / fps)",
+  "subject_id": "person_1",
+  "encoding": "png-grayscale-8bit",
+  "source_video_id": "synthetic-fixture-multiple_subjects_crossing",
+  "source_sha256": null,
+  "frames": [
+    {
+      "index": 0,
+      "filename": "frame_000000.png",
+      "timestamp_ms": 0
+    },
+    {
+      "index": 1,
+      "filename": "frame_000001.png",
+      "timestamp_ms": 33
+    },
+    {
+      "index": 2,
+      "filename": "frame_000002.png",
+      "timestamp_ms": 67
+    },
+    {
+      "index": 3,
+      "filename": "frame_000003.png",
+      "timestamp_ms": 100
+    },
+    {
+      "index": 4,
+      "filename": "frame_000004.png",
+      "timestamp_ms": 133
+    },
+    {
+      "index": 5,
+      "filename": "frame_000005.png",
+      "timestamp_ms": 167
+    },
+    {
+      "index": 6,
+      "filename": "frame_000006.png",
+      "timestamp_ms": 200
+    },
+    {
+      "index": 7,
+      "filename": "frame_000007.png",
+      "timestamp_ms": 233
+    },
+    {
+      "index": 8,
+      "filename": "frame_000008.png",
+      "timestamp_ms": 267
+    },
+    {
+      "index": 9,
+      "filename": "frame_000009.png",
+      "timestamp_ms": 300
+    },
+    {
+      "index": 10,
+      "filename": "frame_000010.png",
+      "timestamp_ms": 333
+    },
+    {
+      "index": 11,
+      "filename": "frame_000011.png",
+      "timestamp_ms": 367
+    }
+  ]
+}

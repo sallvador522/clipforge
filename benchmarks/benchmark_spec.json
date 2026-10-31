@@ -1,0 +1,29 @@
+{
+  "name": "clipforge-cpu-render-benchmark",
+  "status": "prepared_not_run",
+  "note": "No performance has been measured or claimed. The renderer (Milestone 4) does not exist yet. See docs/DECISIONS.md ADR-006.",
+  "source": {
+    "frames": 300,
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "duration_seconds": 10,
+    "asset": "benchmarks/assets/source_720p_10s.mp4",
+    "generated_by": "scripts/prepare_benchmark.py (local FFmpeg, deterministic lavfi sources, no external calls)"
+  },
+  "cases": ["background_blur", "background_replacement"],
+  "metrics": [
+    "total_processing_time_seconds",
+    "frames_per_second",
+    "peak_ram_mb",
+    "cpu_usage_percent",
+    "output_file_size_bytes",
+    "audio_synchronization",
+    "frame_integrity"
+  ],
+  "recording_requirements": [
+    "Record test machine specifications (CPU, RAM, OS) with every measurement in docs/STATUS.md.",
+    "Start with sequential frame processing and bounded memory; optimize only after profiling.",
+    "Never sacrifice mask correctness or visual quality without measuring the trade-off."
+  ]
+}
