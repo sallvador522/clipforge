@@ -112,7 +112,7 @@ execution contract.
 | Plan review / approval | **Real** backend-enforced gate; no render before approval |
 | Subject detection | **SAM 3.1 live-validated on one clip**; mock mode uses two synthetic tracks |
 | Subject selection | **Real local UI/backend** (live SAM or mock detection depending on mode) |
-| Background replacement | **Local/mock assets** — **not Muse Image** |
+| Background replacement | **Muse Image when live**, local/mock asset otherwise |
 | Rendering | **Real** FFmpeg decode/encode + OpenCV compositing |
 | Audio | **Real** original audio preserved in the output |
 | Output verification | **Real** ffprobe checks; download only after verification |
@@ -240,7 +240,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **277 tests passing**. The frontend typecheck and production build
+Current backend suite: **296 tests passing**. The frontend typecheck and production build
 also pass. Browser E2E for subject selection, approval, rejection, clarification, replacement
 and unsupported flows is available in `apps/web/scripts/qa-approval.mjs` (run with the mock
 stack on `:3000`/`:8001`). No GitHub Actions or paid CI is required; checks run locally.
@@ -298,7 +298,7 @@ tests/          Backend test suite
   the overlaid-label mask artifact remain open; mock mode uses synthetic ellipses.
 - Selective person blur is not implemented. Background blur/replacement keeps selected
   subjects sharp and treats the rest of the frame.
-- Background replacement uses local/mock assets, not Muse Image.
+- Background replacement uses Muse Image when live, otherwise a local/mock asset.
 - There is no authentication/ownership model; the API is a local single-user service.
 - A hard worker crash after claiming a job can leave it in `processing` with a claim lock;
   there is no automatic stale-lock recovery.

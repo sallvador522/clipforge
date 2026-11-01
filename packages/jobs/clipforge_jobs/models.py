@@ -83,6 +83,7 @@ class JobResult(BaseModel):
     plan: EditingPlan | None = None
     segmentation: SegmentationResult | None = None
     background: BackgroundResult | None = None
+    background_generation_attempted: bool = False
     rendered: RenderResult | None = None  # set only after output verification passes
     director_plan: ProfessionalEditingPlan | None = None
     director_usage: dict | None = None

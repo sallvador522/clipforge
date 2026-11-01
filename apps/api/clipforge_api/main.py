@@ -114,12 +114,16 @@ def _capability_payload(
     capability,
     segmentation_provider,
     segmentation_result=None,
+    *,
+    background_provider=None,
+    background_result=None,
 ) -> dict:
     """Report the capability status from the provider that actually runs it.
 
-    The static registry marks subject isolation as a mock-capable executable; the
-    runtime label must follow the segmentation provider (or its persisted result)
-    so a real SAM run is never shown as MOCK/SIMULATED.
+    The static registry marks subject isolation as a mock-capable executable and
+    background replacement as a local composite. Runtime labels must follow the
+    provider (or its persisted result): real SAM / Muse Image are LIVE, synthetic
+    providers are MOCK, and a missing provider is UNAVAILABLE.
     """
     status = capability.status
     simulated = capability.simulated
@@ -128,6 +132,20 @@ def _capability_payload(
             execution_mode = "mock" if segmentation_result.is_mock else "live"
         else:
             execution_mode = getattr(segmentation_provider, "execution_mode", None)
+        if execution_mode == "live":
+            status = CapabilityStatus.AVAILABLE_LIVE
+            simulated = False
+        elif execution_mode == "mock":
+            status = CapabilityStatus.AVAILABLE_MOCK
+            simulated = True
+        else:
+            status = CapabilityStatus.DISABLED
+            simulated = True
+    elif capability.capability_id in {"background.replace", "background.generate"}:
+        if background_result is not None:
+            execution_mode = "mock" if background_result.is_mock else "live"
+        else:
+            execution_mode = getattr(background_provider, "execution_mode", None)
         if execution_mode == "live":
             status = CapabilityStatus.AVAILABLE_LIVE
             simulated = False
@@ -236,8 +254,10 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             "transcribe_mode": bundle.transcription_mode,
             "director_mode": bundle.director_mode,
             "segmentation_mode": bundle.segmentation_mode,
+            "image_mode": bundle.image_mode,
             "subject_detection_disclosure_version": SUBJECT_DETECTION_DISCLOSURE_VERSION,
             "live_transcription_available": bundle.transcription_mode == "live",
+            "live_image_available": bundle.image_mode == "live",
             "live_call_limits": budget.limits,
             "live_calls_used": {function: budget.used(function) for function in budget.limits},
             "storage_root": str(root),
@@ -404,6 +424,8 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
                         capability,
                         bundle.segmentation,
                         result.segmentation,
+                        background_provider=bundle.background,
+                        background_result=result.background,
                     )
                 )
         return JSONResponse(

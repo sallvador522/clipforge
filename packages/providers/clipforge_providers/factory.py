@@ -1,14 +1,15 @@
 """Provider mode factory (ADR-004, ADR-008, ADR-014).
 
-CLIPFORGE_AI_MODE=mock is the default. Three providers can be enabled for live
+CLIPFORGE_AI_MODE=mock is the default. Four providers can be enabled for live
 inference, explicitly and in isolation:
 
     CLIPFORGE_TRANSCRIBE_MODE=live   +   MODEL_API_KEY=...
     CLIPFORGE_DIRECTOR_MODE=live     +   MODEL_API_KEY=...
     CLIPFORGE_SEGMENTATION_MODE=live +   MODEL_API_KEY=...
+    CLIPFORGE_IMAGE_MODE=live        +   MODEL_API_KEY=...
 
-Background generation and the legacy planner stay mocked; there is never a
-silent fallback and no automatic live activation.
+The legacy planner stays mocked; there is never a silent fallback and no
+automatic live activation.
 """
 
 from __future__ import annotations
@@ -29,6 +30,12 @@ from clipforge_providers.mock import (
     MockSegmentationProvider,
     MockTranscriptionProvider,
 )
+from clipforge_providers.muse_image import (
+    DEFAULT_BASE_URL as IMAGE_DEFAULT_BASE_URL,
+    DEFAULT_MODEL as IMAGE_DEFAULT_MODEL,
+    DEFAULT_TIMEOUT_SECONDS as IMAGE_DEFAULT_TIMEOUT_SECONDS,
+    MuseImageBackgroundProvider,
+)
 from clipforge_providers.sam import (
     DEFAULT_BASE_URL as SAM_DEFAULT_BASE_URL,
     DEFAULT_MODEL as SAM_DEFAULT_MODEL,
@@ -47,6 +54,7 @@ ENV_VAR = "CLIPFORGE_AI_MODE"
 TRANSCRIBE_ENV_VAR = "CLIPFORGE_TRANSCRIBE_MODE"
 DIRECTOR_ENV_VAR = "CLIPFORGE_DIRECTOR_MODE"
 SEGMENTATION_ENV_VAR = "CLIPFORGE_SEGMENTATION_MODE"
+IMAGE_ENV_VAR = "CLIPFORGE_IMAGE_MODE"
 API_KEY_ENV_VAR = "MODEL_API_KEY"
 
 
@@ -61,6 +69,7 @@ class ProviderBundle:
     director: object | None = None
     director_mode: str = "mock"
     segmentation_mode: str = "mock"
+    image_mode: str = "mock"
 
 
 def _director_from_env() -> tuple[object, str]:
@@ -122,6 +131,31 @@ def _segmentation_from_env() -> tuple[SegmentationProvider, str]:
     )
 
 
+def _image_from_env() -> tuple[BackgroundGenerationProvider, str]:
+    selected = os.environ.get(IMAGE_ENV_VAR, "mock").strip().lower()
+    if selected == "mock":
+        return MockBackgroundGenerationProvider(), "mock"
+    if selected == "live":
+        api_key = os.environ.get(API_KEY_ENV_VAR, "")
+        if not api_key.strip():
+            raise MissingCredentialsError(
+                f"{IMAGE_ENV_VAR}=live requires {API_KEY_ENV_VAR} (server-side only). "
+                "No request was attempted."
+            )
+        provider = MuseImageBackgroundProvider(
+            api_key,
+            base_url=os.environ.get("META_IMAGE_BASE_URL", IMAGE_DEFAULT_BASE_URL),
+            model=os.environ.get("META_IMAGE_MODEL", IMAGE_DEFAULT_MODEL),
+            timeout_seconds=float(
+                os.environ.get("META_IMAGE_TIMEOUT_SECONDS", IMAGE_DEFAULT_TIMEOUT_SECONDS)
+            ),
+        )
+        return provider, "live"
+    raise ValueError(
+        f"Invalid {IMAGE_ENV_VAR}={selected!r}. Expected 'mock' (default) or 'live'."
+    )
+
+
 def _transcription_from_env() -> tuple[TranscriptionProvider, str]:
     selected = os.environ.get(TRANSCRIBE_ENV_VAR, "mock").strip().lower()
     if selected == "mock":
@@ -148,8 +182,8 @@ def get_providers(mode: str | None = None) -> ProviderBundle:
     if selected == "live":
         raise LiveProviderNotImplementedError(
             "CLIPFORGE_AI_MODE=live is not available: live inference is scoped per function "
-            f"({TRANSCRIBE_ENV_VAR}, {DIRECTOR_ENV_VAR}, {SEGMENTATION_ENV_VAR}). "
-            "Background generation and the legacy planner remain mocked (ADR-008, ADR-014, ADR-019)."
+            f"({TRANSCRIBE_ENV_VAR}, {DIRECTOR_ENV_VAR}, {SEGMENTATION_ENV_VAR}, "
+            f"{IMAGE_ENV_VAR}). The legacy planner remains mocked (ADR-008, ADR-014, ADR-019)."
         )
     if selected != "mock":
         raise ValueError(f"Invalid {ENV_VAR}={selected!r}. Expected 'mock' (default) or 'live'.")
@@ -157,15 +191,17 @@ def get_providers(mode: str | None = None) -> ProviderBundle:
     transcription, transcription_mode = _transcription_from_env()
     director, director_mode = _director_from_env()
     segmentation, segmentation_mode = _segmentation_from_env()
+    background, image_mode = _image_from_env()
     bundle = ProviderBundle(
         transcription=transcription,
         planner=MockEditingPlannerProvider(),
         segmentation=segmentation,
-        background=MockBackgroundGenerationProvider(),
+        background=background,
         mode="mock",
         transcription_mode=transcription_mode,
         director=director,
         director_mode=director_mode,
         segmentation_mode=segmentation_mode,
+        image_mode=image_mode,
     )
     return bundle

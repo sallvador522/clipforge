@@ -124,7 +124,7 @@ storage/
   Broader detection quality, 720p/occlusion behavior, the overlaid-label mask artifact and
   a follow-up cleanup existence check remain open. Mock mode remains synthetic.
 - **Selective person blur:** not implemented. The renderer can keep selected people sharp and blur/replace the background; it cannot blur chosen people while keeping the scene sharp.
-- **Muse Image:** `background.generate` is planned but disabled; replacement uses local/mock assets, never a live image model.
+- **Muse Image:** `background.generate` is an internal step of `background.replace` (Muse Image when `CLIPFORGE_IMAGE_MODE=live`, local/mock asset otherwise); one image per approved job, persisted under `jobs/<id>/background/`.
 - **Live legacy planner:** `EditingPlannerProvider` remains deterministic; live planning goes through the director.
 - **Multi-user authorization:** there is no authentication or ownership model. The API is a local single-user service; any client that knows a job id can read or decide it. This must be added before deployment beyond localhost.
 - **Live UI deployment:** `CLIPFORGE_AI_MODE=live` remains rejected; live capability is scoped per function by the two mode variables.

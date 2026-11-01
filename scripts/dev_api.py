@@ -46,8 +46,9 @@ def enforce_dev_safety() -> None:
     os.environ["CLIPFORGE_TRANSCRIBE_MODE"] = "mock"
     os.environ["CLIPFORGE_DIRECTOR_MODE"] = "mock"
     os.environ["CLIPFORGE_SEGMENTATION_MODE"] = "mock"
+    os.environ["CLIPFORGE_IMAGE_MODE"] = "mock"
     print(
-        "Dev safety: transcription/director/segmentation forced to mock. "
+        "Dev safety: transcription/director/segmentation/image forced to mock. "
         "Set CLIPFORGE_DEV_ALLOW_LIVE=1 to opt in to live."
     )
 
@@ -81,6 +82,7 @@ def main() -> int:
         f"transcribe_mode={os.environ.get('CLIPFORGE_TRANSCRIBE_MODE', 'mock')} | "
         f"director_mode={os.environ.get('CLIPFORGE_DIRECTOR_MODE', 'mock')} | "
         f"segmentation_mode={os.environ.get('CLIPFORGE_SEGMENTATION_MODE', 'mock')} | "
+        f"image_mode={os.environ.get('CLIPFORGE_IMAGE_MODE', 'mock')} | "
         f"MODEL_API_KEY={'present' if key_present else 'missing'}"
     )
     print("No live request is made by this launcher.")

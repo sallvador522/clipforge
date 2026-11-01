@@ -37,7 +37,10 @@ def test_cinematic_edl_labels_simulation():
     )
     replace = next(d for d in edl.decisions if d.capability_id == "background.replace")
     assert replace.params.asset_source == "mock_generated"  # type: ignore[attr-defined]
-    assert "simulated" in replace.transparency.why.lower() or "simulated" in replace.transparency.operator_message.lower()
+    why = replace.transparency.why.lower()
+    assert "after approval" in why
+    assert "muse image when live" in why
+    assert "local mock" in why
 
 
 def test_non_ready_transcripts_have_no_edl():

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -293,11 +295,20 @@ class MockBackgroundGenerationProvider:
     """Returns a real local background image file plus simulated generation metadata."""
 
     provider_name = "mock-background-generation"
+    execution_mode = "mock"
 
     def __init__(self, assets_dir: str | Path = DEFAULT_BACKGROUND_ASSETS_DIR) -> None:
         self._assets_dir = Path(assets_dir)
 
-    def generate(self, *, prompt: str, orientation: str = "landscape") -> BackgroundResult:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        orientation: str = "landscape",
+        output_dir: str | Path | None = None,
+        job_id: str | None = None,
+        authorization=None,
+    ) -> BackgroundResult:
         if orientation not in _BACKGROUNDS:
             raise ValueError(f"orientation must be one of {sorted(_BACKGROUNDS)}; got {orientation!r}.")
         filename, width, height, simulated_prompt = _BACKGROUNDS[orientation]
@@ -306,13 +317,32 @@ class MockBackgroundGenerationProvider:
             raise FileNotFoundError(
                 f"Mock background asset missing: {path}. Run scripts/generate_background_assets.py first."
             )
-        return BackgroundResult(
+        result_path = path
+        if output_dir is not None:
+            root = Path(output_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            result_path = root / "background.png"
+            shutil.copyfile(path, result_path)
+        image_sha256 = _sha256(result_path)
+        result = BackgroundResult(
             asset_id=f"mock-bg-{orientation}",
-            image_path=str(path),
+            image_path=str(result_path),
             width=width,
             height=height,
             orientation=orientation,  # type: ignore[arg-type]
             simulated_prompt=prompt or simulated_prompt,
             provider_name=self.provider_name,
             is_mock=True,
+            model=self.provider_name,
+            prompt=prompt,
+            effective_prompt=prompt or simulated_prompt,
+            output_format="png",
+            size_requested=f"{width}x{height}",
+            image_sha256=image_sha256,
+            generated_at=datetime.now(timezone.utc),
         )
+        if output_dir is not None:
+            (Path(output_dir) / "background.json").write_text(
+                result.model_dump_json(indent=2), encoding="utf-8"
+            )
+        return result

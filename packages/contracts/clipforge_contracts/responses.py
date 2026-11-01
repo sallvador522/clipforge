@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -83,3 +84,13 @@ class BackgroundResult(BaseModel):
     simulated_prompt: str
     provider_name: str
     is_mock: bool
+    model: str | None = None
+    request_id: str | None = None
+    prompt: str | None = None
+    effective_prompt: str | None = None
+    revised_prompt: str | None = None
+    output_format: str | None = None
+    size_requested: str | None = None
+    image_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    generated_at: datetime | None = None
+    usage: dict | None = None

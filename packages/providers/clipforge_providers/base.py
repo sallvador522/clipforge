@@ -41,4 +41,12 @@ class SegmentationProvider(Protocol):
 
 @runtime_checkable
 class BackgroundGenerationProvider(Protocol):
-    def generate(self, *, prompt: str, orientation: str = "landscape") -> BackgroundResult: ...
+    def generate(
+        self,
+        *,
+        prompt: str,
+        orientation: str = "landscape",
+        output_dir: str | Path | None = None,
+        job_id: str | None = None,
+        authorization=None,
+    ) -> BackgroundResult: ...

@@ -63,7 +63,7 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 
 | Endpoint | Status | Purpose |
 |---|---|---|
-| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, subject_detection_disclosure_version, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
+| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, image_mode, subject_detection_disclosure_version, live_transcription_available, live_image_available, live_call_limits, live_calls_used, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
 | `POST /api/jobs/{job_id}/voice` | live | Body with exactly one of `{audio_fixture_id}` or `{transcript, transcription_session_id?}`, plus optional `subject_detection_consent: boolean`. When segmentation is live, consent must be exactly `true` or the request returns 422 `subject_detection_consent_required` before the job is made ready; no worker/segmentation is scheduled. With true consent, a source-bound consent record is persisted atomically with the instruction. Mock segmentation requires no consent. 409 if not queued/awaiting. |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`, `completed`, `failed`, plus `stage` progress detail |
@@ -95,7 +95,7 @@ Director contracts are internal Pydantic models. Since 6C, `GET /api/jobs/{job_i
 `packages/contracts/clipforge_contracts/capabilities.py` is authoritative. Statuses:
 `available_mock`, `available_local`, `available_live`, `planned`, `disabled`.
 
-Executable now: `subject.isolate` (synthetic mock masks by default, real SAM when live mode is explicitly enabled), `background.blur`, `background.replace` (local/mock assets, **not Muse Image**), `audio.preserve`, `video.render_mp4`, `output.verify` - all local except segmentation. Planned: `background.generate`. Disabled: scene cuts, trimming, transitions, keyframes, multi-track, colour grading, speed ramps, audio mixing, animated captions. Disabled/planned capabilities can be named in explanations but cannot be planned or executed.
+Executable now: `subject.isolate` (synthetic mock masks by default, real SAM when live mode is explicitly enabled), `background.blur`, `background.replace` (generated background: Muse Image when live, local/mock asset otherwise), `audio.preserve`, `video.render_mp4`, `output.verify` - all local except segmentation and image generation. Planned: `background.generate` (internal step of `background.replace`, never planned separately). Disabled: scene cuts, trimming, transitions, keyframes, multi-track, colour grading, speed ramps, audio mixing, animated captions. Disabled/planned capabilities can be named in explanations but cannot be planned or executed.
 
 ### ProfessionalEditingPlan v2
 
@@ -160,6 +160,6 @@ Live SAM detection requires a persisted `SubjectDetectionConsent` bound to:
 
 Live status: no live call has been made. Detection quality, live stream behaviour, the exact nested `expires_after` multipart encoding, and live cleanup are unverified.
 
-## Muse Image Mapping (TBD)
+## Muse Image Mapping
 
-No mapping exists for image generation. It will be written only after official documentation verification of request/response schemas, supported media inputs, mask/asset handling, sync vs async execution, polling, rate limits and pricing. Until then replacement keeps using local/mock assets and no Muse Image adapter may be built against an assumed schema.
+Official schema verified 2026-11-01: `POST /v1/images/generations` with `model=muse-image-1.0`, text-only `prompt`, `n=1`, `response_format=b64_json`, `output_format=png`, aspect-ratio `size` (`1536x1024` landscape / `1024x1536` portrait; returned pixels are the generator's own resolution). Response `data[0].b64_json` is Base64-decoded, PNG-validated, hashed and persisted under `jobs/<id>/background/`. Generation runs once per approved job via a one-shot `image` ledger authorization; failures are terminal with no mock fallback. Flat price $0.01 per generated image; no live request has been made yet.

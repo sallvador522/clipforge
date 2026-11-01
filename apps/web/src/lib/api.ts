@@ -41,7 +41,9 @@ export interface TranscriptionConfig {
   transcribe_mode: "mock" | "live";
   director_mode?: "mock" | "live";
   segmentation_mode?: "mock" | "live";
+  image_mode?: "mock" | "live";
   live_transcription_available: boolean;
+  live_image_available?: boolean;
 }
 
 /** Real upload with real progress events (XMLHttpRequest; fetch cannot report upload progress). */

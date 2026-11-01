@@ -15,6 +15,16 @@ from clipforge_providers.mock import (
     MockSegmentationProvider,
     MockTranscriptionProvider,
 )
+from clipforge_providers.muse_image import (
+    MuseImageAPIError,
+    MuseImageBackgroundProvider,
+    MuseImageError,
+    MuseImageMissingCredentialsError,
+    MuseImageNotAuthorizedError,
+    MuseImageRateLimitedError,
+    MuseImageTimeoutError,
+    MuseImageValidationError,
+)
 from clipforge_providers.sam import (
     SamAPIError,
     SamError,
@@ -48,6 +58,14 @@ __all__ = [
     "MockEditingPlannerProvider",
     "MockSegmentationProvider",
     "MockTranscriptionProvider",
+    "MuseImageAPIError",
+    "MuseImageBackgroundProvider",
+    "MuseImageError",
+    "MuseImageMissingCredentialsError",
+    "MuseImageNotAuthorizedError",
+    "MuseImageRateLimitedError",
+    "MuseImageTimeoutError",
+    "MuseImageValidationError",
     "ProviderBundle",
     "SamAPIError",
     "SamError",

@@ -69,18 +69,20 @@ class TestScenarioB:
 
 
 class TestScenarioC:
-    def test_cinematic_sunset_uses_mock_generated_asset(self):
+    def test_cinematic_sunset_uses_generated_background(self):
         p = plan("Put me in a cinematic sunset in Luanda, keep my face sharp.")
         assert p.outcome is PlanOutcome.PLAN_READY
         replace = next(op for op in p.operations if op.capability_id == "background.replace")
         assert replace.params.asset_source == "mock_generated"
         assert "luanda" in replace.params.prompt.lower()
-        assert "no image model is called" in p.summary_explanation
-        assert "simulated" in p.summary_explanation.lower()
+        assert "after approval" in p.summary_explanation.lower()
+        assert "muse image when live" in p.summary_explanation.lower()
+        assert "local mock" in p.summary_explanation.lower()
 
-    def test_does_not_claim_real_image_generation(self):
+    def test_does_not_claim_generation_already_happened(self):
         p = plan("Put me in a cinematic sunset in Luanda, keep my face sharp.")
-        assert all("muse image" not in exp.lower() or "not" in exp.lower() for exp in p.explanations)
+        assert all("already generated" not in exp.lower() for exp in p.explanations)
+        assert any("after approval" in exp.lower() for exp in p.explanations)
 
 
 class TestScenarioD:

@@ -12,8 +12,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from PIL import Image
+
 from clipforge_contracts import (
     ApprovalStatus,
+    BackgroundResult,
     ConsentValidationError,
     EditingIntent,
     PlanOutcome,
@@ -121,6 +124,97 @@ class JobProcessor:
                 )
         return source_path
 
+    @staticmethod
+    def _validate_background_asset(background: BackgroundResult) -> None:
+        path = Path(background.image_path)
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError("Generated background image is missing or empty; refusing to render.")
+        try:
+            with Image.open(path) as image:
+                if image.format != "PNG":
+                    raise ValueError(
+                        f"Generated background must be PNG; got {image.format or 'unknown'}."
+                    )
+                width, height = image.size
+                image.verify()
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                "Generated background image is corrupt or unreadable; refusing to render."
+            ) from exc
+        if (width, height) != (background.width, background.height):
+            raise ValueError(
+                "Generated background dimensions do not match its provenance record."
+            )
+        if background.image_sha256 and sha256_file(path) != background.image_sha256:
+            raise ValueError(
+                "Generated background hash does not match its provenance record."
+            )
+
+    def _background_sidecar_path(self, job_id: str) -> Path:
+        return self.store.job_dir(job_id) / "background" / "background.json"
+
+    def _recover_background(self, job_id: str) -> BackgroundResult | None:
+        sidecar = self._background_sidecar_path(job_id)
+        if not sidecar.is_file():
+            return None
+        try:
+            background = BackgroundResult.model_validate_json(
+                sidecar.read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Persisted background provenance is unreadable; refusing to regenerate."
+            ) from exc
+        self._validate_background_asset(background)
+        return background
+
+    def _get_or_generate_background(
+        self,
+        job_id: str,
+        base: JobResult,
+        *,
+        prompt: str,
+        orientation: str,
+    ) -> tuple[BackgroundResult, JobResult]:
+        if base.background is not None:
+            self._validate_background_asset(base.background)
+            return base.background, base
+
+        recovered = self._recover_background(job_id)
+        if recovered is not None:
+            base = base.model_copy(update={"background": recovered})
+            self.store.update(job_id, result=base)
+            return recovered, base
+
+        if base.background_generation_attempted:
+            raise ValueError(
+                "Background generation was already attempted for this job; refusing to "
+                "regenerate. No local fallback asset will be used."
+            )
+
+        # Persist the one-shot marker before any billable request.
+        base = base.model_copy(update={"background_generation_attempted": True})
+        self.store.update(job_id, result=base)
+
+        authorization = None
+        if getattr(self.providers, "image_mode", "mock") == "live":
+            authorization = LiveCallAuthorization(
+                LiveCallBudget(self.store.root), "image"
+            )
+        background = self.providers.background.generate(
+            prompt=prompt,
+            orientation=orientation,
+            output_dir=self.store.job_dir(job_id) / "background",
+            job_id=job_id,
+            authorization=authorization,
+        )
+        self._validate_background_asset(background)
+        base = base.model_copy(update={"background": background})
+        self.store.update(job_id, result=base)
+        return background, base
+
     def _run_segmentation(self, job_id: str, record):
         info = record.source_info
         source_path = self._canonical_source_path(record)
@@ -214,7 +308,9 @@ class JobProcessor:
                 (op.prompt for op in plan.operations if op.type == "replace_background"),
                 "professional studio background",
             )
-            background = self.providers.background.generate(
+            background, base = self._get_or_generate_background(
+                job_id,
+                base,
                 prompt=prompt,
                 orientation="landscape" if info.width >= info.height else "portrait",
             )

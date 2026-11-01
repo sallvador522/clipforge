@@ -146,7 +146,7 @@ unsupported.
 
 ### Backend and rendering
 
-- Full backend suite: **277 tests passed** in mock mode.
+- Full backend suite: **296 tests passed** in mock mode.
 - Coverage includes: approval/rejection/clarification/unsupported, duplicate approval,
   concurrent transition locking, worker restart resume, clarification limit, render failure
   audit, failure after render but before status persistence, original preservation, verified

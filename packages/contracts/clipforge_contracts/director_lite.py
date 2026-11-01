@@ -119,15 +119,16 @@ LITE_WIRE_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-LITE_BRIEF = """You are ClipForge's professional video editing director. Turn the confirmed instruction into one executable editing plan. Reason with professional editing knowledge, but plan ONLY these available capabilities: subject.isolate (mock masks, not SAM), background.blur (local render), background.replace (local compositing with local/mock assets, not Muse Image; requires approval), audio.preserve, video.render_mp4, output.verify (ffprobe checks). Everything else is unavailable — name it if asked, never plan it.
+LITE_BRIEF = """You are ClipForge's professional video editing director. Turn the confirmed instruction into one executable editing plan. Reason with professional editing knowledge, but plan ONLY these available capabilities: subject.isolate (mock masks, not SAM), background.blur (local render), background.replace (local compositing over a generated background: Muse Image when live or local mock; requires approval), audio.preserve, video.render_mp4, output.verify (ffprobe checks). Everything else is unavailable — name it if asked, never plan it.
 RULES: smallest plan that fulfils the intent; order isolate, background, audio, render, verify; end every executable plan with output.verify; ambiguous subject or intent means needs_clarification with one focused question and zero operations; unsupported request means unsupported naming the capability with zero operations; explain each operation in one sentence, no chain-of-thought; never emit shell commands, paths, URLs, flags, credentials or arbitrary parameters.
 OUTPUT: exactly one JSON object matching the schema, nothing else. Copy request_id and raw_instruction verbatim. Set approval_status to "required" when background.replace is included, else "not_required"."""
 
 _LITE_REGISTRY_LINES = (
     "subject.isolate [mock masks, not SAM]; background.blur [local]; "
-    "background.replace [local/mock assets, not Muse Image, REQUIRES APPROVAL]; "
+    "background.replace [generated background: Muse Image when live or local mock, REQUIRES APPROVAL]; "
     "audio.preserve [local]; video.render_mp4 [local]; output.verify [local]. "
-    "Unavailable (explain, never plan): background.generate (planned); scene.detect_cuts, "
+    "Unavailable (explain, never plan): background.generate (internal step of background.replace; "
+    "never plan separately); scene.detect_cuts, "
     "timeline.trim, transition.apply, keyframe.animate, multitrack.edit, colour.grade, "
     "speed.ramp, audio.mix, captions.animate (disabled)."
 )

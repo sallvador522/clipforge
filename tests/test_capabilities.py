@@ -53,15 +53,17 @@ def test_local_capabilities_are_not_live_ai():
         assert capability.status is not CapabilityStatus.AVAILABLE_LIVE
 
 
-def test_background_replacement_uses_local_assets_not_muse_image():
+def test_background_replacement_uses_configured_generation_provider():
     replace = get_capability("background.replace")
     assert replace is not None
     assert replace.status is CapabilityStatus.AVAILABLE_LOCAL
-    assert "not Muse Image" in replace.description
+    assert "Muse Image" in replace.description
+    assert "configured provider" in replace.description
     assert replace.requires_approval is True
-    planned_generation = get_capability("background.generate")
-    assert planned_generation is not None
-    assert planned_generation.status is CapabilityStatus.PLANNED
+    generation = get_capability("background.generate")
+    assert generation is not None
+    assert generation.status is CapabilityStatus.PLANNED
+    assert "internal step" in generation.description
 
 
 def test_disabled_capabilities_have_no_handler_and_are_never_executable():

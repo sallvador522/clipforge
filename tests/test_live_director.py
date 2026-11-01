@@ -56,7 +56,7 @@ def test_live_budget_is_per_function(tmp_path):
 def test_live_budget_env_limit_is_applied(monkeypatch, tmp_path):
     monkeypatch.setenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", "3")
     budget = LiveCallBudget(tmp_path / "storage")
-    assert budget.limits == {"transcription": 3, "director": 2, "segmentation": 2}
+    assert budget.limits == {"transcription": 3, "director": 2, "segmentation": 2, "image": 2}
     assert [budget.reserve("transcription") for _ in range(3)] == [1, 2, 3]
     with pytest.raises(LiveBudgetExceeded):
         budget.reserve("transcription")

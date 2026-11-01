@@ -160,7 +160,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (277 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (296 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6C — Plan Review, Approval & Resume (complete, mock mode)
@@ -182,7 +182,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Frontend typecheck and production build.
 - [x] Docs: ADR-018, PRODUCT_AUDIT, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README.
 - [x] Real SAM 3.1 provider + official parser + subject selection implemented and offline-validated in 6D; live inference was validated later on 2026-11-01.
-- [ ] Muse Image background generation - planned, not implemented.
+- [x] Muse Image 1.0 background provider implemented and offline-validated (ADR-021); live request pending.
 - [ ] Authentication/ownership for multi-user deployment — not implemented.
 - [ ] Automatic stale-claim recovery after a hard crash mid-render — not implemented.
 
@@ -208,12 +208,12 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Regression tests: missing/false consent, no ready/worker, valid persistence, changed source, another-job reuse, approval-without-consent, worker refusal, provider refusal before upload, mock no-consent. Browser E2E desktop/mobile + mock no-dialog + zero `api.meta.ai` requests.
 - [x] Quick consent-gate verification (2026-11-01): targeted consent tests, typecheck/build and focused browser check; no live call.
 - [x] **Live SAM 3.1 validation (2026-11-01) - SUCCESS on attempt 1.** One real inference (HTTP 200, request id `a6b54e67-61d4-4779-9fcc-80563b7166c9`) detected 2 subjects (IDs `0`, `1`), 177/177 frames each; real masks, manifests and previews; person A, person B and both rendered with original audio preserved. Ledger segmentation 1/2; no retry. See `docs/SAM_31_LIVE_TEST_REPORT.md`.
-- [x] **SAM demo stabilization (2026-11-01):** original upload is the canonical render source; the SAM provider still uploads only a temporary video-only copy. Worker verifies source hash, mask provenance, dimensions, frame count and FPS before rendering. New API→worker→render regression compares decoded PCM with the original. Capability badges derive from actual provider/result metadata (LIVE/MOCK/UNAVAILABLE). Overlaid-label mask holes documented; no dilation or artificial fill added. **277 tests**, typecheck and build pass.
-- [ ] Muse Image background generation - planned, not implemented.
+- [x] **SAM demo stabilization (2026-11-01):** original upload is the canonical render source; the SAM provider still uploads only a temporary video-only copy. Worker verifies source hash, mask provenance, dimensions, frame count and FPS before rendering. New API→worker→render regression compares decoded PCM with the original. Capability badges derive from actual provider/result metadata (LIVE/MOCK/UNAVAILABLE). Overlaid-label mask holes documented; no dilation or artificial fill added. **296 tests**, typecheck and build pass.
+- [x] **Muse Image 1.0 integration (2026-11-01):** official `POST /v1/images/generations` with `muse-image-1.0`, `n=1`, PNG/Base64, text-only prompts, aspect-ratio `size`, tool disablement, one image per approved job, job-local image + provenance sidecar, idempotent worker marker, `image` ledger slot (`0/2` used), mock/live separation, full-workflow composition with SAM masks and audio preservation. **296 tests**, typecheck and build pass. No live image request made.
 - [ ] Authentication/ownership and stale-claim recovery - not implemented.
 
 ## Milestone 6 - Live Integration Gate (SAM live-validated 2026-11-01)
 - [x] Verify official Meta documentation for Muse Voice Transcribe and Muse Spark; implement live adapters with budget tracking and no automatic billable retries (ADR-008, ADR-014, ADR-017).
 - [x] Verify official SAM 3.1 documentation and implement the adapter + parser + mask conversion (ADR-019); offline validation complete and one live inference validated on 2026-11-01.
-- [ ] Verify official Muse Image documentation; keep local/mock assets until then.
+- [x] Verify official Muse Image 1.0 documentation and implement the adapter, PNG/Base64 validation, provenance persistence, idempotent one-per-job generation and `image` budget slot (ADR-021); no live request made.
 - [ ] Propose one controlled SAM integration test and obtain explicit user approval before any live call.
