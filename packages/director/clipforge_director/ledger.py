@@ -1,8 +1,14 @@
 """Live-call budget ledger (per-function caps, atomic, no network).
 
-Used to enforce the phase limits (max 2 live transcription calls and max 2 live
-director calls). Reserved BEFORE the network call; a refused reservation raises
-without touching the provider.
+Defaults are the phase limits (2 live transcription + 2 live director calls).
+For explicit local testing, each cap can be raised with an environment variable:
+
+    CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT=100
+    CLIPFORGE_LIVE_DIRECTOR_LIMIT=25
+
+A reservation is written immediately before the network call; a refused
+reservation raises without touching the provider. The ledger is never reset
+automatically — raising a limit does not erase usage history.
 """
 
 from __future__ import annotations
@@ -12,13 +18,37 @@ import os
 from pathlib import Path
 
 DEFAULT_LIMITS = {"transcription": 2, "director": 2}
+LIMIT_ENV_VARS = {
+    "transcription": "CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT",
+    "director": "CLIPFORGE_LIVE_DIRECTOR_LIMIT",
+}
+
+
+def _env_limit(function: str) -> int | None:
+    env_var = LIMIT_ENV_VARS[function]
+    raw = os.environ.get(env_var)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{env_var} must be a positive integer, got {raw!r}.") from exc
+    if value < 1:
+        raise ValueError(f"{env_var} must be a positive integer, got {raw!r}.")
+    return value
 
 
 class LiveBudgetExceeded(RuntimeError):
     def __init__(self, function: str, limit: int) -> None:
+        env_var = LIMIT_ENV_VARS.get(function)
+        hint = (
+            f" Increase {env_var} and reset the ledger only with approval."
+            if env_var
+            else " A new phase needs fresh approval."
+        )
         super().__init__(
             f"Live-call budget exhausted for {function!r}: limit {limit} reached. "
-            "No request was attempted; a new phase needs fresh approval."
+            f"No request was attempted.{hint}"
         )
         self.function = function
         self.limit = limit
@@ -29,8 +59,17 @@ class LiveCallBudget:
         self._path = Path(storage_root) / "live-call-ledger.json"
         self._lock = self._path.with_suffix(".lock")
         self._limits = dict(DEFAULT_LIMITS)
+        for function in self._limits:
+            override = _env_limit(function)
+            if override is not None:
+                self._limits[function] = override
         if limits:
             self._limits.update(limits)
+
+    @property
+    def limits(self) -> dict[str, int]:
+        """Configured caps (defaults + environment overrides + explicit limits)."""
+        return dict(self._limits)
 
     def _read(self) -> dict[str, int]:
         if not self._path.is_file():

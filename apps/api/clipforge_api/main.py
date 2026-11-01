@@ -114,12 +114,15 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
 
     @app.get("/health")
     async def health() -> dict:
+        budget = LiveCallBudget(root)
         return {
             "status": "ok",
             "ai_mode": bundle.mode,
             "transcribe_mode": bundle.transcription_mode,
             "director_mode": bundle.director_mode,
             "live_transcription_available": bundle.transcription_mode == "live",
+            "live_call_limits": budget.limits,
+            "live_calls_used": {function: budget.used(function) for function in budget.limits},
             "storage_root": str(root),
         }
 

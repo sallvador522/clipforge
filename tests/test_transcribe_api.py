@@ -62,11 +62,15 @@ def post_audio(client, path: Path, fixture: str | None = "pt_keep_me_sharp"):
         return client.post("/api/transcribe", files={"file": ("voice.webm", fh, "audio/webm")}, data=data)
 
 
-def test_health_reports_transcription_mode(tmp_path):
+def test_health_reports_transcription_mode(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", raising=False)
+    monkeypatch.delenv("CLIPFORGE_LIVE_DIRECTOR_LIMIT", raising=False)
     body = make_app(tmp_path).get("/health").json()
     assert body["transcribe_mode"] == "mock"
     assert body["director_mode"] == "mock"
     assert body["live_transcription_available"] is False
+    assert body["live_call_limits"] == {"transcription": 2, "director": 2}
+    assert body["live_calls_used"] == {"transcription": 0, "director": 0}
 
 
 def test_conversion_produces_mono_24k_pcm16(spoken_webm, tmp_path):

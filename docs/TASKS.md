@@ -100,9 +100,11 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] End-to-end run: Portuguese audio → ASR → Muse plan (5 operations) → real blur render → verified download (320×180, 20 frames, 2.0 s, audio, 36,998 bytes).
 - [x] Verification: 191 backend tests, frontend typecheck + production build, independent ffprobe and frame inspection.
 - [x] Docs: LIVE_E2E report, STATUS, TASKS, DECISIONS ADR-014, ARCHITECTURE, API_CONTRACTS.
+- [x] ADR-015: configurable live-call limits (`CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT`, `CLIPFORGE_LIVE_DIRECTOR_LIMIT`), default 2/2; local test phase 100/25; phase-005 ledger archived and active ledger reset to 0/0 with user approval.
+- [x] `/health` exposes `live_call_limits` and `live_calls_used`; ledger tests cover env overrides, explicit overrides and invalid values.
+- [ ] After user testing: review real usage/cost and either restore the 2/2 defaults or open a new approved phase.
 - [ ] SAM 3.1 segmentation — blocked on explicit approval; required for real subject tracking.
 - [ ] Approval/rejection endpoint + UI to resume `awaiting_approval` jobs — future milestone.
-- [ ] Reset the live-call ledger only as part of a newly approved phase.
 
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 

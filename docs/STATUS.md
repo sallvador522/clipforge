@@ -5,7 +5,8 @@
 - **AI mode:** `CLIPFORGE_AI_MODE=mock`; transcription and the director are the only live-capable providers, enabled in isolation. Segmentation, background generation and the legacy planner remain mocked.
 - **Milestones 0–6B-LIVE:** complete through LIVE-E2E 005 — real Portuguese audio → Muse Spark plan → real blur render → verified download. Director usage 2,781 in / 1,856 out = **$0.000649**; ASR **$0.000184**; run total **$0.000833**. Full log: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** SAM 3.1 segmentation — **blocked on explicit approval**. The director path is proven end-to-end; live planning uses the lite schema, cap 16,000. One live call per function remains in the current ledger.
+- **Next milestone:** SAM 3.1 segmentation — **blocked on explicit approval**. The director path is proven end-to-end; live planning uses the lite schema, cap 16,000.
+- **Local user-testing phase (2026-11-01):** the fixed 2-call caps blocked a UI retry, so ADR-015 makes them configurable. `.env` currently sets **100 transcription + 25 director**; the phase-005 ledger (`2/1`) is archived and the active ledger is `0/0`. Defaults for a fresh checkout remain 2/2.
 
 ## What Exists
 
@@ -41,7 +42,7 @@
 - **Plan:** 5 operations (`subject.isolate`, `background.blur`, `audio.preserve`, `video.render_mp4`, `output.verify`), approval `not_required`; 4,637 tokens, $0.000649, request `req_2c45fa340028`.
 - **Output:** 320×180, 10 FPS, 20 frames, 2.000 s, 36,998 bytes, audio preserved, download HTTP 200; frame inspected (subject sharp, background blurred). Job `6b9e2dc1a95a4a60839b1312e34fc592`.
 - **Wiring:** `CLIPFORGE_DIRECTOR_MODE=mock|live` (default `mock`). Live plans are validated as v2 then adapted to v1 for execution. Approval-required/rejected plans complete as `awaiting_approval` with no render. Clarification/unsupported complete without rendering. `director_plan`, `director_usage` and `director_request_id` are persisted in the job result.
-- **Budget protection:** `storage/live-call-ledger.json` caps each function at 2 calls. Reservation occurs immediately before the network request; refusal returns an explicit error without a provider call. No automatic retries.
+- **Budget protection:** `storage/live-call-ledger.json` enforces per-function caps (defaults 2/2; local testing 100/25 via `CLIPFORGE_LIVE_*_LIMIT`, ADR-015). Reservation occurs immediately before the network request; refusal returns an explicit error without a provider call. No automatic retries. `/health` reports the configured limits and usage.
 - **Defects fixed:** WAV temporary input/output shared the same filename (FFmpeg refused; no network call made) — input is now `upload{suffix}`; budget reservation moved after local conversion; dev launchers load `.env` and `packages/director`.
 - **Verification:** 191 backend tests, frontend typecheck + production build, independent ffprobe + frame inspection, browser smoke at `:3000` (all five regions, LIVE TRANSCRIPTION badge, `/health` on `:8001`, zero console errors). Full report: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
 - **Limitations:** mock segmentation is a synthetic ellipse (not SAM); replacement backgrounds remain local/mock (not Muse Image); approval is backend-only (no resume endpoint/UI). SAM 3.1 waits for explicit approval.
@@ -53,7 +54,7 @@
 - Mode selection: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) / `live` + `MODEL_API_KEY`. Missing key fails before any request. Other providers stay mock. No silent fallback.
 - Safety: no automatic retries, timeouts mapped to 504, 429 mapped to `transcription_rate_limited`, API errors to 502; `sessionId` logged (never key/audio); mock never interprets audio (requires explicit fixture, labelled MOCK).
 - Tests: 18 new (multipart/language bias/normalization, invalid audio, missing key, timeout, 429, API error, mock network isolation, provider selection, exactly-one-request, confirmed-transcript planning).
-- **First live calls made in LIVE-E2E 005:** one transcription request, 3,680 ms, measured cost **$0.000184**. The earlier 5 s estimate (≈ $0.00025) was not used. The ledger caps transcription at 2 calls per phase; one remains.
+- **First live calls made in LIVE-E2E 005:** one transcription request, 3,680 ms, measured cost **$0.000184**. The earlier 5 s estimate (≈ $0.00025) was not used. The default cap remains 2 per phase; the current local test phase uses 100 transcription calls (ADR-015).
 - **WAV bug fixed:** the temporary input is `upload{suffix}` and the converted output is `recording.wav`; a regression test covers `.wav` uploads.
 
 ### Live UI readiness (historical, dummy key)
@@ -103,4 +104,4 @@ For live runs, set `CLIPFORGE_TRANSCRIBE_MODE=live` and/or `CLIPFORGE_DIRECTOR_M
 
 ## Handoff
 
-Read AGENTS.md, this file, TASKS.md and `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`. The MVP loop is demonstrable with real rendering; the voice → Muse Spark → render path has been executed once end-to-end in live mode. Defaults remain mock. Next step is SAM 3.1, and only with explicit approval; do not reset the ledger or make further live calls without approval. The local `.env` used for the demonstrated run had transcription and director live; one spare call per function remains.
+Read AGENTS.md, this file, TASKS.md and `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`. The MVP loop is demonstrable with real rendering; the voice → Muse Spark → render path has been executed once end-to-end in live mode. Defaults remain mock. Next step is SAM 3.1, and only with explicit approval. The local `.env` has transcription and director live with testing caps 100/25; the active ledger is `0/0` (phase 005 archived). Do not increase limits or reset the ledger again without approval.

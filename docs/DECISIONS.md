@@ -114,6 +114,18 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
   - **Budget protection:** `storage/live-call-ledger.json` caps live transcription and director calls at 2 each per phase. A reservation is written atomically immediately before the provider network call; an exhausted cap raises `LiveBudgetExceeded` / HTTP 429 `live_budget_exhausted` with zero provider calls. No automatic retries.
   - **Scope:** fixed a real WAV temp-name collision (input `upload{suffix}`, converted output `recording.wav`) that failed before any network call; added regression tests. No SAM, Muse Image, ElevenLabs, new AI provider or renderer change.
 - **Evidence (LIVE-E2E 005):** Portuguese audio 3.680 s → transcript → 5-operation plan → real blur render → verified download. ASR $0.000184; director 2,781 in / 1,856 out = $0.000649; total $0.000833. Output 320×180, 10 FPS, 20 frames, 2.000 s, 36,998 bytes, audio preserved. Ledger 1/1. 191 backend tests, frontend typecheck and production build pass; output re-probed and a frame inspected. Full log: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
-- **Consequences:** The voice → director → render path is proven for blur. Real subject tracking still requires SAM 3.1 (mock segmentation remains an ellipse), replacement backgrounds remain local/mock, and approval is backend-only. One live call per function remains; a new phase needs fresh approval and a deliberate ledger reset.
+- **Consequences:** The voice → director → render path is proven for blur. Real subject tracking still requires SAM 3.1 (mock segmentation remains an ellipse), replacement backgrounds remain local/mock, and approval is backend-only. One live call per function remained at the end of the phase; a new phase needs fresh approval and a deliberate ledger reset (see ADR-015 for the user-testing phase).
+
+## ADR-015: Configurable Live-Call Limits for Local Testing
+- **Status:** Approved and applied at the user's explicit request (2026-11-01), after the phase-005 cap blocked a UI retry.
+- **Context:** ADR-014 fixed each live function at 2 calls. The user used the spare transcription call while testing the UI and hit `429 live_budget_exhausted`. They asked to remove the block so they can test repeatedly.
+- **Decision:**
+  - **Default safety unchanged:** `DEFAULT_LIMITS` remains 2 transcription + 2 director per phase. A fresh checkout with no overrides keeps the original protection.
+  - **Per-function overrides:** `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT` and `CLIPFORGE_LIVE_DIRECTOR_LIMIT` accept positive integers. Explicit `LiveCallBudget(..., limits={...})` overrides the environment (used by tests). Invalid values fail with a clear `ValueError`.
+  - **Ledger unchanged:** the file ledger still reserves atomically immediately before the network call and never resets automatically. Raising a limit does not erase usage history.
+  - **Current local test phase:** `.env` sets 100 transcription + 25 director. The phase-005 ledger (`2` transcription, `1` director) was archived to `storage/live-call-ledger.phase-005.json` and the active ledger reset to `0/0` with the user's approval.
+  - **Observability:** `GET /health` now reports `live_call_limits` and `live_calls_used`.
+- **Rationale for a high-but-finite cap:** at measured rates, 100 four-second ASR calls cost ≈ $0.02 and 25 director calls ≈ $0.016, so the worst case of this test phase is **under $0.04** — while a runaway loop still stops. This is a testing override, not a removal of budget protection.
+- **Consequences:** The UI retry now works. If the user reaches 100/25, raise the variables and reset the ledger only with fresh approval. The SAM 3.1 gate and all other ADR-014 rules are unchanged.
 
 

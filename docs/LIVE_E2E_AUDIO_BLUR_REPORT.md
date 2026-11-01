@@ -106,5 +106,18 @@ durations/tokens, not a substitute for the Meta billing panel.
   implemented; it waits for explicit approval.
 - Background replacement still uses a local/mock asset, not Muse Image.
 - The approval gate is backend-only; there is no UI/endpoint to approve and resume a plan yet.
-- One transcription and one director call remain under the current ledger; a new phase needs fresh
+- One transcription and one director call remained under the phase-005 ledger; a new phase needs fresh
   approval and a ledger reset.
+
+## Follow-up — local user testing (same day)
+
+The user used the spare transcription call while testing the UI and hit `429 live_budget_exhausted` at the
+2-call cap. At their explicit request, ADR-015 made the caps configurable:
+
+- `.env` now sets **100 transcription + 25 director** calls; defaults remain 2/2 for a fresh checkout.
+- Phase-005 counts (`transcription=2`, `director=1`) were archived to
+  `storage/live-call-ledger.phase-005.json`; the active ledger was reset to `0/0`.
+- `GET /health` reports `live_call_limits` and `live_calls_used`.
+- Worst-case cost of the 100/25 test phase at measured rates is **under $0.04**.
+
+The measurements in this report describe the original LIVE-E2E 005 run and are unchanged.

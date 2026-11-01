@@ -21,6 +21,12 @@ from clipforge_providers import (
 from clipforge_worker.processor import JobProcessor
 
 
+@pytest.fixture(autouse=True)
+def _clear_live_limit_env(monkeypatch):
+    monkeypatch.delenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", raising=False)
+    monkeypatch.delenv("CLIPFORGE_LIVE_DIRECTOR_LIMIT", raising=False)
+
+
 def test_live_budget_allows_two_then_refuses(tmp_path):
     budget = LiveCallBudget(tmp_path / "storage")
     assert budget.reserve("director") == 1
@@ -35,6 +41,30 @@ def test_live_budget_is_per_function(tmp_path):
     budget.reserve("transcription")
     budget.reserve("transcription")
     assert budget.reserve("director") == 1
+
+
+def test_live_budget_env_limit_is_applied(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", "3")
+    budget = LiveCallBudget(tmp_path / "storage")
+    assert budget.limits == {"transcription": 3, "director": 2}
+    assert [budget.reserve("transcription") for _ in range(3)] == [1, 2, 3]
+    with pytest.raises(LiveBudgetExceeded):
+        budget.reserve("transcription")
+    assert budget.reserve("director") == 1  # other function keeps its default
+
+
+def test_explicit_limits_override_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", "99")
+    budget = LiveCallBudget(tmp_path / "storage", limits={"transcription": 1})
+    budget.reserve("transcription")
+    with pytest.raises(LiveBudgetExceeded):
+        budget.reserve("transcription")
+
+
+def test_invalid_env_limit_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_LIVE_DIRECTOR_LIMIT", "zero")
+    with pytest.raises(ValueError, match="CLIPFORGE_LIVE_DIRECTOR_LIMIT"):
+        LiveCallBudget(tmp_path / "storage")
 
 
 def test_director_factory_modes(monkeypatch):

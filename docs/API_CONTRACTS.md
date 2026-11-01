@@ -31,7 +31,7 @@ Every generated plan is validated against this schema. Model/provider output is 
 
 ## Transcription API and Provider (ADR-008, Milestone 6A)
 
-Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_AI_MODE=mock` stays the default; live mode for segmentation/background/legacy planner is not implemented. Live-call caps: 2 transcription + 2 director per phase (`storage/live-call-ledger.json`).
+Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_AI_MODE=mock` stays the default; live mode for segmentation/background/legacy planner is not implemented. Live-call caps default to 2 transcription + 2 director per phase (`storage/live-call-ledger.json`); local testing can raise them with `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT` and `CLIPFORGE_LIVE_DIRECTOR_LIMIT` (positive integers, ADR-015). Raising a limit does not reset usage.
 
 `POST /api/transcribe` — multipart:
 - `file`: the browser recording (`.webm`, `.ogg`, `.oga`, `.wav`, `.m4a`, `.mp4`, `.mp3`), max 25 MB, max 60 s, must contain an audio stream.
@@ -39,7 +39,7 @@ Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additi
 
 The API converts with FFmpeg to mono 16-bit PCM WAV at 24 kHz (`-ac 1 -ar 24000 -c:a pcm_s16le -map_metadata -1`) and verifies the converted file with ffprobe before use. Temporary audio is deleted after the request.
 
-Response: the normalized `TranscriptResult` plus `transcribe_mode` (`mock`|`live`). Errors: `400 empty_audio`, `413 audio_too_large`, `422 unsupported_audio_extension`/`invalid_audio`/`no_audio_stream`/`audio_too_long`/`conversion_failed`/`mock_fixture_required`, `503 transcription_not_configured`, `504 transcription_timeout`, `429 transcription_rate_limited` or `429 live_budget_exhausted` (no provider call), `502 transcription_failed`.
+Response: the normalized `TranscriptResult` plus `transcribe_mode` (`mock`|`live`). Errors: `400 empty_audio`, `413 audio_too_large`, `422 unsupported_audio_extension`/`invalid_audio`/`no_audio_stream`/`audio_too_long`/`conversion_failed`/`mock_fixture_required`, `503 transcription_not_configured`, `504 transcription_timeout`, `429 transcription_rate_limited` or `429 live_budget_exhausted` (no provider call; the message names the configured limit and env override), `502 transcription_failed`.
 
 Muse Voice Transcribe (verified against official docs): `POST https://api.meta.ai/v1/asr/transcribe?sessionId=<clipforge-id>`, `Authorization: Bearer MODEL_API_KEY`, multipart parts `request` (JSON with `model: "muse-voice-transcribe-1.0"`, `audioEncoding: "WAV"`, `mode: "PUSH_TO_TALK"`, `languageBias: ["Portuguese"]`) and `audio` (WAV). Response `{sessionId, transcript, audioDurationMs, turns}`. Exactly one HTTP request per user action; no automatic retries. Pricing: $0.18 per hour of audio, billed per whole second.
 
@@ -63,7 +63,7 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 
 | Endpoint | Status | Purpose |
 |---|---|---|
-| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, live_transcription_available, storage_root}` |
+| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
 | `POST /api/jobs/{job_id}/voice` | live | Body `{audio_fixture_id}`; attaches the voice instruction and makes the job claimable; 409 if not queued/awaiting |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `completed`, `failed`, plus `stage` progress detail |
