@@ -1,7 +1,9 @@
 # ClipForge — Hackathon Demo (60–90 s)
 
-**Demo asset (do not overwrite):** `storage/muse_image_live_validation/live-attempt-1/luanda_sunset_demo.mp4`
-(360×640, 177 frames, 30 FPS, 6.177 s, H.264 + AAC, 270,190 B, decoded PCM identical to the original.)
+**Demo asset (do not overwrite):** `storage/muse_image_live_validation/live-attempt-1/luanda_sunset_demo_v2.mp4`
+(recommended; 1080×1920 center-crop plate, zero distortion — see §9).
+Validated original: `luanda_sunset_demo.mp4` (identical content, 15.6% anamorphic squeeze from the 2:3 stretch).
+Both: 360×640, 177 frames, 30 FPS, 6.177 s, H.264 + AAC, decoded PCM identical to the original.
 
 ## 1. What the video proves
 
@@ -55,3 +57,9 @@ Voice instruction → Muse Spark writes a validated editing plan (typed operatio
 ## 8. Proposed local improvement (no credits, not executed)
 
 Center-crop the 1280×1920 plate to 1080×1920 **before** compositing to remove the anamorphic squeeze, rendering to a *new* file. Zero risk to sources, masks or the judged artifact — proposed only; the validated MP4 above stays byte-stable unless you approve the variant.
+
+## 9. v2 polish result (2026-11-01, local only)
+
+Executed the §8 proposal: `background_v2_1080x1920.png` (SHA-256 `836a1ae7…3772`, source plate untouched), re-rendered with the same real masks + original video → `luanda_sunset_demo_v2.mp4` (270,249 B, 177 frames, PCM identical, render 4.86 s). Comparison sheet: `v1-vs-v2.png` (5 samples).
+
+**Verdict: v2 is visually superior.** Zero geometric distortion (exact 9:16, no stretch) while the crop removes nothing important — sun, clouds, coastline, palms and cliffs all survive; only peripheral cliff/grass edges are trimmed. The difference is subtle (the scene has no hard geometric references) but v2 is the geometrically correct presentation master. v1 remains byte-stable as the first validated render. Same known defects in both (label holes, caption removal, lighting mismatch) — unchanged, undamaged, honestly preserved.
