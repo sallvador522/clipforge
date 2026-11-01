@@ -1,7 +1,5 @@
 # ClipForge
 
-[![CI](https://github.com/sallvador522/clipforge/actions/workflows/ci.yml/badge.svg)](https://github.com/sallvador522/clipforge/actions/workflows/ci.yml)
-
 **Voice-first AI video editing studio — speak the edit, get a real MP4.**
 
 Built for the **Meta Global Hackathon**. ClipForge is not a UI mockup: rendering is real
@@ -196,7 +194,8 @@ npm run build
 ```
 
 Current backend suite: **194 tests passing**. The frontend typecheck and production build
-also pass.
+also pass. GitHub Actions is configured in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) for backend tests and frontend checks.
 
 ---
 
