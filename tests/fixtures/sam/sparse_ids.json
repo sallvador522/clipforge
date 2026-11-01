@@ -1,0 +1,53 @@
+{
+  "name": "sparse_ids",
+  "source": {
+    "width": 64,
+    "height": 36,
+    "frame_count": 3,
+    "fps": 10.0
+  },
+  "events": [
+    {
+      "type": "response.created",
+      "response": {
+        "id": "resp_sparse",
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "response.output_text.delta",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "delta": "<0f>0<|box;x1=4;y1=6;x2=17;y2=27;w=64;h=36|><|mask;x=0;y=0;data=22,14,!!!!!*pAkPkvUD{'|>,2<|box;x1=44;y1=8;x2=55;y2=23;w=64;h=36|><|mask;x=0;y=0;data=16,12,!!!!!*p1Oz[:ZDtm|>\n"
+    },
+    {
+      "type": "response.output_text.delta",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "delta": "<1f>2<|box;x1=40;y1=8;x2=51;y2=23;w=64;h=36|><|mask;x=0;y=0;data=16,12,!!!!!*p1Oz[:ZDtm|>\n"
+    },
+    {
+      "type": "response.output_text.delta",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "delta": "<2f>0<|box;x1=12;y1=6;x2=25;y2=27;w=64;h=36|><|mask;x=0;y=0;data=22,14,!!!!!*pAkPkvUD{'|>,2<|box;x1=36;y1=8;x2=47;y2=23;w=64;h=36|><|mask;x=0;y=0;data=16,12,!!!!!*p1Oz[:ZDtm|>\n"
+    },
+    {
+      "type": "response.output_text.done",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "text": "<0f>0<|box;x1=4;y1=6;x2=17;y2=27;w=64;h=36|><|mask;x=0;y=0;data=22,14,!!!!!*pAkPkvUD{'|>,2<|box;x1=44;y1=8;x2=55;y2=23;w=64;h=36|><|mask;x=0;y=0;data=16,12,!!!!!*p1Oz[:ZDtm|>\n<1f>2<|box;x1=40;y1=8;x2=51;y2=23;w=64;h=36|><|mask;x=0;y=0;data=16,12,!!!!!*p1Oz[:ZDtm|>\n<2f>0<|box;x1=12;y1=6;x2=25;y2=27;w=64;h=36|><|mask;x=0;y=0;data=22,14,!!!!!*pAkPkvUD{'|>,2<|box;x1=36;y1=8;x2=47;y2=23;w=64;h=36|><|mask;x=0;y=0;data=16,12,!!!!!*p1Oz[:ZDtm|>\n"
+    },
+    {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_sparse",
+        "status": "completed"
+      }
+    }
+  ]
+}

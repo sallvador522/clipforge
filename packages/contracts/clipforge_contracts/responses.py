@@ -7,6 +7,25 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class SegmentationSubject(BaseModel):
+    """One tracked SAM object with its own validated mask sequence.
+
+    `object_id` is the SAM wire id (stable within one response), kept as a
+    string and never inferred from list position. `preview_path` is an optional
+    local PNG with the actual source frame and a mask overlay.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    object_id: str = Field(min_length=1)
+    label: str = "Detected person"
+    mask_manifest_path: str = Field(min_length=1)
+    preview_path: str | None = None
+    first_frame: int | None = Field(default=None, ge=0)
+    last_frame: int | None = Field(default=None, ge=0)
+    frames_detected: int = Field(default=0, ge=0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class TranscriptResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1)
@@ -31,6 +50,12 @@ class SegmentationResult(BaseModel):
     fps: float = Field(gt=0)
     provider_name: str
     is_mock: bool
+    model: str | None = None
+    subjects: list[SegmentationSubject] = Field(default_factory=list)
+    source_sha256: str | None = None
+    status: Literal["completed", "incomplete"] = "completed"
+    diagnostics: list[str] = Field(default_factory=list)
+    file_cleanup: Literal["not_applicable", "not_uploaded", "deleted", "failed"] = "not_applicable"
 
 
 class RenderResult(BaseModel):

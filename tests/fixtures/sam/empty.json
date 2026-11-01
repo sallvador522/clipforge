@@ -1,0 +1,32 @@
+{
+  "name": "empty",
+  "source": {
+    "width": 64,
+    "height": 36,
+    "frame_count": 5,
+    "fps": 10.0
+  },
+  "events": [
+    {
+      "type": "response.created",
+      "response": {
+        "id": "resp_fixture",
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "response.output_text.done",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "text": ""
+    },
+    {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_fixture",
+        "status": "completed"
+      }
+    }
+  ]
+}

@@ -32,6 +32,9 @@ class SegmentationProvider(Protocol):
         height: int,
         frame_count: int,
         fps: float,
+        source_path: str | Path | None = None,
+        prompt: str = "person",
+        authorization=None,
     ) -> SegmentationResult: ...
 
 

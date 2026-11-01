@@ -1,10 +1,10 @@
 # ClipForge — API Contracts
 
-All contracts below are **internal ClipForge contracts**. Two Meta schemas are verified and implemented: Muse Voice Transcribe (ADR-008) and Muse Spark Chat Completions (ADR-011 to ADR-014). Meta SAM 3.1 and Muse Image remain **UNVERIFIED and unimplemented**: no endpoint, field or response structure for them is assumed or hardcoded. Their adapters must map a verified official schema into these internal contracts when integration is explicitly approved.
+All contracts below are **internal ClipForge contracts**. Three Meta schemas are verified and implemented: Muse Voice Transcribe (ADR-008), Muse Spark Chat Completions (ADR-011 to ADR-014) and SAM 3.1 Responses/parsing (ADR-019). SAM implementation is offline-validated only; **no live SAM inference has been performed**. Muse Image remains **UNVERIFIED and unimplemented**: no endpoint, field or response structure for it is assumed or hardcoded. Its adapter must map a verified official schema into these internal contracts when integration is explicitly approved.
 
 ## Provider Mode
 
-`CLIPFORGE_AI_MODE=mock` (default). Mock mode makes zero external requests and needs no credentials. Two providers can be enabled live independently: `CLIPFORGE_TRANSCRIBE_MODE=live` and `CLIPFORGE_DIRECTOR_MODE=live`; both require a server-side `MODEL_API_KEY`. Segmentation, background generation and the legacy planner remain mocked. `CLIPFORGE_AI_MODE=live` itself is not supported. There is no silent fallback.
+`CLIPFORGE_AI_MODE=mock` (default). Mock mode makes zero external requests and needs no credentials. Three providers can be enabled live independently: `CLIPFORGE_TRANSCRIBE_MODE=live`, `CLIPFORGE_DIRECTOR_MODE=live` and `CLIPFORGE_SEGMENTATION_MODE=live`; all require a server-side `MODEL_API_KEY`. Background generation and the legacy planner remain mocked. `CLIPFORGE_AI_MODE=live` itself is not supported. There is no silent fallback. SAM live is implemented but **not live-validated**.
 
 ## EditingPlan (packages/contracts, Pydantic, schema_version "1.0")
 
@@ -26,12 +26,12 @@ Every generated plan is validated against this schema. Model/provider output is 
 
 - `TranscriptResult`: `text`, `language`, `confidence` (nullable — Muse Voice Transcribe documents no confidence, so it is never invented), `provider_name`, `is_mock`, `session_id` (nullable), `audio_duration_ms` (nullable).
 - `RenderResult`: verified facts about the rendered file.
-- `SegmentationResult`: `job_id`, `subject_id`, `mask_manifest_path`, `frame_count`, `width`, `height`, `fps`, `provider_name`, `is_mock`. Backed by real local mask files, never a bare success flag.
+- `SegmentationResult`: `job_id`, `subject_id`, `mask_manifest_path`, `frame_count`, `width`, `height`, `fps`, `provider_name`, `is_mock`, optional `model`, `subjects[]`, `source_sha256`, `status`, `diagnostics[]` and `file_cleanup`. `subjects[]` carries stable `object_id`, generic `label`, per-object `mask_manifest_path`, preview path, first/last frame, detected-frame count and optional confidence. Backed by real local mask files, never a bare success flag.
 - `BackgroundResult`: `asset_id`, `image_path` (real local file), `width`, `height`, `orientation` (`landscape`|`portrait`), `simulated_prompt`, `provider_name`, `is_mock`.
 
 ## Transcription API and Provider (ADR-008, Milestone 6A)
 
-Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_AI_MODE=mock` stays the default; live mode for segmentation/background/legacy planner is not implemented. Dev launchers force both live functions to mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1` is explicitly set (ADR-017). Live-call caps default to 2 transcription + 2 director per phase (`storage/live-call-ledger.json`); local testing can raise them with `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT` and `CLIPFORGE_LIVE_DIRECTOR_LIMIT` (positive integers, ADR-015). Raising a limit does not reset usage. The ledger is fail-closed; live providers require a one-shot authorization before their POST.
+Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_SEGMENTATION_MODE=mock` (default) or `live` selects the SAM provider independently (ADR-019); it is implemented but not live-validated. `CLIPFORGE_AI_MODE=mock` stays the default; background generation and the legacy planner remain mocked. Dev launchers force all three live functions to mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1` is explicitly set (ADR-017). Live-call caps default to 2 transcription + 2 director + 2 segmentation per phase (`storage/live-call-ledger.json`); local testing can raise them with `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT`, `CLIPFORGE_LIVE_DIRECTOR_LIMIT` and `CLIPFORGE_LIVE_SEGMENTATION_LIMIT` (positive integers, ADR-015/ADR-019). Raising a limit does not reset usage. The ledger is fail-closed; live providers require a one-shot authorization before their POST.
 
 `POST /api/transcribe` — multipart:
 - `file`: the browser recording (`.webm`, `.ogg`, `.oga`, `.wav`, `.m4a`, `.mp4`, `.mp3`), max 25 MB, max 60 s, must contain an audio stream.
@@ -55,7 +55,7 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 ```
 
 - 8-bit grayscale PNG, lossless only (never JPEG). 0 = background, 255 = subject, intermediate = soft alpha/confidence.
-- `manifest.json` fields: `schema_version`, `video_width`, `video_height`, `frame_count`, `fps`, `timestamp_rule`, `subject_id`, `encoding` (`png-grayscale-8bit`), `source_video_id`, `source_sha256` (optional), `frames[]` each `{index, filename, timestamp_ms}`.
+- `manifest.json` fields: `schema_version`, `video_width`, `video_height`, `frame_count`, `fps`, `timestamp_rule`, `subject_id`, `encoding` (`png-grayscale-8bit`), `source_video_id`, `source_sha256` (optional), optional SAM provenance `sam_object_id`, `sam_object_ids[]`, `provider_name`, `model`, `segmentation_status` (`completed`/`incomplete`), and `frames[]` each `{index, filename, timestamp_ms}`. The loader rejects `segmentation_status="incomplete"`.
 - Timestamp derivation rule: `timestamp_ms = round(index * 1000 / fps)` when explicit timestamps are absent; the rule used is recorded in `timestamp_rule`.
 - Loader validation rejects: missing frames, corrupt/invalid files, dimension mismatches (**never silently resized**), unexpected or duplicate frame indices, manifest/frame-count disagreement. Explicit resize is a separate operation using nearest-neighbour only; edge smoothing happens in the renderer, not the loader.
 
@@ -63,13 +63,14 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 
 | Endpoint | Status | Purpose |
 |---|---|---|
-| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
+| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
 | `POST /api/jobs/{job_id}/voice` | live | Body with exactly one of `{audio_fixture_id}` or `{transcript, transcription_session_id?}`; attaches the instruction and makes the job claimable; 409 if not queued/awaiting |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`, `completed`, `failed`, plus `stage` progress detail |
 | `GET /api/jobs` | live | List all jobs |
-| `GET /api/jobs/{job_id}/plan` | live (6C) | Persisted v2 plan and review metadata. Requires a persisted plan, otherwise 409 `plan_not_ready`. Returns `status`, `stage`, `ready`, `plan`, `legacy_plan` (v1 adapter), `capabilities` (id, name, status, `simulated`, `requires_approval`, provider), `requires_approval`, `requires_clarification`, `clarification_question`, `clarification_count`, `render_status` and `error`. Works while awaiting review and after terminal states; it is the read path for non-completed jobs (the `/result` endpoint remains completed-only). |
-| `POST /api/jobs/{job_id}/approve` | live (6C) | Optional body `{note?, ≤300}`. Atomic `awaiting_approval → queued` / stage `approved`, sets `approval_granted=true` and `render_status="approved"`. 409 `approval_not_allowed` for any other state, 409 `plan_not_ready` without a persisted plan, 409 `job_state_conflict` / `job_transition_locked` on a concurrent decision. Duplicate approvals are rejected; exactly one can win. |
+| `GET /api/jobs/{job_id}/plan` | live (6C/6D) | Persisted v2 plan and review metadata. Requires a persisted plan, otherwise 409 `plan_not_ready`. Returns `status`, `stage`, `ready`, `plan`, `legacy_plan` (v1 adapter), `capabilities` (id, name, status, `simulated`, `requires_approval`, provider), `requires_approval`, `requires_clarification`, `clarification_question`, `clarification_count`, `render_status`, `error`, `subjects[]` (stable `object_id`, generic `label`, `preview_url`, first/last frame, detected count, confidence), `segmentation` (provider, model, `is_mock`, status, dimensions/fps, diagnostics, file cleanup), `selected_subject_ids`, `selection_required` and `no_subjects`. Works while awaiting review and after terminal states; it is the read path for non-completed jobs (the `/result` endpoint remains completed-only). |
+| `GET /api/jobs/{job_id}/subjects/{object_id}/preview` | live (6D) | PNG preview (actual source frame + tinted mask) for a detected stable SAM object id. 404 `subject_preview_not_found` if the job has no such subject or preview. Path is constrained under the job directory. |
+| `POST /api/jobs/{job_id}/approve` | live (6C/6D) | Optional body `{note?, subject_ids?: string[]}`. Atomic `awaiting_approval → queued` / stage `approved`, sets `approval_granted=true`, validates and stores `selected_subject_ids`, and sets `render_status="approved"`. One detected subject is auto-selected if `subject_ids` is omitted; multiple subjects require an explicit list. 422 `subject_selection_required` / `invalid_subject_selection`, 409 `no_subjects_detected`, 409 `approval_not_allowed`, 409 `plan_not_ready`, 409 `job_state_conflict` / `job_transition_locked`. Duplicate approvals are rejected; exactly one can win. |
 | `POST /api/jobs/{job_id}/reject` | live (6C) | Optional body `{note?, ≤300}`. Atomic `awaiting_approval` or `awaiting_clarification → rejected`; terminal, preserves the original, never renders. 409 `rejection_not_allowed` for other states. |
 | `POST /api/jobs/{job_id}/clarify` | live (6C) | Body `{answer: 1..300}`. Atomic `awaiting_clarification → queued` / stage `replanning`, persists the answer and increments `clarification_count`. 409 `clarification_not_allowed` for other states, 409 `clarification_limit_reached` after 3 rounds, 422 `empty_clarification`. |
 | `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `rendered`, `render_status`, `director_plan`, `director_usage`, `director_request_id`, `director_audit`, `requires_approval`); 409 until `completed` |
@@ -128,8 +129,22 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 ### Approval / cancel / revision
 
-Every ready plan is stopped at `awaiting_approval` with no render, regardless of provider mode or whether the capability itself requires approval. `approval_status` remains a capability-level field inside the plan; product review is separate and mandatory. Approval resumes the persisted plan exactly once; rejection is terminal; clarification rebuilds the plan up to 3 rounds before returning to review. See ADR-018. The UI reflects backend state and never decides execution locally.
+Every ready plan is stopped at `awaiting_approval` with no render, regardless of provider mode or whether the capability itself requires approval. Detection runs before review so the user can select subjects. `approval_status` remains a capability-level field inside the plan; product review and subject selection are separate and mandatory. Approval resumes the persisted plan exactly once; rejection is terminal; clarification rebuilds the plan up to 3 rounds before returning to review. See ADR-018 and ADR-019. The UI reflects backend state and never decides execution locally.
 
-## SAM 3.1 / Muse Image Mapping (TBD)
+## SAM 3.1 Segmentation (ADR-019)
 
-No mapping exists for segmentation or image generation. It will be written only after official documentation verification of: request/response schemas, supported media inputs, mask encoding, sync vs async execution, polling, rate limits and pricing. Until then this section stays empty by design, and no adapter may be built against an assumed schema.
+**Implementation complete; offline validation complete; live inference NOT validated.**
+
+- Endpoint `POST https://api.meta.ai/v1/responses`, model `sam-3.1`, Bearer `MODEL_API_KEY`; one user message with `input_text` (noun phrase, default `"person"`) and `input_video.file_id`; `stream: true`; `metadata.mask_encoding: "one_bit"`. Exactly one POST, no retries.
+- Video input is a temporary video-only MP4 (stream copy when compatible, otherwise H.264 transcode), verified with ffprobe for exact dimensions, FPS, frame count and absence of audio. The original is untouched.
+- Files API: `POST /v1/files` with `purpose=user_data` and `expires_after` = 3600 seconds (minimum). The `file_id` is used; no public URL. `DELETE /v1/files/{file_id}` is attempted in `finally` after success and failure. Cleanup failures are recorded in `SegmentationResult.file_cleanup` and diagnostics, never with credentials.
+- Parser: `meta-sam-parser==0.1.0`, `parse_responses_stream(..., video_segmentation_format())`, `decode_mask_to_raster`. `response.completed` required; incomplete streams, error diagnostics, malformed masks, wrong dimensions, out-of-range bounds, duplicate records without a newer revision and >16 objects/frame are rejected.
+- Masks: SAM box-local rasters must match box bounds and are pasted at the bounds offset into full-frame 8-bit grayscale; 0/1 → 0/255. Per-object sequences and a union sequence follow ADR-005. Empty frames are written as zeros only after a completed clean stream. Object IDs are preserved exactly as strings; frame markers are explicit and arrival order is not frame order.
+- Selection: `GET /plan` returns subject IDs/preview URLs; `POST /approve` takes `subject_ids`. The worker unions the selected per-object masks into `masks/selected/` and renders. Zero detections is a terminal `NoSubjectsDetected` result.
+- **Not implemented:** selective person blur. Background blur/replacement only keep the selected subjects sharp and treat the rest of the frame.
+
+Live status: no live call has been made. Detection quality, live stream behaviour, the exact nested `expires_after` multipart encoding, and live cleanup are unverified.
+
+## Muse Image Mapping (TBD)
+
+No mapping exists for image generation. It will be written only after official documentation verification of request/response schemas, supported media inputs, mask/asset handling, sync vs async execution, polling, rate limits and pricing. Until then replacement keeps using local/mock assets and no Muse Image adapter may be built against an assumed schema.

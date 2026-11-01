@@ -1,5 +1,17 @@
 # Third-Party Notices
 
+## meta-sam-parser 0.1.0 (SAM License)
+
+- Package: `meta-sam-parser` (imports as `meta_sam_parser`), version 0.1.0
+- Upstream: https://github.com/meta-models/meta-sam
+- Documentation: https://dev.meta.ai/docs/sam/client-libraries
+- License: SAM License, Last Updated November 19, 2025. Full text preserved in
+  `LICENSES/meta-sam-parser-SAM-LICENSE.txt`.
+
+Used only for the official SAM 3.1 wire-format parser and mask decoding in the
+worker/provider path. ClipForge does not install PyTorch, CUDA, local SAM checkpoints or the
+TypeScript graphics/video packages.
+
 ## browser-use/video-use (MIT)
 
 - Upstream: https://github.com/browser-use/video-use

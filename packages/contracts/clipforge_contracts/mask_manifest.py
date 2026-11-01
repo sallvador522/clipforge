@@ -32,6 +32,12 @@ class MaskManifest(BaseModel):
     encoding: Literal["png-grayscale-8bit"] = "png-grayscale-8bit"
     source_video_id: str = Field(min_length=1)
     source_sha256: str | None = None
+    # SAM provenance. Optional so every pre-6D manifest stays valid.
+    sam_object_id: str | None = None
+    sam_object_ids: list[str] = Field(default_factory=list)
+    provider_name: str | None = None
+    model: str | None = None
+    segmentation_status: Literal["completed", "incomplete"] = "completed"
     frames: list[MaskFrameEntry]
 
     @model_validator(mode="after")

@@ -57,6 +57,7 @@ class VoiceRequest(BaseModel):
 class PlanDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     note: str | None = Field(default=None, max_length=300)
+    subject_ids: list[str] | None = Field(default=None, max_length=16)
 
 
 class ClarificationRequest(BaseModel):
@@ -101,6 +102,53 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
 
 
+def _subject_review(record: JobRecord) -> dict:
+    result = record.result
+    segmentation = result.segmentation if result is not None else None
+    if segmentation is None:
+        return {
+            "subjects": [],
+            "segmentation": None,
+            "selected_subject_ids": record.selected_subject_ids,
+            "selection_required": False,
+            "no_subjects": False,
+        }
+    subjects = [
+        {
+            "object_id": subject.object_id,
+            "label": subject.label,
+            "preview_url": (
+                f"/api/jobs/{record.job_id}/subjects/{subject.object_id}/preview"
+                if subject.preview_path
+                else None
+            ),
+            "first_frame": subject.first_frame,
+            "last_frame": subject.last_frame,
+            "frames_detected": subject.frames_detected,
+            "confidence": subject.confidence,
+        }
+        for subject in segmentation.subjects
+    ]
+    return {
+        "subjects": subjects,
+        "segmentation": {
+            "provider": segmentation.provider_name,
+            "model": segmentation.model,
+            "is_mock": segmentation.is_mock,
+            "status": segmentation.status,
+            "frame_count": segmentation.frame_count,
+            "width": segmentation.width,
+            "height": segmentation.height,
+            "fps": segmentation.fps,
+            "diagnostics": segmentation.diagnostics,
+            "file_cleanup": segmentation.file_cleanup,
+        },
+        "selected_subject_ids": record.selected_subject_ids,
+        "selection_required": len(subjects) > 1,
+        "no_subjects": not subjects,
+    }
+
+
 def create_app(storage_root: str | Path | None = None, providers: ProviderBundle | None = None) -> FastAPI:
     root = Path(storage_root) if storage_root else Path(os.environ.get("CLIPFORGE_STORAGE_ROOT", "storage"))
     store = JobStore(root)
@@ -142,6 +190,7 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             "ai_mode": bundle.mode,
             "transcribe_mode": bundle.transcription_mode,
             "director_mode": bundle.director_mode,
+            "segmentation_mode": bundle.segmentation_mode,
             "live_transcription_available": bundle.transcription_mode == "live",
             "live_call_limits": budget.limits,
             "live_calls_used": {function: budget.used(function) for function in budget.limits},
@@ -273,8 +322,29 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
                 "clarification_count": record.clarification_count,
                 "render_status": result.render_status,
                 "error": record.error.model_dump() if record.error else None,
+                **_subject_review(record),
             }
         )
+
+    @app.get("/api/jobs/{job_id}/subjects/{object_id}/preview", response_model=None)
+    async def subject_preview(job_id: str, object_id: str) -> FileResponse | JSONResponse:
+        record = store.get(job_id)
+        result = record.result
+        segmentation = result.segmentation if result is not None else None
+        subject = next(
+            (item for item in (segmentation.subjects if segmentation else []) if item.object_id == object_id),
+            None,
+        )
+        if subject is None or not subject.preview_path:
+            return _error(404, "subject_preview_not_found", "No preview exists for this subject.")
+        path = Path(subject.preview_path)
+        try:
+            path.resolve().relative_to(store.job_dir(job_id).resolve())
+        except ValueError:
+            return _error(404, "subject_preview_not_found", "No preview exists for this subject.")
+        if not path.is_file():
+            return _error(404, "subject_preview_not_found", "No preview exists for this subject.")
+        return FileResponse(path, media_type="image/png", filename=f"subject_{object_id}.png")
 
     @app.post("/api/jobs/{job_id}/approve", response_model=None)
     async def approve_plan(job_id: str, body: PlanDecisionRequest | None = None) -> JobResponse | JSONResponse:
@@ -287,6 +357,44 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             )
         if record.result is None or record.result.director_plan is None:
             return _error(409, "plan_not_ready", f"Job {job_id} has no persisted plan to approve.")
+        segmentation = record.result.segmentation
+        selected_subject_ids: list[str] = []
+        if segmentation is not None:
+            if not segmentation.subjects:
+                return _error(
+                    409,
+                    "no_subjects_detected",
+                    "No people were detected in this clip; there is no subject to keep sharp.",
+                )
+            allowed = {subject.object_id for subject in segmentation.subjects}
+            requested = list(body.subject_ids) if body and body.subject_ids else []
+            if not requested:
+                if record.selected_subject_ids:
+                    requested = list(record.selected_subject_ids)
+                elif len(allowed) == 1:
+                    requested = [next(iter(allowed))]
+                else:
+                    return _error(
+                        422,
+                        "subject_selection_required",
+                        "Select at least one detected person before approving the plan.",
+                    )
+            selected_subject_ids = list(dict.fromkeys(requested))
+            if not selected_subject_ids:
+                return _error(
+                    422,
+                    "subject_selection_required",
+                    "Select at least one detected person before approving the plan.",
+                )
+            unknown = [subject_id for subject_id in selected_subject_ids if subject_id not in allowed]
+            if unknown:
+                return _error(
+                    422,
+                    "invalid_subject_selection",
+                    f"Unknown subject id(s): {unknown}. Only detected SAM object ids can be selected.",
+                )
+            if len(selected_subject_ids) > 16:
+                return _error(422, "invalid_subject_selection", "At most 16 subjects can be selected.")
         result = record.result.model_copy(update={"render_status": "approved"})
         updated = store.transition(
             job_id,
@@ -296,6 +404,7 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             actor="user",
             note=(body.note if body and body.note else "plan approved"),
             approval_granted=True,
+            selected_subject_ids=selected_subject_ids,
             result=result,
         )
         logger.info("plan_approved job_id=%s", job_id)

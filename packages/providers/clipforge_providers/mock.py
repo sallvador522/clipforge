@@ -23,10 +23,12 @@ from clipforge_contracts import (
     KeepSubjectSharpOperation,
     ReplaceBackgroundOperation,
     SegmentationResult,
+    SegmentationSubject,
     SubjectSpec,
     TranscriptResult,
 )
-from clipforge_worker.masks import MaskWriter
+from clipforge_providers.subject_previews import write_subject_preview
+from clipforge_worker.masks import MaskSequenceWriter
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BACKGROUND_ASSETS_DIR = _REPO_ROOT / "assets" / "backgrounds"
@@ -145,9 +147,15 @@ class MockEditingPlannerProvider:
 
 
 class MockSegmentationProvider:
-    """Writes a real synthetic mask sequence (moving ellipse subject) via MaskWriter."""
+    """Writes two real synthetic per-object mask sequences via MaskSequenceWriter.
 
-    provider_name = "mock-segmentation"
+    This is NOT person detection and NOT SAM. It exists so the subject-selection
+    contract and renderer can be exercised offline. Object "1" enters after the
+    first frames and leaves before the end, exercising absent-frame handling.
+    """
+
+    provider_name = "mock-sam-segmentation"
+    model = "mock-sam-3.1-fixture"
 
     def segment(
         self,
@@ -159,34 +167,124 @@ class MockSegmentationProvider:
         height: int,
         frame_count: int,
         fps: float,
+        source_path: str | Path | None = None,
+        prompt: str = "person",
+        authorization=None,
     ) -> SegmentationResult:
         if frame_count <= 0 or width <= 0 or height <= 0 or fps <= 0:
             raise ValueError("width, height, frame_count and fps must be positive.")
+        root = Path(output_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        objects_dir = root / "objects"
+        objects_dir.mkdir(parents=True, exist_ok=True)
+        source_sha256 = _sha256(source_path) if source_path else None
+
         yy, xx = np.mgrid[0:height, 0:width]
-        masks: list[np.ndarray] = []
-        cy, ry, rx = height / 2, height * 0.34, width * 0.13
-        for i in range(frame_count):
-            cx = width * (0.2 + 0.6 * (i / max(frame_count - 1, 1)))
-            inside = ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2 <= 1.0
-            masks.append(np.where(inside, 255, 0).astype(np.uint8))
-        manifest = MaskWriter().write_sequence(
-            output_dir,
-            masks,
+        object_specs = {
+            "0": {"cy": height * 0.50, "ry": height * 0.32, "rx": width * 0.11},
+            "1": {"cy": height * 0.44, "ry": height * 0.22, "rx": width * 0.08},
+        }
+        first_visible = {"0": 0, "1": max(1, frame_count // 3)}
+        last_visible = {"0": frame_count - 1, "1": max(first_visible["1"], frame_count - 2)}
+        last_visible["1"] = min(last_visible["1"], frame_count - 1)
+        first_mask: dict[str, np.ndarray] = {}
+
+        object_writers = {
+            object_id: MaskSequenceWriter(
+                objects_dir / f"object_{object_id}",
+                fps=fps,
+                subject_id=object_id,
+                source_video_id=source_video_id,
+                source_sha256=source_sha256,
+                sam_object_id=object_id,
+                provider_name=self.provider_name,
+                model=self.model,
+            )
+            for object_id in object_specs
+        }
+        root_writer = MaskSequenceWriter(
+            root,
             fps=fps,
-            subject_id="person_1",
+            subject_id="sam_union",
             source_video_id=source_video_id,
+            source_sha256=source_sha256,
+            sam_object_ids=list(object_specs),
+            provider_name=self.provider_name,
+            model=self.model,
         )
+
+        for frame in range(frame_count):
+            frame_masks: dict[str, np.ndarray] = {}
+            for object_id, spec in object_specs.items():
+                visible = first_visible[object_id] <= frame <= last_visible[object_id]
+                if visible:
+                    progress = frame / max(frame_count - 1, 1)
+                    if object_id == "0":
+                        cx = width * (0.18 + 0.64 * progress)
+                    else:
+                        cx = width * (0.82 - 0.58 * progress)
+                    inside = (
+                        ((yy - spec["cy"]) / spec["ry"]) ** 2
+                        + ((xx - cx) / spec["rx"]) ** 2
+                        <= 1.0
+                    )
+                    mask = np.where(inside, 255, 0).astype(np.uint8)
+                else:
+                    mask = np.zeros((height, width), dtype=np.uint8)
+                frame_masks[object_id] = mask
+                object_writers[object_id].write(mask)
+                if visible and object_id not in first_mask:
+                    first_mask[object_id] = mask
+            root_writer.write(np.maximum.reduce(list(frame_masks.values())))
+
+        root_manifest = root_writer.finalize()
+        subjects: list[SegmentationSubject] = []
+        for object_id in object_specs:
+            object_writers[object_id].finalize()
+            preview_path = None
+            if object_id in first_mask:
+                preview_path = write_subject_preview(
+                    source_path=source_path,
+                    mask=first_mask[object_id],
+                    object_id=object_id,
+                    frame_index=first_visible[object_id],
+                    output_path=root / "previews" / f"object_{object_id}.png",
+                )
+            subjects.append(
+                SegmentationSubject(
+                    object_id=object_id,
+                    label="Simulated person",
+                    mask_manifest_path=str(objects_dir / f"object_{object_id}" / "manifest.json"),
+                    preview_path=preview_path,
+                    first_frame=first_visible[object_id],
+                    last_frame=last_visible[object_id],
+                    frames_detected=max(0, last_visible[object_id] - first_visible[object_id] + 1),
+                )
+            )
+
         return SegmentationResult(
             job_id=job_id,
-            subject_id=manifest.subject_id,
-            mask_manifest_path=str(Path(output_dir) / "manifest.json"),
-            frame_count=manifest.frame_count,
-            width=manifest.video_width,
-            height=manifest.video_height,
-            fps=manifest.fps,
+            subject_id=root_manifest.subject_id,
+            mask_manifest_path=str(root / "manifest.json"),
+            frame_count=root_manifest.frame_count,
+            width=root_manifest.video_width,
+            height=root_manifest.video_height,
+            fps=root_manifest.fps,
             provider_name=self.provider_name,
             is_mock=True,
+            model=self.model,
+            subjects=subjects,
+            source_sha256=source_sha256,
+            status="completed",
         )
+
+
+def _sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class MockBackgroundGenerationProvider:

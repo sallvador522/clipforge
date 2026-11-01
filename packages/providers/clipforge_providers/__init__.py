@@ -15,6 +15,17 @@ from clipforge_providers.mock import (
     MockSegmentationProvider,
     MockTranscriptionProvider,
 )
+from clipforge_providers.sam import (
+    SamAPIError,
+    SamError,
+    SamIncompleteStreamError,
+    SamMissingCredentialsError,
+    SamNotAuthorizedError,
+    SamRateLimitedError,
+    SamSegmentationProvider,
+    SamTimeoutError,
+    SamValidationError,
+)
 from clipforge_providers.transcription_meta import (
     InvalidAudioError,
     MetaVoiceTranscriptionProvider,
@@ -38,6 +49,15 @@ __all__ = [
     "MockSegmentationProvider",
     "MockTranscriptionProvider",
     "ProviderBundle",
+    "SamAPIError",
+    "SamError",
+    "SamIncompleteStreamError",
+    "SamMissingCredentialsError",
+    "SamNotAuthorizedError",
+    "SamRateLimitedError",
+    "SamSegmentationProvider",
+    "SamTimeoutError",
+    "SamValidationError",
     "SegmentationProvider",
     "TranscriptionAPIError",
     "TranscriptionError",

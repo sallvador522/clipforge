@@ -180,7 +180,11 @@ def test_download_only_after_verified_render(tmp_path):
         pass
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
     assert client.get(f"/api/jobs/{job_id}/download").status_code == 409
-    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 200
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    subject_ids = [subject["object_id"] for subject in review["subjects"]][:1]
+    assert client.post(
+        f"/api/jobs/{job_id}/approve", json={"subject_ids": subject_ids}
+    ).status_code == 200
     while worker.run_once():
         pass
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"

@@ -179,14 +179,18 @@ export function Studio() {
     }
   }
 
-  async function handleApprovePlan() {
+  async function handleApprovePlan(subjectIds: string[]) {
     if (!job || !planReview) return;
     setDecisionSubmitting("approve");
     setDecisionError(null);
     try {
-      const updated = await approvePlan(job.job_id);
+      const updated = await approvePlan(job.job_id, undefined, subjectIds);
       setJob(updated);
-      setPlanReview(null);
+      // Keep the detection metadata visible to the truthful step tracker while
+      // rendering; the dialog is closed and the plan is cleared on completion.
+      setPlanReview((current) =>
+        current ? { ...current, status: updated.status, stage: updated.stage } : current,
+      );
       setPlanDialogOpen(false);
       pollJob(job.job_id);
     } catch (e) {

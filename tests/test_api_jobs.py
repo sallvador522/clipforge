@@ -1,3 +1,4 @@
+import dataclasses
 import subprocess
 import threading
 import time
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from clipforge_api.main import create_app
 from clipforge_contracts import DirectorAudit
 from clipforge_jobs import JobResult, JobStatus, JobStore, JobTransitionError
-from clipforge_providers import get_providers
+from clipforge_providers import MockSegmentationProvider, get_providers
 from clipforge_worker.masks import MaskLoader
 from clipforge_worker.worker_process import PersistentWorker
 
@@ -52,8 +53,14 @@ def _drain(worker, timeout=10.0):
     raise AssertionError("worker did not drain the queue in time")
 
 
-def _approve(client, job_id):
-    resp = client.post(f"/api/jobs/{job_id}/approve")
+def _approve(client, job_id, subject_ids=None):
+    if subject_ids is None:
+        review = client.get(f"/api/jobs/{job_id}/plan").json()
+        subject_ids = [subject["object_id"] for subject in review.get("subjects", [])][:1]
+    resp = client.post(
+        f"/api/jobs/{job_id}/approve",
+        json={"subject_ids": subject_ids} if subject_ids else {},
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -264,8 +271,10 @@ def test_approve_is_idempotent_and_renders_once(env, tiny_video):
     _drain(worker)
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
 
-    first = client.post(f"/api/jobs/{job_id}/approve")
-    second = client.post(f"/api/jobs/{job_id}/approve")
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    subject_ids = [subject["object_id"] for subject in review["subjects"]][:1]
+    first = client.post(f"/api/jobs/{job_id}/approve", json={"subject_ids": subject_ids})
+    second = client.post(f"/api/jobs/{job_id}/approve", json={"subject_ids": subject_ids})
     assert first.status_code == 200 and first.json()["stage"] == "approved"
     assert second.status_code == 409 and second.json()["error"]["code"] == "approval_not_allowed"
 
@@ -337,6 +346,105 @@ def test_concurrent_approval_transition_is_atomic(env, tiny_video):
     assert set(results) - {"ok"} <= {"job_transition_locked", "job_state_conflict"}
     assert store.get(job_id).status is JobStatus.QUEUED
     assert len([e for e in store.get(job_id).state_history if e.to_stage == "approved"]) == 1
+
+
+def test_plan_exposes_subject_previews_and_requires_selection(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "awaiting_approval"
+    assert (store.job_dir(job_id) / "masks" / "manifest.json").is_file()
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+
+    review = client.get(f"/api/jobs/{job_id}/plan")
+    assert review.status_code == 200
+    data = review.json()
+    assert data["segmentation"]["is_mock"] is True
+    assert data["segmentation"]["provider"] == "mock-sam-segmentation"
+    assert [subject["object_id"] for subject in data["subjects"]] == ["0", "1"]
+    assert data["selection_required"] is True
+    assert data["no_subjects"] is False
+    assert data["selected_subject_ids"] == []
+
+    preview = data["subjects"][0]["preview_url"]
+    assert preview
+    image = client.get(preview)
+    assert image.status_code == 200
+    assert image.headers["content-type"].startswith("image/png")
+    assert image.content.startswith(b"\x89PNG")
+
+    missing = client.post(f"/api/jobs/{job_id}/approve", json={"subject_ids": []})
+    assert missing.status_code == 422 and missing.json()["error"]["code"] == "subject_selection_required"
+    wrong = client.post(f"/api/jobs/{job_id}/approve", json={"subject_ids": ["999"]})
+    assert wrong.status_code == 422 and wrong.json()["error"]["code"] == "invalid_subject_selection"
+    assert client.get(f"/api/jobs/{job_id}/subjects/999/preview").status_code == 404
+
+    approved = client.post(f"/api/jobs/{job_id}/approve", json={"subject_ids": ["0"]})
+    assert approved.status_code == 200
+    assert client.get(f"/api/jobs/{job_id}/plan").json()["selected_subject_ids"] == ["0"]
+    _drain(worker)
+    result = client.get(f"/api/jobs/{job_id}/result").json()
+    assert result["render_status"] == "verified"
+    assert [subject["object_id"] for subject in result["segmentation"]["subjects"]] == ["0", "1"]
+    selected_masks = store.job_dir(job_id) / "masks" / "selected" / "manifest.json"
+    assert selected_masks.is_file()
+    assert (store.job_dir(job_id) / "output.mp4").is_file()
+
+
+class _EmptySubjectSegmentation(MockSegmentationProvider):
+    def segment(self, **kwargs):
+        result = super().segment(**kwargs)
+        return result.model_copy(update={"subjects": []})
+
+
+class _SingleSubjectSegmentation(MockSegmentationProvider):
+    def segment(self, **kwargs):
+        result = super().segment(**kwargs)
+        return result.model_copy(update={"subjects": result.subjects[:1]})
+
+
+def test_single_detected_subject_is_auto_selected(tmp_path, tiny_video):
+    store = JobStore(tmp_path / "storage")
+    bundle = dataclasses.replace(get_providers("mock"), segmentation=_SingleSubjectSegmentation())
+    client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
+    worker = PersistentWorker(store, bundle, poll_seconds=0.05)
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    assert len(review["subjects"]) == 1
+    assert review["selection_required"] is False
+    approved = client.post(f"/api/jobs/{job_id}/approve")
+    assert approved.status_code == 200, approved.text
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"
+    assert client.get(f"/api/jobs/{job_id}/plan").json()["selected_subject_ids"] == [
+        review["subjects"][0]["object_id"]
+    ]
+
+
+def test_no_subjects_is_explicit_terminal_and_never_renders(tmp_path, tiny_video):
+    store = JobStore(tmp_path / "storage")
+    bundle = dataclasses.replace(get_providers("mock"), segmentation=_EmptySubjectSegmentation())
+    client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
+    worker = PersistentWorker(store, bundle, poll_seconds=0.05)
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "unsupported" and body["stage"] == "no_subjects"
+    assert body["error"]["code"] == "NoSubjectsDetected"
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    assert review["no_subjects"] is True
+    assert review["subjects"] == []
+    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 409
+    assert store.source_path(store.get(job_id)).is_file()
 
 
 def test_worker_restart_can_resume_approved_plan(env, tiny_video):

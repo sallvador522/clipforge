@@ -12,17 +12,18 @@ type TranscriptSource = "live" | "mock-audio" | "mock-fixture" | "typed" | null;
 const STEPS = [
   { key: "transcribing", label: "Transcribe voice" },
   { key: "planning", label: "Build editing plan" },
-  { key: "review", label: "Review plan" },
-  { key: "segmenting", label: "Segment subject (mock masks)" },
+  { key: "detecting", label: "Detect subjects — SAM / mock" },
+  { key: "review", label: "Review plan and subjects" },
   { key: "rendering", label: "Render — FFmpeg + OpenCV" },
   { key: "verifying", label: "Verify output file" },
   { key: "completed", label: "Done — verified MP4" },
 ];
 const STAGE_INDEX: Record<string, number> = {
   transcribing: 0, planning: 1, replanning: 1,
-  awaiting_approval: 2, awaiting_clarification: 2, approved: 3,
-  segmenting: 3, preparing_background: 3, rendering: 4, verifying: 5,
-  completed: 6, pipeline_completed: 6,
+  segmenting: 2,
+  awaiting_approval: 3, awaiting_clarification: 3,
+  approved: 4, preparing_masks: 4, preparing_background: 4, rendering: 4,
+  verifying: 5, completed: 6, pipeline_completed: 6,
 };
 
 interface Props {
@@ -133,6 +134,7 @@ export function AssistantPanel({
 
   const busy = transcribeStatus === "uploading" || transcribeStatus === "transcribing";
   const verified = Boolean(job?.status === "completed" && result?.render_status === "verified");
+  const detected = Boolean(planReview?.segmentation || result?.segmentation);
   // No step is invented for failed or no-render terminal jobs; the explicit
   // notice/error below carries the real state instead.
   const hideSteps =
@@ -369,8 +371,14 @@ export function AssistantPanel({
               )}
               {job.status === "unsupported" && (
                 <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-                  <p className="text-[13px] font-medium text-danger">Request not supported</p>
-                  <p className="mt-1 text-[12px]">{planReview?.plan?.summary_explanation ?? "This build cannot perform the requested edit."}</p>
+                  <p className="text-[13px] font-medium text-danger">
+                    {job.error?.code === "NoSubjectsDetected" ? "No people detected" : "Request not supported"}
+                  </p>
+                  <p className="mt-1 text-[12px]">
+                    {job.error?.code === "NoSubjectsDetected"
+                      ? job.error.message
+                      : planReview?.plan?.summary_explanation ?? "This build cannot perform the requested edit."}
+                  </p>
                   {planReview && <Button className="mt-2" onClick={onOpenPlanReview}>View details</Button>}
                 </div>
               )}
@@ -378,7 +386,7 @@ export function AssistantPanel({
               {!hideSteps && (
                 <ol className="mt-2.5 space-y-1.5">
                   {STEPS.map((step, i) => {
-                    const done = verified || i < stageIndex;
+                    const done = verified || (i < stageIndex && (i !== 2 || detected));
                     const active = !verified && job.status !== "failed" && i === stageIndex;
                     return (
                       <li key={step.key} className={`flex items-center gap-2 text-[13px] ${done ? "text-success" : active ? "text-foreground" : "text-muted/60"}`}>

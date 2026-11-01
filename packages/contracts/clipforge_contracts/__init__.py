@@ -69,7 +69,13 @@ from clipforge_contracts.editing_plan import (
     SubjectSpec,
 )
 from clipforge_contracts.mask_manifest import MaskFrameEntry, MaskManifest
-from clipforge_contracts.responses import BackgroundResult, RenderResult, SegmentationResult, TranscriptResult
+from clipforge_contracts.responses import (
+    BackgroundResult,
+    RenderResult,
+    SegmentationResult,
+    SegmentationSubject,
+    TranscriptResult,
+)
 
 __all__ = [
     "ApprovalStatus",
@@ -110,6 +116,7 @@ __all__ = [
     "RenderResult",
     "ReplaceBackgroundOperation",
     "SegmentationResult",
+    "SegmentationSubject",
     "SubjectSelection",
     "SubjectSpec",
     "SubjectStrategy",

@@ -100,6 +100,7 @@ class JobRecord(BaseModel):
     edit_history: list[EditHistoryEntry] = Field(default_factory=list)
     state_history: list[JobStateEntry] = Field(default_factory=list)
     approval_granted: bool = False
+    selected_subject_ids: list[str] = Field(default_factory=list)
     clarification_answer: str | None = Field(default=None, max_length=300)
     clarification_count: int = Field(default=0, ge=0)
     result: JobResult | None = None

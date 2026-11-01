@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { subjectPreviewUrl } from "@/lib/api";
 import type { PlanCapabilityData, PlanReviewData } from "@/lib/types";
 import { Button } from "./ui/button";
 
@@ -10,7 +11,7 @@ interface Props {
   review: PlanReviewData;
   submitting: Decision;
   error: string | null;
-  onApprove: () => void;
+  onApprove: (subjectIds: string[]) => void;
   onReject: () => void;
   onClarify: (answer: string) => void;
   onClose: () => void;
@@ -42,12 +43,31 @@ export function PlanReviewDialog({
   onClose,
 }: Props) {
   const [answer, setAnswer] = useState("");
+  const initialSelection =
+    review.selected_subject_ids.length > 0
+      ? review.selected_subject_ids
+      : review.subjects.length === 1
+        ? [review.subjects[0].object_id]
+        : [];
+  const [selectedSubjects, setSelectedSubjects] = useState<string[]>(initialSelection);
   const plan = review.plan;
   const capabilityById = new Map(review.capabilities.map((c) => [c.capability_id, c]));
   const awaitingApproval = review.status === "awaiting_approval";
   const awaitingClarification = review.status === "awaiting_clarification";
   const unsupported = review.status === "unsupported" || plan?.outcome === "unsupported";
   const rejected = review.status === "rejected";
+  const hasDetection = review.segmentation !== null;
+  const noSubjects = review.no_subjects || (hasDetection && review.subjects.length === 0);
+  const needsSelection = hasDetection && review.subjects.length > 0 && selectedSubjects.length === 0;
+  const canApprove = awaitingApproval && !noSubjects && !needsSelection;
+
+  function toggleSubject(objectId: string) {
+    setSelectedSubjects((current) =>
+      current.includes(objectId)
+        ? current.filter((id) => id !== objectId)
+        : [...current, objectId],
+    );
+  }
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -94,11 +114,11 @@ export function PlanReviewDialog({
             <p className="mt-1 text-[13px] leading-relaxed text-muted">{plan.summary_explanation}</p>
             <dl className="mt-3 grid gap-2 font-mono text-[11px] sm:grid-cols-2">
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Subject</dt>
+                <dt className="text-muted">Director subject intent</dt>
                 <dd className="truncate text-right" title={plan.subject.description}>{plan.subject.description}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Strategy</dt>
+                <dt className="text-muted">Director strategy</dt>
                 <dd className="text-right">{plan.subject.strategy.replaceAll("_", " ")}</dd>
               </div>
               <div className="flex justify-between gap-2">
@@ -119,6 +139,79 @@ export function PlanReviewDialog({
               </div>
             </dl>
           </section>
+
+          {hasDetection && (
+            <section aria-label="Detected people" className="rounded-md border border-accent/40 bg-accent/5 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-mono text-[10px] tracking-wider text-accent">
+                    DETECTED PEOPLE — SELECT WHO STAYS SHARP
+                  </p>
+                  <p className="mt-1 text-[12px] text-muted">
+                    {review.segmentation?.is_mock
+                      ? "Simulated detection for mock mode. Not real SAM inference."
+                      : `SAM 3.1 segmentation via ${review.segmentation?.provider ?? "meta-sam"}.`}
+                  </p>
+                </div>
+                <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted">
+                  {review.segmentation?.frame_count ?? 0} frames · {review.segmentation?.width ?? 0}×{review.segmentation?.height ?? 0}
+                </span>
+              </div>
+
+              {noSubjects ? (
+                <div className="mt-3 rounded border border-danger/40 bg-danger/10 p-2.5" role="alert">
+                  <p className="text-[13px] font-medium text-danger">No people detected</p>
+                  <p className="mt-1 text-[12px] text-muted">
+                    There is no subject to keep sharp, so this edit cannot be approved. Try a clip with a visible person.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {review.subjects.map((subject) => {
+                      const selected = selectedSubjects.includes(subject.object_id);
+                      return (
+                        <button
+                          key={subject.object_id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => toggleSubject(subject.object_id)}
+                          className={`overflow-hidden rounded-md border text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                            selected ? "border-accent bg-accent/10" : "border-border bg-raised hover:border-muted"
+                          }`}
+                        >
+                          <div className="relative aspect-video bg-black/40">
+                            <img
+                              src={subjectPreviewUrl(review.job_id, subject.object_id)}
+                              alt={`Preview of detected subject ${subject.object_id}`}
+                              className="h-full w-full object-contain"
+                              loading="lazy"
+                            />
+                            <span className={`absolute right-2 top-2 rounded border px-1.5 py-0.5 font-mono text-[9px] ${selected ? "border-accent bg-accent text-[#14110C]" : "border-border bg-black/70 text-muted"}`}>
+                              {selected ? "KEEP SHARP" : "SELECT"}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                            <div>
+                              <p className="text-[12px] font-medium">Subject {subject.object_id}</p>
+                              <p className="font-mono text-[9px] text-muted">
+                                frames {subject.first_frame ?? "?"}–{subject.last_frame ?? "?"} · {subject.frames_detected} detected
+                              </p>
+                            </div>
+                            <span className="font-mono text-[9px] text-muted">{subject.label}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 font-mono text-[10px] text-muted">
+                    Selection uses stable SAM object IDs within this clip. It is not identity recognition.
+                    {needsSelection ? " Select at least one person to approve." : ""}
+                  </p>
+                </>
+              )}
+            </section>
+          )}
 
           <section aria-label="Proposed operations">
             <div className="flex items-baseline justify-between">
@@ -224,9 +317,13 @@ export function PlanReviewDialog({
         <footer className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface px-4 py-3">
           <p className="font-mono text-[10px] text-muted">
             {awaitingApproval
-              ? plan.approval_status === "required"
-                ? "This plan includes a capability that requires approval."
-                : "Review is required before any video changes."
+              ? noSubjects
+                ? "No people detected — approval is unavailable."
+                : needsSelection
+                  ? "Select at least one detected person."
+                  : hasDetection
+                    ? `${selectedSubjects.length} subject${selectedSubjects.length === 1 ? "" : "s"} selected. Review is required before rendering.`
+                    : "Review is required before any video changes."
               : unsupported
                 ? "No supported edit plan is available."
                 : rejected
@@ -239,8 +336,8 @@ export function PlanReviewDialog({
                 <Button variant="ghost" onClick={onReject} disabled={submitting !== null}>
                   {submitting === "reject" ? "Rejecting…" : "Reject plan"}
                 </Button>
-                <Button onClick={onApprove} disabled={submitting !== null}>
-                  {submitting === "approve" ? "Approving…" : "Approve & render"}
+                <Button onClick={() => onApprove(selectedSubjects)} disabled={submitting !== null || !canApprove}>
+                  {submitting === "approve" ? "Approving…" : hasDetection ? "Approve selected & render" : "Approve & render"}
                 </Button>
               </>
             )}

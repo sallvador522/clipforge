@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from clipforge_api.main import create_app
+from clipforge_director import MockProfessionalEditingDirector
 from clipforge_api.transcribe import convert_to_wav
 from clipforge_jobs import JobStore
 from clipforge_providers import (
@@ -28,6 +29,7 @@ from clipforge_providers import (
     MockSegmentationProvider,
     MockTranscriptionProvider,
     ProviderBundle,
+    SamSegmentationProvider,
     get_providers,
 )
 from clipforge_providers.transcription_meta import (
@@ -68,9 +70,10 @@ def test_health_reports_transcription_mode(tmp_path, monkeypatch):
     body = make_app(tmp_path).get("/health").json()
     assert body["transcribe_mode"] == "mock"
     assert body["director_mode"] == "mock"
+    assert body["segmentation_mode"] == "mock"
     assert body["live_transcription_available"] is False
-    assert body["live_call_limits"] == {"transcription": 2, "director": 2}
-    assert body["live_calls_used"] == {"transcription": 0, "director": 0}
+    assert body["live_call_limits"] == {"transcription": 2, "director": 2, "segmentation": 2}
+    assert body["live_calls_used"] == {"transcription": 0, "director": 0, "segmentation": 0}
 
 
 def test_conversion_produces_mono_24k_pcm16(spoken_webm, tmp_path):
@@ -284,6 +287,31 @@ def test_provider_selection_is_scoped_to_transcription(monkeypatch):
         get_providers()
 
 
+def test_provider_selection_is_scoped_to_segmentation(monkeypatch):
+    monkeypatch.setenv("CLIPFORGE_AI_MODE", "mock")
+    monkeypatch.delenv("CLIPFORGE_TRANSCRIBE_MODE", raising=False)
+    monkeypatch.delenv("CLIPFORGE_SEGMENTATION_MODE", raising=False)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    bundle = get_providers()
+    assert isinstance(bundle.segmentation, MockSegmentationProvider)
+    assert bundle.segmentation_mode == "mock"
+
+    monkeypatch.setenv("CLIPFORGE_SEGMENTATION_MODE", "live")
+    with pytest.raises(MissingCredentialsError):
+        get_providers()  # no network, no upload, clear missing-key failure
+
+    monkeypatch.setenv("MODEL_API_KEY", "dummy-key")
+    bundle = get_providers()
+    assert isinstance(bundle.segmentation, SamSegmentationProvider)
+    assert bundle.segmentation_mode == "live"
+    assert isinstance(bundle.transcription, MockTranscriptionProvider)
+    assert isinstance(bundle.director, MockProfessionalEditingDirector)
+
+    monkeypatch.setenv("CLIPFORGE_SEGMENTATION_MODE", "banana")
+    with pytest.raises(ValueError):
+        get_providers()
+
+
 def test_confirmed_transcript_is_planned_without_retranscribing(spoken_webm, tmp_path):
     client = make_app(tmp_path)
     upload = client.post("/api/uploads", files={"file": ("clip.mp4", _tiny_video(tmp_path), "video/mp4")})
@@ -303,7 +331,11 @@ def test_confirmed_transcript_is_planned_without_retranscribing(spoken_webm, tmp
     assert worker.run_once() is True
     body = client.get(f"/api/jobs/{job_id}").json()
     assert body["status"] == "awaiting_approval"
-    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 200
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    subject_ids = [subject["object_id"] for subject in review["subjects"]][:1]
+    assert client.post(
+        f"/api/jobs/{job_id}/approve", json={"subject_ids": subject_ids}
+    ).status_code == 200
     assert worker.run_once() is True
     body = client.get(f"/api/jobs/{job_id}").json()
     assert body["status"] == "completed"

@@ -15,10 +15,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-DEFAULT_LIMITS = {"transcription": 2, "director": 2}
+DEFAULT_LIMITS = {"transcription": 2, "director": 2, "segmentation": 2}
 LIMIT_ENV_VARS = {
     "transcription": "CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT",
     "director": "CLIPFORGE_LIVE_DIRECTOR_LIMIT",
+    "segmentation": "CLIPFORGE_LIVE_SEGMENTATION_LIMIT",
 }
 
 

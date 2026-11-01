@@ -140,8 +140,8 @@ would only return a plan; it would not execute tools or render.
 
 - Actual billed cost is still external; the audit stores an estimate from usage.
 - Failed-job audit is in `job.json`; the public `/result` endpoint remains completed-only.
-- Approval/resume UI/endpoint is still missing.
-- SAM 3.1 and Muse Image are not integrated.
+- Approval/resume UI/endpoint was still missing at the time (delivered in 6C).
+- SAM 3.1 was not integrated at the time (provider/parser implemented in 6D; live inference not validated). Muse Image remains unimplemented.
 - No live retest has been performed after the normalisation fix; that requires fresh approval.
 
 ## 7. Files changed

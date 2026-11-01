@@ -120,6 +120,40 @@ export interface PlanCapabilityData {
   provider: string | null;
 }
 
+export interface SegmentationSubjectData {
+  object_id: string;
+  label: string;
+  preview_url: string | null;
+  first_frame: number | null;
+  last_frame: number | null;
+  frames_detected: number;
+  confidence: number | null;
+}
+
+export interface SegmentationReviewData {
+  provider: string;
+  model: string | null;
+  is_mock: boolean;
+  status: string;
+  frame_count: number;
+  width: number;
+  height: number;
+  fps: number;
+  diagnostics: string[];
+  file_cleanup: string;
+}
+
+export interface SegmentationSubjectResultData {
+  object_id: string;
+  label: string;
+  mask_manifest_path: string;
+  preview_path: string | null;
+  first_frame: number | null;
+  last_frame: number | null;
+  frames_detected: number;
+  confidence: number | null;
+}
+
 export interface PlanReviewData {
   job_id: string;
   status: JobStatusValue;
@@ -134,6 +168,11 @@ export interface PlanReviewData {
   clarification_count: number;
   render_status: string;
   error: { code: string; message: string } | null;
+  subjects: SegmentationSubjectData[];
+  segmentation: SegmentationReviewData | null;
+  selected_subject_ids: string[];
+  selection_required: boolean;
+  no_subjects: boolean;
 }
 
 export interface JobResultData {
@@ -146,6 +185,12 @@ export interface JobResultData {
     height: number;
     fps: number;
     is_mock: boolean;
+    provider_name: string;
+    model: string | null;
+    status: string;
+    subjects: SegmentationSubjectResultData[];
+    diagnostics: string[];
+    file_cleanup: string;
   } | null;
   background: { asset_id: string; orientation: string; is_mock: boolean } | null;
   rendered: RenderedData | null;

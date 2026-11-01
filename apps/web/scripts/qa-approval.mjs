@@ -55,17 +55,37 @@ async function exportVideo(page, filename) {
   return path;
 }
 
+async function selectFirstSubject(page) {
+  await page.getByRole("button", { name: /Subject 0/ }).first().click();
+}
+
 async function blurScenario(viewport, name) {
   const page = await browser.newPage({ viewport });
   collect(page, name);
   await uploadAndConfirm(page, "blur the background");
   await page.getByRole("dialog").waitFor({ timeout: 20_000 });
   const operations = await page.locator('[role="dialog"] li').count();
-  const hasMockMask = (await page.getByRole("dialog").innerText()).includes("MOCK");
-  await page.getByRole("button", { name: "Approve & render" }).click();
+  const dialogText = await page.getByRole("dialog").innerText();
+  const hasMockMask = dialogText.includes("MOCK");
+  const hasSubjects = dialogText.includes("DETECTED PEOPLE");
+  const previews = page.locator('[role="dialog"] img');
+  const previewCount = await previews.count();
+  await previews.first().waitFor({ state: "visible" });
+  const previewWidth = await previews.first().evaluate((img) => img.naturalWidth);
+  await selectFirstSubject(page);
+  await page.getByRole("button", { name: /Approve selected & render/ }).click();
   await waitForExportEnabled(page);
   const saved = await exportVideo(page, `${name}.mp4`);
-  report.scenarios.push({ name, result: "completed", operations, hasMockMask, saved });
+  report.scenarios.push({
+    name,
+    result: "completed",
+    operations,
+    hasMockMask,
+    hasSubjects,
+    previewCount,
+    previewWidth,
+    saved,
+  });
   await page.close();
 }
 
@@ -76,13 +96,14 @@ async function replacementScenario() {
   await page.getByRole("dialog").waitFor({ timeout: 20_000 });
   const text = await page.getByRole("dialog").innerText();
   const exportBefore = await page.getByRole("button", { name: "Export MP4" }).isEnabled();
-  await page.getByRole("button", { name: "Approve & render" }).click();
+  await selectFirstSubject(page);
+  await page.getByRole("button", { name: /Approve selected & render/ }).click();
   await waitForExportEnabled(page);
   const saved = await exportVideo(page, "replacement.mp4");
   report.scenarios.push({
     name: "replacement",
     result: "completed",
-    approvalRequired: text.includes("requires approval"),
+    approvalRequired: text.includes("DETECTED PEOPLE"),
     exportBeforeApproval: exportBefore,
     saved,
   });
@@ -109,7 +130,8 @@ async function clarificationScenario() {
   await page.fill("#clarification-answer", "Mantém o homem da esquerda nítido.");
   await page.getByRole("button", { name: "Answer & rebuild plan" }).click();
   await page.getByRole("dialog").waitFor({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Approve & render" }).click();
+  await selectFirstSubject(page);
+  await page.getByRole("button", { name: /Approve selected & render/ }).click();
   await waitForExportEnabled(page);
   const saved = await exportVideo(page, "clarification.mp4");
   report.scenarios.push({ name: "clarification", result: "completed", saved });

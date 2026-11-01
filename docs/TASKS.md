@@ -103,7 +103,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] ADR-015: configurable live-call limits (`CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT`, `CLIPFORGE_LIVE_DIRECTOR_LIMIT`), default 2/2; local test phase 100/25; phase-005 ledger archived and active ledger reset to 0/0 with user approval.
 - [x] `/health` exposes `live_call_limits` and `live_calls_used`; ledger tests cover env overrides, explicit overrides and invalid values.
 - [ ] After user testing: review real usage/cost and either restore the 2/2 defaults or open a new approved phase.
-- [ ] SAM 3.1 segmentation — blocked on explicit approval; required for real subject tracking.
+- [x] SAM 3.1 provider + official parser + subject selection implemented and offline-validated in 6D; live detection quality still requires explicit approval and a controlled test.
 - [x] Approval/rejection endpoint + UI to resume `awaiting_approval` jobs — delivered in Milestone 6C (ADR-018).
 
 ## Milestone 6B-LIVE-HARDENING — Director Reliability & Cost Audit
@@ -160,7 +160,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (234 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (256 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6C — Plan Review, Approval & Resume (complete, mock mode)
@@ -168,7 +168,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Audit product state and save `docs/PRODUCT_AUDIT.md` with verified/mock/unimplemented distinctions.
 - [x] Wire `MockProfessionalEditingDirector` (v2) into the worker for `CLIPFORGE_DIRECTOR_MODE=mock`; keep live validation unchanged; no fallback to the legacy v1 planner.
 - [x] Extend the state machine with `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`; approval resumes via `queued`/stage `approved`.
-- [x] Persist every ready v2 plan (plus v1 adapter) before review; block segmentation and rendering before approval.
+- [x] Persist every ready v2 plan (plus v1 adapter) before review; block rendering before approval. (6D later added subject detection before review.)
 - [x] Add `GET /plan`, `POST /approve`, `POST /reject`, `POST /clarify` with state validation, stable error codes and no provider credentials.
 - [x] Atomic cross-process transitions (`transition.lock`) and auditable `state_history`; claims released after every worker run.
 - [x] Idempotency: duplicate/concurrent approvals cannot double-render; approved jobs resume from the persisted plan without a second director call.
@@ -181,13 +181,35 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Browser E2E (`apps/web/scripts/qa-approval.mjs`): blur desktop/mobile, replacement, reject, clarification and unsupported; 4 real MP4 downloads; zero console errors.
 - [x] Frontend typecheck and production build.
 - [x] Docs: ADR-018, PRODUCT_AUDIT, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README.
-- [ ] Real SAM 3.1 subject tracking — blocked on explicit approval and a verified contract.
-- [ ] Muse Image background generation — planned, not implemented.
+- [x] Real SAM 3.1 provider + official parser + subject selection implemented and offline-validated in 6D; live inference not yet validated.
+- [ ] Muse Image background generation - planned, not implemented.
 - [ ] Authentication/ownership for multi-user deployment — not implemented.
 - [ ] Automatic stale-claim recovery after a hard crash mid-render — not implemented.
 
-## Milestone 6 — Live Integration Gate (partial; SAM/Muse remain blocked)
+## Milestone 6D - Real SAM 3.1 Segmentation & Subject Selection (offline-validated)
+
+- [x] Verify official SAM 3.1 docs: model `sam-3.1`, `POST /v1/responses`, `input_video` by URL/file_id, `stream=true`, output_text mask grammar, Files API `user_data` + expiration, 16 objects/frame.
+- [x] Inspect and pin official Python parser `meta-sam-parser==0.1.0`; use `parse_responses_stream` and `decode_mask_to_raster`.
+- [x] Implement `SamSegmentationProvider` with official request/stream, no retries, safe error mapping, one-shot `LiveCallAuthorization` and no mock fallback.
+- [x] Temporary video-only MP4 preparation (copy or H.264 transcode), ffprobe validation of dimensions/FPS/frame count/no audio, original preserved + SHA-256.
+- [x] Files API upload `purpose=user_data`, `expires_after=3600`, `file_id` reference, delete in `finally`; cleanup failures recorded.
+- [x] Convert per-object box-local SAM rasters into ADR-005 full-frame PNG sequences; preserve object IDs, frame indices, source hash, provider/model and completion status; reject malformed/incomplete/wrong-size/duplicate/>16/out-of-range output.
+- [x] Extend `SegmentationResult`, `MaskManifest`, `MaskLoader` and `MaskSequenceWriter`; loader rejects incomplete segmentation.
+- [x] Detect subjects before plan review; persist per-object masks + previews; keep rendering blocked until approval.
+- [x] Subject selection UI (preview cards, multi-select, stable IDs, single auto-select, multiple explicit, zero-subject state); approval sends `subject_ids`.
+- [x] API: `GET /plan` subject metadata, `GET /subjects/{object_id}/preview`, `POST /approve` subject validation; `NoSubjectsDetected` terminal state.
+- [x] Renderer integration: bounded-memory selected-mask union; audio/resolution/timing verification preserved. Selective person blur explicitly unsupported.
+- [x] Mock provider emits two synthetic per-object tracks (enter/leave) and previews; no live SAM request.
+- [x] Protocol-compatible offline fixtures and tests: one/multiple, stable IDs, enter/leave, occlusion, empty, incomplete, malformed, wrong dimensions, duplicates, out-of-order, >16, cleanup, expiry, source preservation.
+- [x] Full-resolution benchmark: 300 frames/1280×720/30 FPS/10 s/audio; 1.74 FPS; 637.7 MB peak; verified 300 frames + AAC.
+- [x] Browser E2E updated for subject selection and approval.
+- [x] Docs: ADR-019, `docs/SAM_31_INTEGRATION.md`, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README, PRODUCT_AUDIT.
+- [ ] **Live SAM 3.1 validation — blocked on explicit approval and a cost estimate.** No live request has been made; detection quality, live stream behaviour, Files API expiry encoding and live cleanup remain unverified.
+- [ ] Muse Image background generation - planned, not implemented.
+- [ ] Authentication/ownership and stale-claim recovery - not implemented.
+
+## Milestone 6 - Live Integration Gate (SAM implemented, live validation pending)
 - [x] Verify official Meta documentation for Muse Voice Transcribe and Muse Spark; implement live adapters with budget tracking and no automatic billable retries (ADR-008, ADR-014, ADR-017).
-- [ ] Verify official SAM 3.1 documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
+- [x] Verify official SAM 3.1 documentation and implement the adapter + parser + mask conversion (ADR-019); offline validation complete, live inference not validated.
 - [ ] Verify official Muse Image documentation; keep local/mock assets until then.
 - [ ] Propose one controlled SAM integration test and obtain explicit user approval before any live call.

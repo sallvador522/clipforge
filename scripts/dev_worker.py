@@ -37,8 +37,9 @@ def enforce_dev_safety() -> None:
         return
     os.environ["CLIPFORGE_TRANSCRIBE_MODE"] = "mock"
     os.environ["CLIPFORGE_DIRECTOR_MODE"] = "mock"
+    os.environ["CLIPFORGE_SEGMENTATION_MODE"] = "mock"
     print(
-        "Dev safety: transcription/director forced to mock. "
+        "Dev safety: transcription/director/segmentation forced to mock. "
         "Set CLIPFORGE_DEV_ALLOW_LIVE=1 to opt in to live."
     )
 
@@ -65,7 +66,8 @@ def main() -> int:
     providers = get_providers()
     print(
         f"ClipForge worker | ai_mode={logging_ready} | "
-        f"transcribe={providers.transcription_mode} | director={providers.director_mode}"
+        f"transcribe={providers.transcription_mode} | director={providers.director_mode} | "
+        f"segmentation={providers.segmentation_mode}"
     )
     worker = PersistentWorker(JobStore(Path(os.environ.get("CLIPFORGE_STORAGE_ROOT", "storage"))), providers, poll_seconds=0.5)
     worker.run_forever()

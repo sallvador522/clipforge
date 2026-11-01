@@ -1,0 +1,39 @@
+{
+  "name": "wrong_dimensions",
+  "source": {
+    "width": 64,
+    "height": 36,
+    "frame_count": 5,
+    "fps": 10.0
+  },
+  "events": [
+    {
+      "type": "response.created",
+      "response": {
+        "id": "resp_fixture",
+        "status": "in_progress"
+      }
+    },
+    {
+      "type": "response.output_text.delta",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "delta": "<0f>0<|box;x1=4;y1=4;x2=19;y2=27;w=64;h=36|><|mask;x=0;y=0;data=4,4,!!!!!'y80v-)c|>\n"
+    },
+    {
+      "type": "response.output_text.done",
+      "item_id": "msg_sam",
+      "output_index": 0,
+      "content_index": 0,
+      "text": "<0f>0<|box;x1=4;y1=4;x2=19;y2=27;w=64;h=36|><|mask;x=0;y=0;data=4,4,!!!!!'y80v-)c|>\n"
+    },
+    {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_fixture",
+        "status": "completed"
+      }
+    }
+  ]
+}

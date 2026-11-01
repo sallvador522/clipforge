@@ -15,7 +15,7 @@ from clipforge_contracts import ApprovalStatus, EditingIntent, PlanOutcome, Tran
 from clipforge_director import DirectorVideoMetadata, LiveCallAuthorization, LiveCallBudget
 from clipforge_jobs import MAX_CLARIFICATIONS, JobError, JobResult, JobStatus, JobStore
 from clipforge_providers import ProviderBundle
-from clipforge_worker.masks import MaskLoader
+from clipforge_worker.masks import MaskLoader, combine_subject_masks
 from clipforge_worker.renderer import RenderRequest, render_video
 
 logger = logging.getLogger("clipforge.worker")
@@ -59,24 +59,60 @@ class JobProcessor:
         self.store.update(job_id, result=result)
         return result
 
+    def _run_segmentation(self, job_id: str, record):
+        info = record.source_info
+        authorization = None
+        if self.providers.segmentation_mode == "live":
+            authorization = LiveCallAuthorization(
+                LiveCallBudget(self.store.root), "segmentation"
+            )
+        return self.providers.segmentation.segment(
+            job_id=job_id,
+            source_video_id=record.job_id,
+            output_dir=self.store.job_dir(job_id) / "masks",
+            width=info.width,
+            height=info.height,
+            frame_count=info.frame_count,
+            fps=info.fps,
+            source_path=self.store.source_path(record),
+            prompt="person",
+            authorization=authorization,
+        )
+
     def _execute_approved_plan(self, job_id: str, record, transcript: TranscriptResult) -> str:
         base = record.result
         if base is None or base.plan is None:
             raise ValueError("Approved job has no persisted plan; refusing to render.")
         plan = base.plan
         info = record.source_info
-        masks_dir = self.store.job_dir(job_id) / "masks"
+        job_masks_dir = self.store.job_dir(job_id) / "masks"
 
-        self.store.update(job_id, stage="segmenting")
-        segmentation = self.providers.segmentation.segment(
-            job_id=job_id,
-            source_video_id=record.job_id,
-            output_dir=masks_dir,
-            width=info.width,
-            height=info.height,
-            frame_count=info.frame_count,
-            fps=info.fps,
-        )
+        segmentation = base.segmentation
+        if segmentation is None:
+            # Backward compatibility with jobs approved before 6D.
+            self.store.update(job_id, stage="segmenting")
+            segmentation = self._run_segmentation(job_id, record)
+            base = base.model_copy(update={"segmentation": segmentation})
+            self.store.update(job_id, result=base)
+
+        masks_dir = job_masks_dir
+        if segmentation.subjects:
+            selected = list(record.selected_subject_ids)
+            if not selected:
+                raise ValueError(
+                    "Approved job has detected subjects but no subject selection; refusing to render."
+                )
+            self.store.update(job_id, stage="preparing_masks")
+            masks_dir = job_masks_dir / "selected"
+            combine_subject_masks(
+                segmentation.subjects,
+                selected,
+                masks_dir,
+                fps=info.fps,
+                source_video_id=record.job_id,
+                source_sha256=segmentation.source_sha256,
+            )
+
         loaded = MaskLoader().load(masks_dir)
         if len(loaded) != segmentation.frame_count:
             raise ValueError("Segmentation mask count does not match the segmentation result.")
@@ -287,6 +323,41 @@ class JobProcessor:
                 )
                 return JobStatus.REJECTED.value
 
+            # Detection happens before review so the user can choose who stays
+            # sharp. Rendering still cannot start before explicit approval.
+            segmentation = None
+            if any(operation.type == "keep_subject_sharp" for operation in plan.operations):
+                self.store.update(job_id, stage="segmenting")
+                segmentation = self._run_segmentation(job_id, record)
+                if not segmentation.subjects:
+                    result = self._persist_plan_result(
+                        job_id,
+                        transcript=transcript,
+                        director_plan=director_plan,
+                        director_usage=director_usage,
+                        director_request_id=director_request_id,
+                        director_audit=director_audit,
+                        plan=plan,
+                        segmentation=segmentation,
+                        requires_approval=False,
+                        render_status="no_subjects",
+                    )
+                    self.store.update(
+                        job_id,
+                        status=JobStatus.UNSUPPORTED,
+                        stage="no_subjects",
+                        result=result,
+                        error=JobError(
+                            code="NoSubjectsDetected",
+                            message=(
+                                "No people were detected in this clip. Use a clip with a visible "
+                                "person or choose a different edit."
+                            ),
+                        ),
+                    )
+                    logger.info("job_no_subjects job_id=%s", job_id)
+                    return JobStatus.UNSUPPORTED.value
+
             # Every ready plan, including blur-only plans, requires explicit user review.
             result = self._persist_plan_result(
                 job_id,
@@ -296,13 +367,19 @@ class JobProcessor:
                 director_request_id=director_request_id,
                 director_audit=director_audit,
                 plan=plan,
+                segmentation=segmentation,
                 requires_approval=True,
                 render_status="awaiting_approval",
             )
             self.store.update(
                 job_id, status=JobStatus.AWAITING_APPROVAL, stage="awaiting_approval", result=result
             )
-            logger.info("job_awaiting_approval job_id=%s ops=%d", job_id, len(plan.operations))
+            logger.info(
+                "job_awaiting_approval job_id=%s ops=%d subjects=%d",
+                job_id,
+                len(plan.operations),
+                len(segmentation.subjects) if segmentation else 0,
+            )
             return JobStatus.AWAITING_APPROVAL.value
 
         except Exception as exc:  # recorded + logged, never swallowed; original preserved

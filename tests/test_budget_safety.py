@@ -213,20 +213,25 @@ def test_dev_launchers_force_mock_unless_explicitly_opted_in(monkeypatch):
     monkeypatch.delenv("CLIPFORGE_DEV_ALLOW_LIVE", raising=False)
     monkeypatch.setenv("CLIPFORGE_TRANSCRIBE_MODE", "live")
     monkeypatch.setenv("CLIPFORGE_DIRECTOR_MODE", "live")
+    monkeypatch.setenv("CLIPFORGE_SEGMENTATION_MODE", "live")
 
     for script in ("dev_api.py", "dev_worker.py"):
         monkeypatch.setenv("CLIPFORGE_TRANSCRIBE_MODE", "live")
         monkeypatch.setenv("CLIPFORGE_DIRECTOR_MODE", "live")
+        monkeypatch.setenv("CLIPFORGE_SEGMENTATION_MODE", "live")
         _load_script(script).enforce_dev_safety()
         assert os.environ["CLIPFORGE_TRANSCRIBE_MODE"] == "mock"
         assert os.environ["CLIPFORGE_DIRECTOR_MODE"] == "mock"
+        assert os.environ["CLIPFORGE_SEGMENTATION_MODE"] == "mock"
 
     monkeypatch.setenv("CLIPFORGE_DEV_ALLOW_LIVE", "1")
     monkeypatch.setenv("CLIPFORGE_TRANSCRIBE_MODE", "live")
     monkeypatch.setenv("CLIPFORGE_DIRECTOR_MODE", "live")
+    monkeypatch.setenv("CLIPFORGE_SEGMENTATION_MODE", "live")
     _load_script("dev_api.py").enforce_dev_safety()
     assert os.environ["CLIPFORGE_TRANSCRIBE_MODE"] == "live"
     assert os.environ["CLIPFORGE_DIRECTOR_MODE"] == "live"
+    assert os.environ["CLIPFORGE_SEGMENTATION_MODE"] == "live"
 
 
 def test_director_failure_reserves_once_and_never_retries(tmp_path):

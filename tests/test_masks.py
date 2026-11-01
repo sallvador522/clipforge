@@ -3,14 +3,17 @@ import pytest
 from PIL import Image
 
 from clipforge_contracts.mask_manifest import MaskManifest
+from clipforge_providers import MockSegmentationProvider
 from clipforge_worker.masks import (
     CorruptMaskError,
     MaskDimensionError,
     MaskLoader,
+    MaskSequenceWriter,
     MaskValidationError,
     MaskWriter,
     MissingMaskFrameError,
     UnexpectedFrameIndexError,
+    combine_subject_masks,
     resize_mask_explicit,
 )
 
@@ -109,3 +112,70 @@ def test_explicit_resize_uses_nearest_neighbour(tmp_path):
     assert set(np.unique(resized)).issubset({0, 255})  # no interpolated grey values
     with pytest.raises(MaskValidationError):
         resize_mask_explicit(np.zeros((4, 4), dtype=np.float32), 8, 8)
+
+
+def test_streaming_writer_roundtrip_and_provenance(tmp_path):
+    writer = MaskSequenceWriter(
+        tmp_path / "streamed",
+        fps=30.0,
+        subject_id="0",
+        source_video_id="sam-source",
+        source_sha256="a" * 64,
+        sam_object_id="0",
+        provider_name="meta-sam",
+        model="sam-3.1",
+    )
+    for mask in _masks(3):
+        writer.write(mask)
+    manifest = writer.finalize()
+    assert manifest.sam_object_id == "0"
+    assert manifest.provider_name == "meta-sam"
+    assert manifest.model == "sam-3.1"
+    assert manifest.source_sha256 == "a" * 64
+    loaded = MaskLoader().load(tmp_path / "streamed")
+    assert loaded.masks.shape == (3, 18, 32)
+
+
+def test_loader_rejects_incomplete_segmentation_manifest(tmp_path):
+    directory = tmp_path / "incomplete"
+    writer = MaskSequenceWriter(
+        directory, fps=30.0, subject_id="0", source_video_id="v"
+    )
+    for mask in _masks(2):
+        writer.write(mask)
+    writer.finalize(segmentation_status="incomplete")
+    with pytest.raises(MaskValidationError, match="incomplete"):
+        MaskLoader().load(directory)
+
+
+def test_combine_selected_subject_masks_preserves_absent_frames(tmp_path):
+    result = MockSegmentationProvider().segment(
+        job_id="job-select",
+        source_video_id="source-select",
+        output_dir=tmp_path / "masks",
+        width=64,
+        height=36,
+        frame_count=6,
+        fps=10.0,
+    )
+    selected_one = next(subject for subject in result.subjects if subject.object_id == "1")
+    manifest = combine_subject_masks(
+        result.subjects,
+        ["1"],
+        tmp_path / "selected",
+        fps=10.0,
+        source_video_id="source-select",
+        source_sha256=result.source_sha256,
+    )
+    assert manifest.sam_object_ids == ["1"]
+    masks = MaskLoader().load(tmp_path / "selected").masks
+    assert masks[0].max() == 0  # object 1 enters on frame 2
+    assert masks[selected_one.first_frame].max() == 255
+    with pytest.raises(MaskValidationError, match="Unknown SAM subject"):
+        combine_subject_masks(
+            result.subjects,
+            ["does-not-exist"],
+            tmp_path / "unknown",
+            fps=10.0,
+            source_video_id="source-select",
+        )

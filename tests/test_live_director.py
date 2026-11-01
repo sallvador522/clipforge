@@ -56,7 +56,7 @@ def test_live_budget_is_per_function(tmp_path):
 def test_live_budget_env_limit_is_applied(monkeypatch, tmp_path):
     monkeypatch.setenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", "3")
     budget = LiveCallBudget(tmp_path / "storage")
-    assert budget.limits == {"transcription": 3, "director": 2}
+    assert budget.limits == {"transcription": 3, "director": 2, "segmentation": 2}
     assert [budget.reserve("transcription") for _ in range(3)] == [1, 2, 3]
     with pytest.raises(LiveBudgetExceeded):
         budget.reserve("transcription")
@@ -224,6 +224,9 @@ def _job(tmp_path: Path, transcript_text: str) -> tuple[JobStore, str]:
 
 
 def _approve(store: JobStore, job_id: str) -> None:
+    record = store.get(job_id)
+    segmentation = record.result.segmentation if record.result is not None else None
+    selected = [subject.object_id for subject in segmentation.subjects][:1] if segmentation else []
     store.transition(
         job_id,
         expected=JobStatus.AWAITING_APPROVAL,
@@ -231,6 +234,7 @@ def _approve(store: JobStore, job_id: str) -> None:
         stage="approved",
         actor="user",
         approval_granted=True,
+        selected_subject_ids=selected,
     )
 
 
@@ -368,7 +372,7 @@ def test_live_director_replacement_waits_for_approval_without_render(tmp_path):
     assert record.result is not None and record.result.requires_approval is True
     assert record.result.render_status == "awaiting_approval"
     assert not (store.job_dir(job_id) / "output.mp4").exists()
-    assert not (store.job_dir(job_id) / "masks").exists()
+    assert (store.job_dir(job_id) / "masks" / "manifest.json").is_file()
 
     _approve(store, job_id)
     assert processor.process(job_id) == JobStatus.COMPLETED.value

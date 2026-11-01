@@ -39,6 +39,8 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export interface TranscriptionConfig {
   ai_mode: string;
   transcribe_mode: "mock" | "live";
+  director_mode?: "mock" | "live";
+  segmentation_mode?: "mock" | "live";
   live_transcription_available: boolean;
 }
 
@@ -124,11 +126,22 @@ export function getPlan(jobId: string): Promise<PlanReviewData> {
   return requestJson<PlanReviewData>(`/api/jobs/${jobId}/plan`);
 }
 
-export function approvePlan(jobId: string, note?: string): Promise<JobResponse> {
+export function approvePlan(
+  jobId: string,
+  note?: string,
+  subjectIds?: string[],
+): Promise<JobResponse> {
   return requestJson<JobResponse>(`/api/jobs/${jobId}/approve`, {
     method: "POST",
-    body: JSON.stringify({ note: note?.trim() || null }),
+    body: JSON.stringify({
+      note: note?.trim() || null,
+      subject_ids: subjectIds && subjectIds.length > 0 ? subjectIds : null,
+    }),
   });
+}
+
+export function subjectPreviewUrl(jobId: string, objectId: string): string {
+  return `${API_BASE}/api/jobs/${jobId}/subjects/${encodeURIComponent(objectId)}/preview`;
 }
 
 export function rejectPlan(jobId: string, note?: string): Promise<JobResponse> {

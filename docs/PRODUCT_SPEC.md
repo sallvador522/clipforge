@@ -48,9 +48,10 @@ The product is a single editing workspace, not a dashboard: import a clip into t
 - Backend: Python, FastAPI, Pydantic.
 - Video: Python worker with FFmpeg (decode, normalize, audio preservation, encode, export) + OpenCV (frame processing, masks, compositing). MediaBunny is excluded (ADR-003).
 - Infrastructure: local storage, persistent worker process for rendering.
-- AI (provider adapters, mock-first): speech transcription (live-capable, ADR-008), reasoning/planning, SAM segmentation, image generation (all three still mocked).
+- AI (provider adapters, mock-first): speech transcription (live-capable, ADR-008), reasoning/planning (live-capable, ADR-014), SAM 3.1 segmentation (implemented and offline-validated, live inference not validated, ADR-019), image generation (mocked; Muse Image not integrated).
 
 ## Out of Scope
 
-- Live Meta API integration (deferred until the gate in `docs/TASKS.md` Milestone 6 is passed and explicitly approved).
+- Ungated live Meta API execution. Transcription, director and SAM provider contracts are implemented, but every live call needs explicit approval, a cost estimate and the budget ledger. SAM live inference is not yet validated.
+- Muse Image generation and selective person blur (not implemented).
 - Local model hosting, GPU infrastructure, multi-user accounts, cloud storage, payments, social sharing.
