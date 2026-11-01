@@ -428,6 +428,46 @@ export function AssistantPanel({
                       {result.rendered.duration_seconds.toFixed(2)}s · audio {result.rendered.has_audio ? "preserved" : "none in source"}
                     </p>
                   )}
+                  {result && (
+                    <div className="mt-2 border-t border-border pt-2 font-mono text-[11px] leading-relaxed text-muted">
+                      <p>MODELS USED (from this job&apos;s execution record):</p>
+                      <p>
+                        voice:{" "}
+                        {result.transcript == null
+                          ? "not called"
+                          : result.transcript.provider_name === "user-confirmed"
+                            ? "not called (typed instruction)"
+                            : result.transcript.is_mock
+                              ? `mock fixture (${result.transcript.provider_name})`
+                              : `${result.transcript.provider_name} — LIVE`}
+                      </p>
+                      <p>
+                        director:{" "}
+                        {directorPlan == null
+                          ? "not called"
+                          : result.director_usage != null
+                            ? "Muse Spark — LIVE"
+                            : "deterministic mock"}
+                      </p>
+                      <p>
+                        segmentation:{" "}
+                        {result.segmentation == null
+                          ? "not called"
+                          : result.segmentation.is_mock
+                            ? `synthetic mock (${result.segmentation.provider_name})`
+                            : `${result.segmentation.provider_name} ${result.segmentation.model ?? ""} — LIVE`}
+                      </p>
+                      <p>
+                        background:{" "}
+                        {result.background == null
+                          ? "not called"
+                          : result.background.is_mock
+                            ? "local mock asset"
+                            : "Muse Image — LIVE"}
+                      </p>
+                      <p>render: local FFmpeg/OpenCV (never billed)</p>
+                    </div>
+                  )}
                 </div>
               )}
             </motion.div>

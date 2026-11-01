@@ -194,6 +194,8 @@ export interface JobResultData {
   } | null;
   background: { asset_id: string; orientation: string; is_mock: boolean } | null;
   rendered: RenderedData | null;
+  director_usage: Record<string, unknown> | null;
+  director_request_id: string | null;
   requires_approval: boolean;
   requires_clarification: boolean;
   render_status: string;

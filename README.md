@@ -27,6 +27,22 @@ Full guide (requirements, macOS/Linux, costs, privacy, troubleshooting): [`docs/
 
 Judge Mode enables all four live providers (Muse Voice, Muse Spark, SAM 3.1, Muse Image 1.0) explicitly and locally. Live calls bill **your own** Meta account; nothing is requested until you act in the Studio.
 
+## Real-user testing — full live workflow, no mocks
+
+The same stack, driven as a normal user: `scripts/real-user.env` activates the real
+providers with no mock fallback. One command starts API + worker + Studio on 127.0.0.1,
+then you upload, instruct, review the real plan, select real subjects, approve, optionally
+generate a real background, and download the verified MP4:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_real_user.ps1
+# open http://localhost:3000
+```
+
+Full walkthrough, per-model call rules, and limits: [`docs/REAL_USER_TESTING.md`](docs/REAL_USER_TESTING.md).
+The per-job MODELS USED panel shows exactly which providers executed (LIVE) and which were
+not called — status always comes from execution metadata, never from configuration.
+
 ---
 
 ## Why ClipForge

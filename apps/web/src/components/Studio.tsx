@@ -391,9 +391,8 @@ export function Studio() {
       </a>
       {liveBilling && !billingDismissed && (
         <div role="note" aria-label="Live billing notice" className="border-b border-accent/40 bg-accent/10 px-4 py-2 text-[12px] leading-relaxed">
-          <span className="font-mono text-[10px] tracking-wider text-accent">JUDGE MODE — LIVE AI · </span>
-          Voice transcription (Muse Voice), planning (Muse Spark), subject detection (SAM 3.1) and
-          background generation (Muse Image) run on <strong>your own Meta account and may incur charges</strong>.
+          <span className="font-mono text-[10px] tracking-wider text-accent">LIVE AI ENABLED · </span>
+          Live providers bill your own Meta account and may incur charges.
           Each model runs only when you request it; rendering is local and free.
           <button type="button" onClick={() => setBillingDismissed(true)} className="ml-3 font-mono text-[11px] text-muted underline underline-offset-2 hover:text-foreground">
             Dismiss
