@@ -8,6 +8,7 @@ from clipforge_director.evaluation import (
     evaluate_output,
 )
 from clipforge_director.mock import MockProfessionalEditingDirector, ProfessionalEditingDirector
+from clipforge_director.ledger import LiveBudgetExceeded, LiveCallBudget
 from clipforge_director.spark import (
     DirectorAPIError,
     DirectorRateLimitedError,
@@ -36,6 +37,8 @@ __all__ = [
     "DirectorVideoMetadata",
     "InvalidModelError",
     "LiteMetaEditingDirectorProvider",
+    "LiveBudgetExceeded",
+    "LiveCallBudget",
     "MetaEditingDirectorProvider",
     "MockProfessionalEditingDirector",
     "ObjectiveChecks",

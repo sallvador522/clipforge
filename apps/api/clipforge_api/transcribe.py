@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 
 from clipforge_contracts import TranscriptResult
+from clipforge_director import LiveBudgetExceeded
 from clipforge_providers import (
     InvalidAudioError,
     MissingCredentialsError,
@@ -118,6 +119,7 @@ def transcribe_upload(
     *,
     providers,
     mock_fixture_id: str | None,
+    budget=None,
 ) -> tuple[TranscriptResult, str]:
     """Validate, convert (temp), and transcribe exactly once. Returns (result, transcribe_mode)."""
     suffix = Path(filename or "").suffix.lower()
@@ -140,7 +142,7 @@ def transcribe_upload(
 
     session_log_id = uuid.uuid4().hex[:12]
     with tempfile.TemporaryDirectory(prefix="clipforge-asr-") as tmp:
-        source = Path(tmp) / f"recording{suffix}"
+        source = Path(tmp) / f"upload{suffix}"
         source.write_bytes(upload_bytes)
         duration = probe_audio(source)
         wav_path = Path(tmp) / "recording.wav"
@@ -156,7 +158,11 @@ def transcribe_upload(
             result = providers.transcription.transcribe(mock_fixture_id or "")
         else:
             try:
+                if budget is not None:
+                    budget.reserve("transcription")
                 result = providers.transcription.transcribe_audio(wav_path, language_bias=LANGUAGE_BIAS)
+            except LiveBudgetExceeded as exc:
+                raise AudioValidationError("live_budget_exhausted", str(exc), status_code=429) from exc
             except TranscriptionTimeoutError as exc:
                 raise AudioValidationError("transcription_timeout", str(exc), status_code=504) from exc
             except TranscriptionRateLimitedError as exc:

@@ -65,6 +65,7 @@ def post_audio(client, path: Path, fixture: str | None = "pt_keep_me_sharp"):
 def test_health_reports_transcription_mode(tmp_path):
     body = make_app(tmp_path).get("/health").json()
     assert body["transcribe_mode"] == "mock"
+    assert body["director_mode"] == "mock"
     assert body["live_transcription_available"] is False
 
 
@@ -117,6 +118,26 @@ def test_upload_validation(spoken_webm, tmp_path):
     assert resp.status_code == 422 and resp.json()["error"]["code"] == "invalid_audio"
 
 
+def test_wav_upload_conversion_does_not_overwrite_input(tmp_path):
+    import wave
+
+    path = tmp_path / "instruction.wav"
+    with wave.open(str(path), "wb") as fh:
+        fh.setnchannels(1)
+        fh.setsampwidth(2)
+        fh.setframerate(22050)
+        fh.writeframes(b"\x00\x00" * 22050)
+    client = make_app(tmp_path)
+    with path.open("rb") as fh:
+        resp = client.post(
+            "/api/transcribe",
+            files={"file": ("instruction.wav", fh, "audio/wav")},
+            data={"mock_fixture_id": "pt_keep_me_sharp"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["text"] == "Mantém-me nítido e desfoca o resto."
+
+
 def test_live_bundle_uses_mocked_transport_and_converts_audio(spoken_webm, tmp_path):
     captured: dict = {}
     calls = {"n": 0}
@@ -165,6 +186,33 @@ def test_live_bundle_uses_mocked_transport_and_converts_audio(spoken_webm, tmp_p
 
     health = client.get("/health").json()
     assert health["transcribe_mode"] == "live" and health["live_transcription_available"] is True
+    assert json.loads((tmp_path / "storage" / "live-call-ledger.json").read_text())["transcription"] == 1
+
+
+def test_live_transcription_refuses_when_budget_is_exhausted(spoken_webm, tmp_path):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"transcript": "should never be called", "turns": []})
+
+    storage = tmp_path / "storage"
+    storage.mkdir(parents=True)
+    (storage / "live-call-ledger.json").write_text('{"transcription": 2}', encoding="utf-8")
+    bundle = ProviderBundle(
+        transcription=MetaVoiceTranscriptionProvider(
+            "k", client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.meta.ai")
+        ),
+        planner=MockEditingPlannerProvider(),
+        segmentation=MockSegmentationProvider(),
+        background=MockBackgroundGenerationProvider(),
+        mode="mock",
+        transcription_mode="live",
+    )
+    resp = post_audio(make_app(tmp_path, bundle), spoken_webm, fixture=None)
+    assert resp.status_code == 429
+    assert resp.json()["error"]["code"] == "live_budget_exhausted"
+    assert calls["n"] == 0
 
 
 def test_live_errors_map_to_http_and_are_not_retried(spoken_webm, tmp_path):

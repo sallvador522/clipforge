@@ -24,6 +24,7 @@ from clipforge_api.transcribe import (
     transcribe_upload,
 )
 from clipforge_jobs import JobNotFoundError, JobRecord, JobStore
+from clipforge_director import LiveCallBudget
 from clipforge_providers import ProviderBundle, get_providers
 
 logger = logging.getLogger("clipforge.api")
@@ -117,6 +118,7 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             "status": "ok",
             "ai_mode": bundle.mode,
             "transcribe_mode": bundle.transcription_mode,
+            "director_mode": bundle.director_mode,
             "live_transcription_available": bundle.transcription_mode == "live",
             "storage_root": str(root),
         }
@@ -189,6 +191,7 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             file.filename or "",
             providers=bundle,
             mock_fixture_id=mock_fixture_id,
+            budget=LiveCallBudget(root) if bundle.transcription_mode == "live" else None,
         )
         logger.info(
             "transcribe_completed mode=%s provider=%s session=%s",

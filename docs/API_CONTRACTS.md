@@ -31,7 +31,7 @@ Every generated plan is validated against this schema. Model/provider output is 
 
 ## Transcription API and Provider (ADR-008, Milestone 6A)
 
-Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_AI_MODE=mock` stays the default; live mode for other providers is not implemented.
+Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_AI_MODE=mock` stays the default; live mode for segmentation/background/legacy planner is not implemented. Live-call caps: 2 transcription + 2 director per phase (`storage/live-call-ledger.json`).
 
 `POST /api/transcribe` — multipart:
 - `file`: the browser recording (`.webm`, `.ogg`, `.oga`, `.wav`, `.m4a`, `.mp4`, `.mp3`), max 25 MB, max 60 s, must contain an audio stream.
@@ -39,7 +39,7 @@ Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additi
 
 The API converts with FFmpeg to mono 16-bit PCM WAV at 24 kHz (`-ac 1 -ar 24000 -c:a pcm_s16le -map_metadata -1`) and verifies the converted file with ffprobe before use. Temporary audio is deleted after the request.
 
-Response: the normalized `TranscriptResult` plus `transcribe_mode` (`mock`|`live`). Errors: `400 empty_audio`, `413 audio_too_large`, `422 unsupported_audio_extension`/`invalid_audio`/`no_audio_stream`/`audio_too_long`/`conversion_failed`/`mock_fixture_required`, `503 transcription_not_configured`, `504 transcription_timeout`, `429 transcription_rate_limited`, `502 transcription_failed`.
+Response: the normalized `TranscriptResult` plus `transcribe_mode` (`mock`|`live`). Errors: `400 empty_audio`, `413 audio_too_large`, `422 unsupported_audio_extension`/`invalid_audio`/`no_audio_stream`/`audio_too_long`/`conversion_failed`/`mock_fixture_required`, `503 transcription_not_configured`, `504 transcription_timeout`, `429 transcription_rate_limited` or `429 live_budget_exhausted` (no provider call), `502 transcription_failed`.
 
 Muse Voice Transcribe (verified against official docs): `POST https://api.meta.ai/v1/asr/transcribe?sessionId=<clipforge-id>`, `Authorization: Bearer MODEL_API_KEY`, multipart parts `request` (JSON with `model: "muse-voice-transcribe-1.0"`, `audioEncoding: "WAV"`, `mode: "PUSH_TO_TALK"`, `languageBias: ["Portuguese"]`) and `audio` (WAV). Response `{sessionId, transcript, audioDurationMs, turns}`. Exactly one HTTP request per user action; no automatic retries. Pricing: $0.18 per hour of audio, billed per whole second.
 
@@ -63,21 +63,21 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 
 | Endpoint | Status | Purpose |
 |---|---|---|
-| `GET /health` | live | `{status, ai_mode, storage_root}` |
+| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, live_transcription_available, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
 | `POST /api/jobs/{job_id}/voice` | live | Body `{audio_fixture_id}`; attaches the voice instruction and makes the job claimable; 409 if not queued/awaiting |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `completed`, `failed`, plus `stage` progress detail |
 | `GET /api/jobs` | live | List all jobs |
-| `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `render_status`); 409 until `completed` |
+| `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `rendered`, `render_status`, `director_plan`, `director_usage`, `director_request_id`, `requires_approval`); 409 until `completed` |
 | `GET /api/jobs/{job_id}/download` | live (Milestone 4) | Serves the rendered MP4 (`video/mp4`) **only** when the job is `completed`, `render_status` is `"verified"`, and the file exists on disk; otherwise 409 `download_not_ready`. No fake downloads. |
 
 Error shape: `{ "error": { "code": string, "message": string } }` (404 `job_not_found`, 409 conflicts, 422 upload validation, 413 oversize, 400 empty file).
 
-Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Clarification/unsupported jobs complete without rendering and keep `render_status="not_implemented"`.
+Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Clarification/unsupported jobs complete without rendering and keep `render_status="not_implemented"`. Since ADR-014, approval-required/rejected live director plans complete as `awaiting_approval` with `render_status="awaiting_approval"` and no output file.
 
-## Professional Editing Director Contracts (ADR-009, Milestone 6B-PREP)
+## Professional Editing Director Contracts (ADR-009, ADR-014)
 
-All director contracts are internal and not yet exposed through execution endpoints.
+Director contracts are internal Pydantic models. Since ADR-014, the live worker executes ready plans through the v1 adapter and exposes `director_plan`, `director_usage` and `director_request_id` in `GET /api/jobs/{job_id}/result` (read-only; there is no director-specific endpoint).
 
 ### Capability registry
 
@@ -96,7 +96,7 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 ### v1 adapter
 
-`ProfessionalEditingPlan.to_execution_plan()` produces the existing v1 `EditingPlan` used by the worker: keep-subject-sharp + blur/replace, preserve audio; clarification and unsupported map to v1 intents. The worker is unchanged and does not execute v2.
+`ProfessionalEditingPlan.to_execution_plan()` produces the existing v1 `EditingPlan` used by the worker: keep-subject-sharp + blur/replace, preserve audio; clarification and unsupported map to v1 intents. Since ADR-014 the live worker validates v2, adapts it to v1 and executes that plan; v2 is never passed to the renderer directly.
 
 ### Director stages
 
@@ -106,7 +106,7 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 `EditDecisionList` (`edl.py`) projects a ready v2 plan: one `EditDecision` per operation, dependency-ordered, with capability-typed `params`, no timing while `timeline.trim` is disabled, `DecisionTransparency` (requested/understood/why/approval/operator message) and canonical `provenance_hash`. Handlers resolve from the registry (`edl_handler_for`), never from plan input. `EditHistoryEntry` (frozen, allow-listed refs) persists via `JobRecord.edit_history` in `job.json`. `OutputEvaluationReport` separates objective checks from human review and caps corrections at 3 passes.
 
-### Muse Spark director provider (6B-LIVE, prepared not live-tested)
+### Muse Spark director provider (live-tested in LIVE-E2E 005)
 
 `MetaEditingDirectorProvider` (`packages/director/clipforge_director/spark.py`):
 - Chat Completions `POST /v1/chat/completions`, model `muse-spark-1.3` Standard by default (Contributor rejected); Contributor variant via `require_contributor=True`, which accepts exactly `muse-spark-1.3-contributor` and rejects Standard strings. Optional `reasoning_effort` (`minimal`/`low`/`medium`/`high`/`xhigh`; no `context` parameter exists in the verified contract). Bearer `MODEL_API_KEY`.
@@ -114,10 +114,11 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 - `response_format: {type: "json_schema", json_schema: {name: "ProfessionalEditingPlan", schema: <v2 JSON Schema>, strict: false}}`, `max_completion_tokens` (default 1500). No `tools`, no web search, no audio.
 - Response: `choices[0].message.content` (JSON string) → `ProfessionalEditingPlan` validation (lite variant: `LitePlan` → `lite_to_full_plan` → full v2 validation); `finish_reason: length` and any `tool_calls` rejected; `request_id`/`raw_instruction` echo enforced; `usage` → mode-appropriate cost (`standard` $1.25/1M in + $4.25/1M out; `contributor` $0.10/1M in + $0.20/1M out).
 - Errors: 401/5xx → safe `DirectorAPIError`, 429 → `DirectorRateLimitedError` (with `Retry-After`), timeout → `DirectorTimeoutError`, malformed/truncated/mismatch → `DirectorValidationError`. Exactly one POST; no retries; key/audio never logged.
+- **Live wiring (ADR-014):** `CLIPFORGE_DIRECTOR_MODE=live` selects `LiteMetaEditingDirectorProvider` with `muse-spark-1.3-contributor`, `reasoning_effort=medium`, `max_completion_tokens=16000` (override `CLIPFORGE_DIRECTOR_MAX_TOKENS`) and 180 s timeout (`CLIPFORGE_DIRECTOR_TIMEOUT_SECONDS`). Each call reserves one director slot in the ledger immediately before the HTTP request. LIVE-E2E 005 measured 2,781 in / 1,856 out = **$0.000649**, request `req_2c45fa340028`.
 
 ### Approval / cancel / revision
 
-Prepared as contract fields only. **No endpoints or UI exist**; the current worker still auto-executes after transcript confirmation. A future milestone must add explicit approval gating before v2 is wired to execution.
+The live worker implements the **approval gate**: `approval_status` `required`/`rejected` completes the job as `awaiting_approval` with no render. Approval, rejection, cancellation and revision *resume* are still contract fields only — **no endpoints or UI exist** to continue an awaiting job. Mock-mode execution keeps the legacy auto-execute behaviour.
 
 ## Live Provider Mapping (TBD)
 

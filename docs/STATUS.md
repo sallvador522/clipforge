@@ -2,18 +2,18 @@
 
 ## Current State
 
-- **AI mode:** `CLIPFORGE_AI_MODE=mock` (only mode; no external AI calls made or permitted).
-- **Milestones 0–6B-LIVE:** complete through LIVE-CALL 004 (HTTP 200, truncated at 1500 cap). Real usage measured: 951 in / 1500 out = **$0.000395**. Schema accepted; output budget still insufficient.
+- **AI mode:** `CLIPFORGE_AI_MODE=mock`; transcription and the director are the only live-capable providers, enabled in isolation. Segmentation, background generation and the legacy planner remain mocked.
+- **Milestones 0–6B-LIVE:** complete through LIVE-E2E 005 — real Portuguese audio → Muse Spark plan → real blur render → verified download. Director usage 2,781 in / 1,856 out = **$0.000649**; ASR **$0.000184**; run total **$0.000833**. Full log: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
-- **Next milestone:** LIVE-CALL 005 proposal (cap 3000, or low effort + 2000) — blocked on explicit approval. No SAM integration until the director path is proven. Transcription remains mock for development safety.
+- **Next milestone:** SAM 3.1 segmentation — **blocked on explicit approval**. The director path is proven end-to-end; live planning uses the lite schema, cap 16,000. One live call per function remains in the current ledger.
 
 ## What Exists
 
-- Docs: PRODUCT_SPEC, ARCHITECTURE, DESIGN_SYSTEM (tokens finalized), API_CONTRACTS, DECISIONS (ADR-001…ADR-007), TASKS, STATUS.
+- Docs: PRODUCT_SPEC, ARCHITECTURE, DESIGN_SYSTEM (tokens finalized), API_CONTRACTS, DECISIONS (ADR-001…ADR-014), TASKS, STATUS, live-call reports.
 - Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
-- Backend: contracts, mock providers (+live placeholders), job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
+- Backend: contracts, mock providers with explicit live transcription/director modes, job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **184 backend tests passing** (70 preserved pre-director + 114 director/registry/playbook/EDL/evaluation/Spark/lite); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **191 backend tests passing** (70 preserved pre-director + 121 director/registry/playbook/EDL/evaluation/Spark/lite/live-wiring); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
 
 ### First live director test — LIVE-CALL 001/002 (500) and 003 (200 truncated)
 
@@ -30,9 +30,21 @@
 - v2 plan + v1 adapter: validation covers registry membership, typed params, dependency order, clarification/unsupported rules, approval requirements and forbidden fields. The worker still executes v1 only.
 - Mock director: deterministic offline scenarios A–E; replacement requires approval; cinematic background is labelled simulated; vague/subject-ambiguous requests ask one clarification; unsupported requests name disabled capabilities.
 - Stages: 10 validated `DirectorStage` values + mapping from worker stages; no fabricated percentages.
-- Approval/cancel/revision: contracts/docs only; no endpoints/UI, no fake execution.
+- Approval/cancel/revision at 6B-PREP: contracts/docs only; the live approval gate and execution wiring arrived in ADR-014.
 
-**Safety:** implementation and tests ran in `CLIPFORGE_AI_MODE=mock` with `CLIPFORGE_TRANSCRIBE_MODE=mock`; zero Meta/Muse Spark/SAM/Muse Image requests; no credentials printed or committed.
+**Safety (6B-PREP):** implementation and tests ran in `CLIPFORGE_AI_MODE=mock` with `CLIPFORGE_TRANSCRIBE_MODE=mock`; zero Meta/Muse Spark/SAM/Muse Image requests at that milestone; no credentials printed or committed. Later controlled live calls are documented below.
+
+## Live End-to-End Execution (LIVE-E2E 005)
+
+- **Flow:** recorded Portuguese audio → `POST /api/transcribe` (Muse Voice Transcribe) → confirmed transcript → worker → lite Muse Spark director → v1 adapter → mock segmentation → real FFmpeg/OpenCV blur → output verification → `GET /download`.
+- **Transcript:** “Desfoca o fundo e mantém-me nítido.” (`pt-BR`, 3,680 ms, session `clipforge-9eeb63fa8d1f443ab7c6d42b4e18296e`); ASR cost $0.000184.
+- **Plan:** 5 operations (`subject.isolate`, `background.blur`, `audio.preserve`, `video.render_mp4`, `output.verify`), approval `not_required`; 4,637 tokens, $0.000649, request `req_2c45fa340028`.
+- **Output:** 320×180, 10 FPS, 20 frames, 2.000 s, 36,998 bytes, audio preserved, download HTTP 200; frame inspected (subject sharp, background blurred). Job `6b9e2dc1a95a4a60839b1312e34fc592`.
+- **Wiring:** `CLIPFORGE_DIRECTOR_MODE=mock|live` (default `mock`). Live plans are validated as v2 then adapted to v1 for execution. Approval-required/rejected plans complete as `awaiting_approval` with no render. Clarification/unsupported complete without rendering. `director_plan`, `director_usage` and `director_request_id` are persisted in the job result.
+- **Budget protection:** `storage/live-call-ledger.json` caps each function at 2 calls. Reservation occurs immediately before the network request; refusal returns an explicit error without a provider call. No automatic retries.
+- **Defects fixed:** WAV temporary input/output shared the same filename (FFmpeg refused; no network call made) — input is now `upload{suffix}`; budget reservation moved after local conversion; dev launchers load `.env` and `packages/director`.
+- **Verification:** 191 backend tests, frontend typecheck + production build, independent ffprobe + frame inspection, browser smoke at `:3000` (all five regions, LIVE TRANSCRIPTION badge, `/health` on `:8001`, zero console errors). Full report: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
+- **Limitations:** mock segmentation is a synthetic ellipse (not SAM); replacement backgrounds remain local/mock (not Muse Image); approval is backend-only (no resume endpoint/UI). SAM 3.1 waits for explicit approval.
 
 ## Transcription (Milestone 6A)
 
@@ -41,9 +53,10 @@
 - Mode selection: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) / `live` + `MODEL_API_KEY`. Missing key fails before any request. Other providers stay mock. No silent fallback.
 - Safety: no automatic retries, timeouts mapped to 504, 429 mapped to `transcription_rate_limited`, API errors to 502; `sessionId` logged (never key/audio); mock never interprets audio (requires explicit fixture, labelled MOCK).
 - Tests: 18 new (multipart/language bias/normalization, invalid audio, missing key, timeout, 429, API error, mock network isolation, provider selection, exactly-one-request, confirmed-transcript planning).
-- **No live call has been made.** Cost of the proposed first test (5 s recording): 5 whole seconds × $0.18 / 3600 s ≈ **$0.00025** (0.025 US cents).
+- **First live calls made in LIVE-E2E 005:** one transcription request, 3,680 ms, measured cost **$0.000184**. The earlier 5 s estimate (≈ $0.00025) was not used. The ledger caps transcription at 2 calls per phase; one remains.
+- **WAV bug fixed:** the temporary input is `upload{suffix}` and the converted output is `recording.wav`; a regression test covers `.wav` uploads.
 
-### Live UI readiness (no calls)
+### Live UI readiness (historical, dummy key)
 
 Verified with a dummy key and `TRANSCRIBE_MODE=live`: the studio shows the LIVE badge, hides mock commands, and does not call Meta on load. The transcription button is only enabled after a recording exists.
 
@@ -73,17 +86,21 @@ Ran the full stack (uvicorn + worker process + `next start`) and drove the real 
 
 ## How To Run The Demo
 
-1. `python scripts/dev_api.py` (loads `.env`, starts uvicorn on :8000 with reload)
-2. `python -m clipforge_worker.worker_process --storage storage`
+1. `python scripts/dev_api.py` (loads `.env`; default port 8000, override with `CLIPFORGE_API_PORT=8001`)
+2. `python scripts/dev_worker.py` (loads `.env`; persistent worker over `storage/`)
 3. `cd apps/web && npm run dev` → http://localhost:3000 (API base override: `NEXT_PUBLIC_API_URL`)
+
+For live runs, set `CLIPFORGE_TRANSCRIBE_MODE=live` and/or `CLIPFORGE_DIRECTOR_MODE=live` plus a server-side `MODEL_API_KEY`. Both default to `mock`; there is no silent fallback. The budget ledger must be reviewed before a new phase.
 
 ## Blockers / Uncertainties
 
-- All Meta integration details unverified; live adapters are placeholders. Gate: Milestone 6 (docs verification, budget/idempotency design, explicit approval, one controlled test). The recorded voice audio is not yet sent anywhere — it becomes the transcription input at that gate.
+- **SAM 3.1 integration is blocked on explicit approval.** Live transcription and director are proven; segmentation is still a synthetic mock ellipse and does not track a real person.
+- **Approval gate is backend-only.** Approval-required plans stop at `awaiting_approval`, but there is no endpoint or UI to approve/reject and resume execution.
+- **Live budget:** one transcription and one director call remain in `storage/live-call-ledger.json`. A new phase needs fresh approval and a ledger reset. LIVE-CALL 001/002 billing remains unknown (Meta panel is source of truth).
 - No licensed real-world footage with manual masks (ADR-007); the Facebook_2 test confirms mock masks do not track a real person.
 - System FFmpeg is from 2018; upgrade recommended before production (not done silently).
 - No frontend unit-test runner yet (backend suite + browser verification cover behaviour); shadcn primitives are local customised components, not Radix-based CLI output.
 
 ## Handoff
 
-Read AGENTS.md, this file, TASKS.md. The MVP loop is fully demonstrable locally in mock mode with real rendering. Next step is only Milestone 6, and only with explicit approval. Keep mock mode; do not make external calls.
+Read AGENTS.md, this file, TASKS.md and `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`. The MVP loop is demonstrable with real rendering; the voice → Muse Spark → render path has been executed once end-to-end in live mode. Defaults remain mock. Next step is SAM 3.1, and only with explicit approval; do not reset the ledger or make further live calls without approval. The local `.env` used for the demonstrated run had transcription and director live; one spare call per function remains.

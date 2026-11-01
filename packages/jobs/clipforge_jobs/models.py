@@ -12,7 +12,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clipforge_contracts import BackgroundResult, EditingPlan, RenderResult, SegmentationResult, TranscriptResult
+from clipforge_contracts import BackgroundResult, EditingPlan, ProfessionalEditingPlan, RenderResult, SegmentationResult, TranscriptResult
 from clipforge_contracts.edl import EditHistoryEntry
 
 
@@ -52,7 +52,11 @@ class JobResult(BaseModel):
     segmentation: SegmentationResult | None = None
     background: BackgroundResult | None = None
     rendered: RenderResult | None = None  # set only after output verification passes
+    director_plan: ProfessionalEditingPlan | None = None
+    director_usage: dict | None = None
+    director_request_id: str | None = None
     requires_clarification: bool = False
+    requires_approval: bool = False
     render_status: str = "not_implemented"  # becomes "verified" only with a verified output file
 
 

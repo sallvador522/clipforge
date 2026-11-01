@@ -45,6 +45,7 @@ def main() -> int:
         ROOT / "packages" / "contracts",
         ROOT / "packages" / "providers",
         ROOT / "packages" / "jobs",
+        ROOT / "packages" / "director",
         ROOT / "apps" / "worker",
         ROOT / "apps" / "api",
     ]

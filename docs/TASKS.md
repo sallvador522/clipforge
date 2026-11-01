@@ -52,14 +52,14 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Fixes: grid-row height (timeline visibility), transport wrapping, viewer flex, ruler label clipping, mobile timeline header, revoked-blob request error.
 - Limitation confirmed: mock masks are synthetic ellipses and do not track the real person (ADR-007); real subject cutout requires live SAM at Milestone 6.
 
-## Milestone 6A — Real Voice Transcription (no live calls yet)
+## Milestone 6A — Real Voice Transcription (live call executed in LIVE-E2E 005)
 - [x] Official docs verified (speech-to-text, transcribe reference, pricing/rate limits). Confirmed model `muse-voice-transcribe-1.0`, endpoint `POST https://api.meta.ai/v1/asr/transcribe`, multipart `request` JSON + `audio` WAV, `languageBias: ["Portuguese"]`, JSON response `{sessionId, transcript, audioDurationMs, turns}`, $0.18/audio-hour (whole seconds), 32 MB/10 min caps.
 - [x] `MetaVoiceTranscriptionProvider` with httpx, Bearer auth, exact multipart contract, normalization, timeout/429/API-error mapping, no retries, no key/audio logging.
 - [x] `POST /api/transcribe`: upload validation, ffprobe, FFmpeg → mono 16-bit PCM WAV 24 kHz, temp cleanup, mock isolation (fixture required; audio never interpreted).
 - [x] Scoped selection: `CLIPFORGE_TRANSCRIBE_MODE=live` + `MODEL_API_KEY`; other providers remain mock; missing key fails before any request.
 - [x] Frontend: real MediaRecorder audio uploaded, upload/transcribe states, editable transcript review, explicit confirm, failure + explicit retry, typed alternative; mock commands hidden in live mode, MOCK badge retained in mock mode.
 - [x] Tests (18 new): multipart construction, language bias, normalization, invalid audio, missing credentials, timeout, 429, API errors, mock isolation, provider selection, single-request/no-retry, confirmed-transcript planning.
-- [ ] First live transcription call — **blocked on explicit user approval** after reviewing the cost estimate.
+- [x] First live transcription call — executed in LIVE-E2E 005 (3,680 ms, $0.000184, one request, ledger 1/2). See `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
 
 ## Milestone 6B-PREP — Professional Editing Director
 - [x] Ninth skill `clipforge-editing-director` (9/10 project skills) with cinematography/editing/colour/audio/social guidance and hard capability-truth rules; 6B-PREP-R adds the video-use methodology section.
@@ -71,7 +71,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] EDL v2 with capability-typed params, registry-resolved handlers, timing forbidden while trim disabled, canonical provenance; immutable history in `job.json`; evaluation report with 3-pass ledger (6B-PREP-R).
 - [x] 90 new tests (160 total); docs/ADR-009 and ADR-010 updated.
 
-## Milestone 6B-LIVE — Muse Spark Director (prepared, no live call)
+## Milestone 6B-LIVE — Muse Spark Director (live-tested in LIVE-E2E 005)
 - [x] Official docs verified (models, tool-calling, structured-output, Responses protocol, pricing/rate-limits). Confirmed `muse-spark-1.3`, base `https://api.meta.ai/v1`, Bearer auth, Chat Completions vs Responses distinction, `response_format` vs `text.format`, Standard pricing ($1.25/1M in, $4.25/1M out), 3000 RPM / 4M TPM.
 - [x] Protocol selected: Chat Completions (single-turn plan generation; no reasoning replay, stateless, documented Pydantic structured-output flow).
 - [x] `MetaEditingDirectorProvider` with mocked transport: playbook + registry loading, transcript + video metadata, one validated v2 plan, clarification/unsupported handling, concise explanations, no arbitrary tools/params.
@@ -86,7 +86,23 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] LIVE-CALL 003 — exactly 1 POST → **HTTP 200, `finish_reason: "length"`** at 800-token cap; no plan accepted (truncation rejected), no retry. Schema accepted → full-schema 500 suspect confirmed; remaining blocker is output budget. Billable; local usage lost pre-fix (bounded ≈ ≤ $0.00026). See `docs/LIVE_CALL_003_REPORT.md`.
 - [x] Observability: usage recorded before validation; `DirectorValidationError.server_request_id` from `x-request-id`; script prints structured failure context; 183 tests.
 - [x] LIVE-CALL 004 — exactly 1 POST, cap 1500 → **HTTP 200, still `finish_reason: length`**. Real usage 951 in / 1500 out = 2451, **$0.000395**, `x-request-id 134244ba-83c9-4721-95ae-a5677de9c34c`. No plan accepted, no retry. Schema proven accepted twice; budget still insufficient. See `docs/LIVE_CALL_004_REPORT.md`.
-- [ ] LIVE-CALL 005 proposal: same lite payload, cap **3000** (recommended) or `reasoning_effort: low` + cap 2000 — blocked on explicit approval. No tools execute; no SAM/image/FFmpeg; no render; no EDL execution.
+- [x] LIVE-CALL 005 — same lite payload with cap **16,000** and medium reasoning: **HTTP 200 with a complete plan**. Usage 2,781 in / 1,856 out, $0.000649, `req_2c45fa340028`. The larger cap superseded the 3000/low-effort proposal; no truncation. See `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
+
+## Milestone 6B-LIVE-E2E — Director Wiring + Real Blur Execution
+
+- [x] `CLIPFORGE_DIRECTOR_MODE=mock|live` factory wiring; live provider uses `LiteMetaEditingDirectorProvider`, `muse-spark-1.3-contributor`, medium effort, cap 16,000, timeout 180 s.
+- [x] Worker live branch: reserve budget immediately before the call, validate v2, adapt to v1, execute real render; clarification/unsupported complete without rendering.
+- [x] Approval gate: `approval_status` required/rejected completes as `awaiting_approval` with `render_status="awaiting_approval"` and no output file.
+- [x] Persist `director_plan`, `director_usage`, `director_request_id`, `requires_approval` in the job result.
+- [x] Per-function file ledger (`storage/live-call-ledger.json`) with 2-call caps, atomic writes, no retries; API returns `429 live_budget_exhausted` with zero provider calls when exhausted.
+- [x] Fix WAV temp-name collision (`upload{suffix}` vs `recording.wav`) and add regression tests (WAV conversion + budget refusal).
+- [x] Health reports `director_mode`; dev launchers load `.env` and `packages/director`.
+- [x] End-to-end run: Portuguese audio → ASR → Muse plan (5 operations) → real blur render → verified download (320×180, 20 frames, 2.0 s, audio, 36,998 bytes).
+- [x] Verification: 191 backend tests, frontend typecheck + production build, independent ffprobe and frame inspection.
+- [x] Docs: LIVE_E2E report, STATUS, TASKS, DECISIONS ADR-014, ARCHITECTURE, API_CONTRACTS.
+- [ ] SAM 3.1 segmentation — blocked on explicit approval; required for real subject tracking.
+- [ ] Approval/rejection endpoint + UI to resume `awaiting_approval` jobs — future milestone.
+- [ ] Reset the live-call ledger only as part of a newly approved phase.
 
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 

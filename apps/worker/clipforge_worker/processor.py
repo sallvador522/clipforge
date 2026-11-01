@@ -14,7 +14,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from clipforge_contracts import EditingIntent, TranscriptResult
+from clipforge_contracts import ApprovalStatus, EditingIntent, PlanOutcome, TranscriptResult
+from clipforge_director import DirectorVideoMetadata, LiveCallBudget
 from clipforge_jobs import JobError, JobResult, JobStatus, JobStore
 from clipforge_providers import ProviderBundle
 from clipforge_worker.masks import MaskLoader
@@ -49,7 +50,72 @@ class JobProcessor:
                 self.store.update(job_id, stage="transcribing")
                 transcript = self.providers.transcription.transcribe(record.audio_fixture_id or "")
 
-            plan = self.providers.planner.create_plan(transcript)
+            director_plan = None
+            director_usage = None
+            director_request_id = None
+            if self.providers.director_mode == "live" and self.providers.director is not None:
+                LiveCallBudget(self.store.root).reserve("director")
+                info = record.source_info
+                director_plan = self.providers.director.create_plan(  # type: ignore[union-attr]
+                    transcript,
+                    DirectorVideoMetadata(
+                        width=info.width,
+                        height=info.height,
+                        fps=info.fps,
+                        duration_seconds=info.duration_seconds,
+                        frame_count=info.frame_count,
+                        has_audio=info.has_audio,
+                    ),
+                )
+                usage = getattr(self.providers.director, "last_usage", None)
+                director_usage = usage.model_dump(mode="json") if usage is not None else None
+                director_request_id = getattr(self.providers.director, "last_request_id", None)
+                if director_plan.outcome is PlanOutcome.NEEDS_CLARIFICATION:
+                    result = JobResult(
+                        transcript=transcript,
+                        plan=director_plan.to_execution_plan(),
+                        director_plan=director_plan,
+                        director_usage=director_usage,
+                        director_request_id=director_request_id,
+                        requires_clarification=True,
+                    )
+                    self.store.update(
+                        job_id, status=JobStatus.COMPLETED, stage="clarification_needed", result=result
+                    )
+                    return JobStatus.COMPLETED.value
+                if director_plan.outcome is PlanOutcome.UNSUPPORTED:
+                    result = JobResult(
+                        transcript=transcript,
+                        plan=director_plan.to_execution_plan(),
+                        director_plan=director_plan,
+                        director_usage=director_usage,
+                        director_request_id=director_request_id,
+                    )
+                    self.store.update(
+                        job_id, status=JobStatus.COMPLETED, stage="unsupported_intent", result=result
+                    )
+                    return JobStatus.COMPLETED.value
+                if director_plan.approval_status in {
+                    ApprovalStatus.REQUIRED,
+                    ApprovalStatus.REJECTED,
+                }:
+                    result = JobResult(
+                        transcript=transcript,
+                        plan=director_plan.to_execution_plan(),
+                        director_plan=director_plan,
+                        director_usage=director_usage,
+                        director_request_id=director_request_id,
+                        requires_approval=True,
+                        render_status="awaiting_approval",
+                    )
+                    self.store.update(
+                        job_id, status=JobStatus.COMPLETED, stage="awaiting_approval", result=result
+                    )
+                    logger.info("job_completed job_id=%s outcome=awaiting_approval", job_id)
+                    return JobStatus.COMPLETED.value
+                plan = director_plan.to_execution_plan()
+            else:
+                plan = self.providers.planner.create_plan(transcript)
 
             if plan.intent is EditingIntent.CLARIFICATION_NEEDED:
                 result = JobResult(transcript=transcript, plan=plan, requires_clarification=True)
@@ -116,7 +182,8 @@ class JobProcessor:
 
             result = JobResult(
                 transcript=transcript, plan=plan, segmentation=segmentation, background=background,
-                rendered=rendered, render_status="verified",
+                rendered=rendered, render_status="verified", director_plan=director_plan,
+                director_usage=director_usage, director_request_id=director_request_id,
             )
             self.store.update(job_id, status=JobStatus.COMPLETED, stage="completed", result=result)
             logger.info("job_completed job_id=%s outcome=rendered_and_verified frames=%d", job_id, rendered.frame_count)
