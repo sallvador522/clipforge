@@ -117,7 +117,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Persist `director_audit` in `JobResult` on success and failure; keep usage/request id on rejected plans.
 - [x] Serialise job result responses with `model_dump(mode="json")` (audit datetime).
 - [x] Regression fixture recreates the rejected `op1_…` pattern from a valid mock plan (raw model response unavailable); historical job records untouched.
-- [x] 212 backend tests; targeted director/lite/worker 50; `scripts/check.ps1` exit 0.
+- [x] 226 backend tests; targeted director/lite/worker plus 12 budget-safety tests; `scripts/check.ps1` exit 0.
 - [x] Mock-only verification with explicit `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`, `CLIPFORGE_DIRECTOR_MODE=mock`: factory modes confirmed; browser smoke showed `MOCK TRANSCRIPTION` with zero console errors; ledger `3/2`, no lock/tmp artifacts.
 - [x] Docs: ADR-016, STATUS, TASKS, ARCHITECTURE, API_CONTRACTS, hardening report.
 - [x] Live retest after hardening — executed as a full approved E2E rather than plan-only (LIVE-E2E 006). Muse generated a valid 5-operation plan; the worker rendered 360×640/177 frames/6.177 s with audio. Audit persisted and verified (`accepted`, HTTP 200, server request id).
@@ -127,8 +127,23 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [ ] Improve real subject tracking (SAM 3.1 or a manual mask). The mock ellipse kept only one side subject sharp at a time; documented in `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
 - [x] Prepare the exact LIVE-CALL 006 plan-only request without executing it: `scripts/prepare_live_call_006.py`, `storage/live_call_006_request_standard.json`, `..._contributor.json`, and `docs/LIVE_CALL_006_PROPOSAL.md`.
 - [x] Cost proposal: input estimate 2,950 tokens, expected output 2,400, cap 16,000; Standard **$0.013888** expected / **$0.071688** cap; Contributor **$0.000775** expected / **$0.003495** cap.
-- [ ] Execute LIVE-CALL 006 plan-only — **blocked on Salvador's explicit approval**; no tools, SAM, Muse Image, EDL or render.
+- [ ] Execute LIVE-CALL 006 plan-only — **blocked on Salvador's explicit approval**; must use a ledger-authorized wrapper (not a raw provider script), with explicit dev live opt-in and a valid ledger; no tools, SAM, Muse Image, EDL or render.
 - [ ] Then proceed to SAM 3.1 integration with a separate approved cost/scope.
+
+## Milestone 6B-LIVE-BUDGET-SAFETY — Fail-Closed Ledger & One-Shot Authorization
+- [x] Ledger fail-closed: corrupt/unreadable/invalid data raises `LedgerIntegrityError`; counters never reset; valid data preserved.
+- [x] Explicit `LedgerLockedError`; orphaned locks are not deleted automatically; manual recovery documented.
+- [x] Atomic reservation retained; no release after uncertain network outcome; no automatic retries.
+- [x] One-shot `LiveCallAuthorization`; providers reserve immediately before POST; a second reservation is rejected.
+- [x] `MetaEditingDirectorProvider.create_plan` / lite variant require authorization; direct calls rejected before network.
+- [x] `MetaVoiceTranscriptionProvider.transcribe_audio` requires authorization; direct calls rejected before network.
+- [x] `transcribe_upload(budget=None)` in live mode raises `live_budget_not_configured` before conversion/network.
+- [x] Worker creates a director authorization; API creates a transcription authorization; no double reservation.
+- [x] Historical live-call scripts 001/003/004 now reserve through the ledger.
+- [x] Dev launchers force mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1`; `.env.example` documents mock defaults, limits and opt-in.
+- [x] 12 budget-safety regression tests; 226 backend tests; `scripts/check.ps1` exit 0.
+- [x] Docs: ADR-017, `docs/LIVE_BUDGET_SAFETY_HARDENING.md`, STATUS, TASKS, ARCHITECTURE, API_CONTRACTS, README.
+- [ ] Execute LIVE-CALL 006 plan-only — **blocked on explicit approval**; use a ledger-authorized wrapper, not a raw provider script.
 
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 
@@ -145,7 +160,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (212 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (226 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6 — Live Integration Gate (blocked)

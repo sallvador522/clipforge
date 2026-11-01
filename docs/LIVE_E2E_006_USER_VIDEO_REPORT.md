@@ -41,7 +41,8 @@ Audio: 5.367 s, 236,750 bytes. No external service was used to create the instru
 | Output | `Facebook_clipforge_blur.mp4` in the user's `Videos\Video` folder |
 | SHA-256 | `8C41BEA607D6108DA2846B58FE54E84D83269E9C82527FEBD63669694A6A52BB` |
 
-**Cost this run:** $0.000272 + $0.000738 = **$0.001010**.
+**Cost this run:** $0.000272 + $0.000738 = **$0.001010** (usage-based estimate; not a
+billed-panel figure; the audit's `actual_cost_usd` is `null`).
 **Ledger after the run:** `transcription=3`, `director=2` (97/23 remaining under the 100/25
 testing caps). User-indicated Meta balance: **$31.78** before the run; approximate remaining
 balance **~$31.779**.

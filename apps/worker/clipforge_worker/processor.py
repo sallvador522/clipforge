@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 
 from clipforge_contracts import ApprovalStatus, EditingIntent, PlanOutcome, TranscriptResult
-from clipforge_director import DirectorVideoMetadata, LiveCallBudget
+from clipforge_director import DirectorVideoMetadata, LiveCallAuthorization, LiveCallBudget
 from clipforge_jobs import JobError, JobResult, JobStatus, JobStore
 from clipforge_providers import ProviderBundle
 from clipforge_worker.masks import MaskLoader
@@ -87,7 +87,9 @@ class JobProcessor:
                 transcript = self.providers.transcription.transcribe(record.audio_fixture_id or "")
 
             if self.providers.director_mode == "live" and self.providers.director is not None:
-                LiveCallBudget(self.store.root).reserve("director")
+                authorization = LiveCallAuthorization(
+                    LiveCallBudget(self.store.root), "director"
+                )
                 info = record.source_info
                 try:
                     director_plan = self.providers.director.create_plan(  # type: ignore[union-attr]
@@ -100,6 +102,7 @@ class JobProcessor:
                             frame_count=info.frame_count,
                             has_audio=info.has_audio,
                         ),
+                        authorization=authorization,
                     )
                 except Exception:
                     director_usage, director_request_id, director_audit = (

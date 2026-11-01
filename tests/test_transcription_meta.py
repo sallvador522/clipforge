@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from clipforge_director import LiveCallAuthorization, LiveCallNotAuthorizedError
 from clipforge_providers.transcription_meta import (
     InvalidAudioError,
     MetaVoiceTranscriptionProvider,
@@ -24,6 +25,20 @@ from clipforge_providers.transcription_meta import (
     TranscriptionRateLimitedError,
     TranscriptionTimeoutError,
 )
+
+
+class _TestAuthorization(LiveCallAuthorization):
+    """Provider-level authorization double; the real ledger is tested separately."""
+
+    def __init__(self, function: str = "transcription") -> None:
+        self._function = function
+        self._reserved = False
+
+    def reserve(self) -> int:
+        if self._reserved:
+            raise RuntimeError("already reserved")
+        self._reserved = True
+        return 1
 
 BASE = "https://api.meta.ai"
 
@@ -48,14 +63,38 @@ def parse_multipart(content: bytes, content_type: str) -> dict[str, tuple[str | 
     return parts
 
 
-def provider(handler, *, key: str = "test-key", timeout: float = 30.0) -> MetaVoiceTranscriptionProvider:
+def provider(
+    handler, *, key: str = "test-key", timeout: float = 30.0, wrap_auth: bool = True
+) -> MetaVoiceTranscriptionProvider:
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url=BASE)
-    return MetaVoiceTranscriptionProvider(key, timeout_seconds=timeout, client=client)
+    instance = MetaVoiceTranscriptionProvider(key, timeout_seconds=timeout, client=client)
+    if wrap_auth:
+        original_transcribe = instance.transcribe_audio
+
+        def transcribe_audio(*args, **kwargs):
+            kwargs.setdefault("authorization", _TestAuthorization("transcription"))
+            return original_transcribe(*args, **kwargs)
+
+        instance.transcribe_audio = transcribe_audio  # type: ignore[method-assign]
+    return instance
 
 
 def test_missing_credentials_fails_before_any_request():
     with pytest.raises(MissingCredentialsError):
         MetaVoiceTranscriptionProvider("   ")
+
+
+def test_direct_transcription_requires_authorization_before_network(tmp_path):
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"transcript": "should not be reached"})
+
+    instance = provider(handler, wrap_auth=False)
+    with pytest.raises(LiveCallNotAuthorizedError):
+        instance.transcribe_audio(tmp_path / "missing.wav")
+    assert calls["n"] == 0
 
 
 def test_request_construction_and_normalization(tmp_path):

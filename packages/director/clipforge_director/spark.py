@@ -53,6 +53,7 @@ from clipforge_contracts import (
     ProfessionalEditingPlan,
     TranscriptResult,
 )
+from clipforge_director.ledger import LiveCallAuthorization, LiveCallNotAuthorizedError
 
 logger = logging.getLogger("clipforge.director.spark")
 
@@ -342,8 +343,14 @@ class MetaEditingDirectorProvider:
         video: DirectorVideoMetadata | None = None,
         *,
         request_id: str | None = None,
+        authorization: LiveCallAuthorization | None = None,
     ) -> ProfessionalEditingPlan:
         """Generate exactly one v2 plan via a single Chat Completions call. No retries."""
+        if not isinstance(authorization, LiveCallAuthorization):
+            raise LiveCallNotAuthorizedError(
+                "A valid LiveCallAuthorization is required before a live director request. "
+                "No request was attempted."
+            )
         self.last_usage = None
         self.last_request_id = None
         self.last_server_request_id = None
@@ -357,6 +364,15 @@ class MetaEditingDirectorProvider:
             self._max_output_tokens,
             len(transcript.text),
         )
+        try:
+            authorization.reserve()
+        except Exception as exc:
+            self._update_audit(
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="budget_refused",
+                error_code=type(exc).__name__,
+            )
+            raise
         try:
             response = self._client.post(
                 CHAT_COMPLETIONS_PATH,

@@ -79,7 +79,12 @@ def main() -> int:
 
     from clipforge_api.playbook import default_playbook  # noqa: E402
     from clipforge_contracts import TranscriptResult, capability_summary_for_prompt  # noqa: E402
-    from clipforge_director import DirectorVideoMetadata, MetaEditingDirectorProvider  # noqa: E402
+    from clipforge_director import (  # noqa: E402
+        DirectorVideoMetadata,
+        LiveCallAuthorization,
+        LiveCallBudget,
+        MetaEditingDirectorProvider,
+    )
     from clipforge_director.spark import DirectorAPIError  # noqa: E402
 
     playbook = default_playbook()
@@ -96,8 +101,11 @@ def main() -> int:
 
     import datetime as _datetime
 
+    authorization = LiveCallAuthorization(LiveCallBudget(ROOT / "storage"), "director")
     try:
-        plan = provider.create_plan(transcript, video)  # exactly one POST; raises on any failure
+        plan = provider.create_plan(  # exactly one POST; raises on any failure
+            transcript, video, authorization=authorization
+        )
     except DirectorAPIError as exc:
         # No result file is written on failure (preserves the exactly-once guard).
         # server_request_id is the panel-matchable handle; the key is never printed.

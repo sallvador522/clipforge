@@ -39,7 +39,7 @@ The MVP targets 10-second clips at up to 720p / 30 FPS.
   duration and audio before download is allowed.
 - A five-area editor workspace: Media, Viewer, Timeline, AI Assistant and Top Bar.
 - A persistent worker, file-based job store, progress stages and explicit error states.
-- A live-call budget ledger with no automatic retries.
+- A fail-closed live-call budget ledger and one-shot provider authorization, with no automatic retries.
 
 One measured live end-to-end run: Portuguese audio → transcript → 5-operation Muse plan →
 320×180 blur render → verified download. Details in
@@ -167,17 +167,23 @@ Live calls are never enabled silently. Add to `.env` (gitignored, never committe
 CLIPFORGE_TRANSCRIBE_MODE=live
 CLIPFORGE_DIRECTOR_MODE=live
 MODEL_API_KEY=your_server_side_key
+# Development launchers only honour the live flags above with this explicit opt-in:
+CLIPFORGE_DEV_ALLOW_LIVE=1
 ```
 
 Safety rails:
 
 - `MODEL_API_KEY` stays server-side; it is never exposed to the browser.
-- Each function has a file-backed call limit in `storage/live-call-ledger.json`.
+- Dev launchers force transcription and the director to mock unless
+  `CLIPFORGE_DEV_ALLOW_LIVE=1` is set explicitly.
+- Each function has a fail-closed file-backed ledger in `storage/live-call-ledger.json`.
   Defaults are 2 transcription + 2 director calls. Local testing can raise them with
   `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT` and `CLIPFORGE_LIVE_DIRECTOR_LIMIT`.
-- A limit is reserved immediately before the network request; no request is made when the
-  cap is exhausted.
-- No automatic retries of billable calls.
+- A one-shot `LiveCallAuthorization` reserves immediately before the network request; no
+  request is made when the cap is exhausted, the ledger is corrupt/unreadable, or the lock
+  is held. Direct provider calls without authorization are rejected.
+- No automatic retries of billable calls; a reservation is not released after an uncertain
+  network outcome.
 - Original uploads are preserved until a rendered output is verified.
 
 `GET /health` reports the selected modes, configured limits and current usage.
@@ -208,7 +214,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **212 tests passing**. The frontend typecheck and production build
+Current backend suite: **226 tests passing**. The frontend typecheck and production build
 also pass. No GitHub Actions or paid CI is required; checks run locally.
 
 ---
@@ -242,6 +248,7 @@ tests/          Backend test suite
 - [Live end-to-end report](docs/LIVE_E2E_AUDIO_BLUR_REPORT.md)
 - [User-video live run](docs/LIVE_E2E_006_USER_VIDEO_REPORT.md)
 - [Director hardening report](docs/LIVE_DIRECTOR_HARDENING_REPORT.md)
+- [Live budget safety hardening](docs/LIVE_BUDGET_SAFETY_HARDENING.md)
 - [Prepared plan-only test proposal](docs/LIVE_CALL_006_PROPOSAL.md)
 - [Product spec](docs/PRODUCT_SPEC.md)
 

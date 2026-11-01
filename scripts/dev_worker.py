@@ -31,8 +31,21 @@ def load_env(path: Path) -> None:
             os.environ[key] = value
 
 
+def enforce_dev_safety() -> None:
+    if os.environ.get("CLIPFORGE_DEV_ALLOW_LIVE", "0").strip() == "1":
+        print("Dev safety: LIVE mode explicitly allowed by CLIPFORGE_DEV_ALLOW_LIVE=1.")
+        return
+    os.environ["CLIPFORGE_TRANSCRIBE_MODE"] = "mock"
+    os.environ["CLIPFORGE_DIRECTOR_MODE"] = "mock"
+    print(
+        "Dev safety: transcription/director forced to mock. "
+        "Set CLIPFORGE_DEV_ALLOW_LIVE=1 to opt in to live."
+    )
+
+
 def main() -> int:
     load_env(ROOT / ".env")
+    enforce_dev_safety()
     repo_paths = [
         ROOT / "packages" / "contracts",
         ROOT / "packages" / "providers",

@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from clipforge_contracts import PlanOutcome, TranscriptResult, capability_summary_for_prompt
-from clipforge_director import MockProfessionalEditingDirector
+from clipforge_director import LiveCallAuthorization, LiveCallNotAuthorizedError, MockProfessionalEditingDirector
 from clipforge_director.spark import (
     CHAT_COMPLETIONS_PATH,
     DEFAULT_MODEL,
@@ -33,6 +33,20 @@ PLAYBOOK = "Test playbook. Follow the capability registry. Emit v2 JSON only."
 SUMMARY = capability_summary_for_prompt()
 
 
+class _TestAuthorization(LiveCallAuthorization):
+    """Provider-level authorization double; real ledger behaviour is tested separately."""
+
+    def __init__(self, function: str = "director") -> None:
+        self._function = function
+        self._reserved = False
+
+    def reserve(self) -> int:
+        if self._reserved:
+            raise LiveCallNotAuthorizedError("already reserved")
+        self._reserved = True
+        return 1
+
+
 def transcript(text: str) -> TranscriptResult:
     return TranscriptResult(text=text, language="pt-BR", provider_name="t", is_mock=True)
 
@@ -49,7 +63,7 @@ def mock_plan_json(text: str) -> dict:
     return plan.model_dump(mode="json")
 
 
-def provider(handler, **kwargs) -> MetaEditingDirectorProvider:
+def provider(handler, *, wrap_auth: bool = True, **kwargs) -> MetaEditingDirectorProvider:
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.meta.ai")
     defaults = dict(
         api_key="test-key",
@@ -57,7 +71,16 @@ def provider(handler, **kwargs) -> MetaEditingDirectorProvider:
         capability_summary=SUMMARY,
     )
     defaults.update(kwargs)
-    return MetaEditingDirectorProvider(client=client, **defaults)
+    instance = MetaEditingDirectorProvider(client=client, **defaults)
+    if wrap_auth:
+        original_create_plan = instance.create_plan
+
+        def create_plan(*args, **call_kwargs):
+            call_kwargs.setdefault("authorization", _TestAuthorization("director"))
+            return original_create_plan(*args, **call_kwargs)
+
+        instance.create_plan = create_plan  # type: ignore[method-assign]
+    return instance
 
 
 def ok_response(
@@ -99,6 +122,20 @@ def test_init_makes_no_request():
         return httpx.Response(500, json={})
 
     provider(handler)
+    assert calls["n"] == 0
+
+
+def test_direct_provider_requires_authorization_before_network():
+    text = "Keep me sharp and blur the background."
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return ok_response(mock_plan_json(text))
+
+    instance = provider(handler, wrap_auth=False)
+    with pytest.raises(LiveCallNotAuthorizedError):
+        instance.create_plan(transcript(text))
     assert calls["n"] == 0
 
 

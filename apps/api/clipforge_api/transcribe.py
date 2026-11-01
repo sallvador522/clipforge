@@ -21,7 +21,14 @@ import uuid
 from pathlib import Path
 
 from clipforge_contracts import TranscriptResult
-from clipforge_director import LiveBudgetExceeded
+from clipforge_director import (
+    LedgerIntegrityError,
+    LedgerLockedError,
+    LiveBudgetExceeded,
+    LiveCallAuthorization,
+    LiveCallBudget,
+    LiveCallNotAuthorizedError,
+)
 from clipforge_providers import (
     InvalidAudioError,
     MissingCredentialsError,
@@ -119,7 +126,7 @@ def transcribe_upload(
     *,
     providers,
     mock_fixture_id: str | None,
-    budget=None,
+    budget: LiveCallBudget | None = None,
 ) -> tuple[TranscriptResult, str]:
     """Validate, convert (temp), and transcribe exactly once. Returns (result, transcribe_mode)."""
     suffix = Path(filename or "").suffix.lower()
@@ -139,6 +146,12 @@ def transcribe_upload(
             "mock_fixture_required",
             "Mock transcription cannot interpret audio. Select a mock command so the simulated transcript is explicit.",
         )
+    if mode == "live" and budget is None:
+        raise AudioValidationError(
+            "live_budget_not_configured",
+            "Live transcription requires the live-call budget ledger. No request was attempted.",
+            status_code=503,
+        )
 
     session_log_id = uuid.uuid4().hex[:12]
     with tempfile.TemporaryDirectory(prefix="clipforge-asr-") as tmp:
@@ -157,12 +170,19 @@ def transcribe_upload(
             # explicitly selected fixture and is labelled simulated end-to-end.
             result = providers.transcription.transcribe(mock_fixture_id or "")
         else:
+            authorization = LiveCallAuthorization(budget, "transcription") if budget is not None else None
             try:
-                if budget is not None:
-                    budget.reserve("transcription")
-                result = providers.transcription.transcribe_audio(wav_path, language_bias=LANGUAGE_BIAS)
+                result = providers.transcription.transcribe_audio(
+                    wav_path, language_bias=LANGUAGE_BIAS, authorization=authorization
+                )
             except LiveBudgetExceeded as exc:
                 raise AudioValidationError("live_budget_exhausted", str(exc), status_code=429) from exc
+            except LedgerIntegrityError as exc:
+                raise AudioValidationError("live_budget_integrity_error", str(exc), status_code=503) from exc
+            except LedgerLockedError as exc:
+                raise AudioValidationError("live_budget_locked", str(exc), status_code=503) from exc
+            except LiveCallNotAuthorizedError as exc:
+                raise AudioValidationError("live_budget_not_authorized", str(exc), status_code=503) from exc
             except TranscriptionTimeoutError as exc:
                 raise AudioValidationError("transcription_timeout", str(exc), status_code=504) from exc
             except TranscriptionRateLimitedError as exc:

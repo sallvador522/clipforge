@@ -85,7 +85,12 @@ def main() -> int:
 
     from clipforge_contracts import TranscriptResult  # noqa: E402
     from clipforge_contracts.director_lite import LITE_BRIEF, lite_capability_summary  # noqa: E402
-    from clipforge_director import DirectorVideoMetadata, LiteMetaEditingDirectorProvider  # noqa: E402
+    from clipforge_director import (  # noqa: E402
+        DirectorVideoMetadata,
+        LiteMetaEditingDirectorProvider,
+        LiveCallAuthorization,
+        LiveCallBudget,
+    )
     from clipforge_director.spark import DirectorAPIError, DirectorValidationError  # noqa: E402
     import datetime as _datetime  # noqa: E402
 
@@ -101,8 +106,11 @@ def main() -> int:
     transcript = TranscriptResult(text=INSTRUCTION, language="pt-BR", provider_name="user-confirmed", is_mock=False)
     video = DirectorVideoMetadata(**VIDEO)
 
+    authorization = LiveCallAuthorization(LiveCallBudget(ROOT / "storage"), "director")
     try:
-        plan = provider.create_plan(transcript, video)  # exactly one POST; raises on any failure
+        plan = provider.create_plan(  # exactly one POST; raises on any failure
+            transcript, video, authorization=authorization
+        )
     except DirectorAPIError as exc:
         # No result file is written on failure (preserves the exactly-once guard).
         print(

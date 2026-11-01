@@ -135,7 +135,9 @@ class _FixedDirector:
             finish_reason="stop",
         )
 
-    def create_plan(self, transcript: TranscriptResult, video=None):
+    def create_plan(self, transcript: TranscriptResult, video=None, *, authorization=None):
+        if authorization is not None:
+            authorization.reserve()
         return self._plan
 
 
@@ -167,7 +169,9 @@ class _FailingDirector:
             finish_reason="stop",
         )
 
-    def create_plan(self, transcript: TranscriptResult, video=None):
+    def create_plan(self, transcript: TranscriptResult, video=None, *, authorization=None):
+        if authorization is not None:
+            authorization.reserve()
         raise DirectorValidationError(
             "Lite plan failed validation: invalid operation id",
             "srv-failing-1",

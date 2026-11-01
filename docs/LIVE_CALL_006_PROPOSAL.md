@@ -84,3 +84,15 @@ web-search context. The API key is only the Authorization header and is never lo
 
 Do not execute until Salvador explicitly approves this proposal. The previous approved
 live run (LIVE-E2E 006) is documented separately; it is not a retry of this test.
+
+Execution requirements after approval:
+
+- Use a ledger-authorized wrapper (or the guarded API/worker path), not a raw
+  `create_plan()` script. Live providers reject calls without a one-shot
+  `LiveCallAuthorization`.
+- The ledger must be valid and unlocked. Corrupt/unreadable data and lock contention
+  refuse the call.
+- Development launchers force mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1` is set explicitly.
+- The wrapper must load the intended limits; the code default is 2/2 while the local
+  `.env` uses 100/25, and the current ledger is already 3/2.
+- No automatic retries; no tools, SAM, Muse Image, EDL execution or render.

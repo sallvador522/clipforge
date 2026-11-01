@@ -3,7 +3,7 @@
 **Date:** 2026-11-01
 **Status:** Implementation complete; **no live call made in this milestone**.
 **Meta budget available:** **$31.78**.
-**Tests:** 212 backend tests passing; 50 targeted director/lite/worker tests; `scripts/check.ps1`
+**Tests:** 226 backend tests passing; 50 targeted director/lite/worker tests; `scripts/check.ps1`
 exits 0 (pytest + frontend typecheck + production build).
 
 ## 1. Why this milestone
@@ -187,10 +187,24 @@ Full log: `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
 - Explicit mock env confirmed: `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`,
   `CLIPFORGE_DIRECTOR_MODE=mock`; `get_providers()` returned mock/mock/mock with
   `MockProfessionalEditingDirector`.
-- Full suite: **212 passed**; `scripts/check.ps1` exit 0 (backend + typecheck + production build).
+- Full suite: **226 passed**; `scripts/check.ps1` exit 0 (backend + typecheck + production build).
 - Browser smoke: page loaded with all five areas and **MOCK TRANSCRIPTION**; zero console errors.
 - Ledger: `transcription=3`, `director=2`; no `.lock` or `.tmp` artifacts.
 - LIVE-CALL 006 plan-only request prepared, **not executed**:
   `scripts/prepare_live_call_006.py`, `docs/LIVE_CALL_006_PROPOSAL.md`, and exact payloads in
   `storage/live_call_006_request_standard.json` / `..._contributor.json`.
 - No external API request was made by the preparation or mock verification.
+
+## 11. Live budget safety follow-up (ADR-017)
+
+The pre-live audit found fail-open ledger reads and provider-call bypasses. These were fixed in
+the subsequent budget-safety hardening:
+
+- corrupt/unreadable/invalid ledgers now raise `LedgerIntegrityError` and are never reset;
+- an existing ledger lock raises `LedgerLockedError` and is not auto-deleted;
+- live providers require a one-shot `LiveCallAuthorization` that reserves immediately before
+  the POST; direct calls without it are rejected;
+- `transcribe_upload(budget=None)` is rejected in live mode;
+- dev launchers force mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1`.
+
+See `docs/LIVE_BUDGET_SAFETY_HARDENING.md`. Full suite: 226 tests.

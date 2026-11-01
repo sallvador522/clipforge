@@ -23,7 +23,25 @@ from clipforge_contracts.director_lite import (
     lite_to_full_plan_with_mapping,
 )
 from clipforge_contracts.edl import compute_decision_hash, edl_from_professional_plan
-from clipforge_director import LiteMetaEditingDirectorProvider, MockProfessionalEditingDirector
+from clipforge_director import (
+    LiteMetaEditingDirectorProvider,
+    LiveCallAuthorization,
+    MockProfessionalEditingDirector,
+)
+
+
+class _TestAuthorization(LiveCallAuthorization):
+    """Provider-level authorization double; the real ledger is tested separately."""
+
+    def __init__(self, function: str = "director") -> None:
+        self._function = function
+        self._reserved = False
+
+    def reserve(self) -> int:
+        if self._reserved:
+            raise RuntimeError("already reserved")
+        self._reserved = True
+        return 1
 
 
 def transcript(text: str) -> TranscriptResult:
@@ -119,7 +137,9 @@ def test_lite_payload_budget_developer_under_8k_total_under_9k():
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.meta.ai"),
     )
     with pytest.raises(AssertionError, match="not reached"):
-        provider.create_plan(transcript(transcript_text))
+        provider.create_plan(
+            transcript(transcript_text), authorization=_TestAuthorization()
+        )
     assert calls["developer_chars"] < 8000, f"developer prompt {calls['developer_chars']} chars >= 8k"
     assert calls["payload_chars"] < 9216, f"total payload {calls['payload_chars']} chars >= 9k"
     assert calls["schema_chars"] < 4096
@@ -228,7 +248,7 @@ def test_lite_provider_roundtrip_single_post_contributor_cost():
         max_output_tokens=800,
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.meta.ai"),
     )
-    plan = provider.create_plan(transcript(text))
+    plan = provider.create_plan(transcript(text), authorization=_TestAuthorization())
     assert calls["n"] == 1
     assert plan.outcome == PlanOutcome.PLAN_READY
     assert plan.approval_status.value == "not_required"
@@ -524,7 +544,11 @@ def test_lite_provider_normalises_model_ids_and_audits_the_call():
     payload["raw_instruction"] = text
     response_payload.update(payload)
 
-    plan = provider.create_plan(transcript(text), request_id=expected_request_id)
+    plan = provider.create_plan(
+        transcript(text),
+        request_id=expected_request_id,
+        authorization=_TestAuthorization(),
+    )
 
     assert calls["n"] == 1
     assert [op.operation_id for op in plan.operations] == [

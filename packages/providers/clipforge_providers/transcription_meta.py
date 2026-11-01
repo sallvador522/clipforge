@@ -28,6 +28,7 @@ from typing import Any, Sequence
 import httpx
 
 from clipforge_contracts import TranscriptResult
+from clipforge_director.ledger import LiveCallAuthorization, LiveCallNotAuthorizedError
 
 logger = logging.getLogger("clipforge.providers.transcription")
 
@@ -127,7 +128,13 @@ class MetaVoiceTranscriptionProvider:
         audio_path: str | Path,
         *,
         language_bias: Sequence[str] = DEFAULT_LANGUAGE_BIAS,
+        authorization: LiveCallAuthorization | None = None,
     ) -> TranscriptResult:
+        if not isinstance(authorization, LiveCallAuthorization):
+            raise LiveCallNotAuthorizedError(
+                "A valid LiveCallAuthorization is required before a live transcription request. "
+                "No request was attempted."
+            )
         path = Path(audio_path)
         if not path.is_file():
             raise InvalidAudioError(f"Audio file not found: {path}")
@@ -141,6 +148,7 @@ class MetaVoiceTranscriptionProvider:
             "languageBias": list(language_bias),
         }
         logger.info("transcription_request session_id=%s bytes=%d", session_id, path.stat().st_size)
+        authorization.reserve()
 
         try:
             with path.open("rb") as audio_fh:
