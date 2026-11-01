@@ -30,6 +30,8 @@ const REVIEW_WAIT = new Set(["awaiting_approval", "awaiting_clarification"]);
 export function Studio() {
   const [apiMode, setApiMode] = useState<string | null>(null);
   const [liveAvailable, setLiveAvailable] = useState(false);
+  const [liveBilling, setLiveBilling] = useState(false);
+  const [billingDismissed, setBillingDismissed] = useState(false);
   const [segmentationMode, setSegmentationMode] = useState<"mock" | "live" | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -74,6 +76,12 @@ export function Studio() {
         setApiMode(h.ai_mode);
         setLiveAvailable(h.live_transcription_available);
         setSegmentationMode(h.segmentation_mode ?? "mock");
+        setLiveBilling(
+          h.live_transcription_available ||
+            h.director_mode === "live" ||
+            h.segmentation_mode === "live" ||
+            h.live_image_available === true,
+        );
         setApiError(null);
       })
       .catch((e) => setApiError(e instanceof ApiClientError ? e.message : "Backend unreachable."));
@@ -381,6 +389,17 @@ export function Studio() {
       <a href="#viewer" className="sr-only focus:not-sr-only focus:bg-accent focus:px-3 focus:py-1.5 focus:text-sm focus:font-semibold focus:text-[#14110C]">
         Skip to video viewer
       </a>
+      {liveBilling && !billingDismissed && (
+        <div role="note" aria-label="Live billing notice" className="border-b border-accent/40 bg-accent/10 px-4 py-2 text-[12px] leading-relaxed">
+          <span className="font-mono text-[10px] tracking-wider text-accent">JUDGE MODE — LIVE AI · </span>
+          Voice transcription (Muse Voice), planning (Muse Spark), subject detection (SAM 3.1) and
+          background generation (Muse Image) run on <strong>your own Meta account and may incur charges</strong>.
+          Each model runs only when you request it; rendering is local and free.
+          <button type="button" onClick={() => setBillingDismissed(true)} className="ml-3 font-mono text-[11px] text-muted underline underline-offset-2 hover:text-foreground">
+            Dismiss
+          </button>
+        </div>
+      )}
       <TopBar
         projectName={file ? file.name.replace(/\.[^.]+$/, "") : "Untitled project"}
         aiMode={apiMode}

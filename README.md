@@ -10,6 +10,25 @@ transcription and editing direction.
 
 ---
 
+## Hackathon judges — start here
+
+**You can run ClipForge on your own computer with your own Meta API key.** No deployment, no shared service.
+
+```powershell
+git clone https://github.com/sallvador522/clipforge.git
+cd clipforge
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_judge.ps1
+# paste your Meta API key into .env (MODEL_API_KEY=...), then:
+powershell -ExecutionPolicy Bypass -File .\scripts\start_judge.ps1
+# open http://localhost:3000 — stop everything with Ctrl+C
+```
+
+Full guide (requirements, macOS/Linux, costs, privacy, troubleshooting): [`docs/JUDGE_QUICKSTART.md`](docs/JUDGE_QUICKSTART.md).
+
+Judge Mode enables all four live providers (Muse Voice, Muse Spark, SAM 3.1, Muse Image 1.0) explicitly and locally. Live calls bill **your own** Meta account; nothing is requested until you act in the Studio.
+
+---
+
 ## Why ClipForge
 
 Video editing is powerful but slow to learn. Creators know what they want — “blur the
