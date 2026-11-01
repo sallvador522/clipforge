@@ -260,6 +260,31 @@ def test_live_director_validation_failure_persists_audit(tmp_path):
     assert LiveCallBudget(store.root).used("director") == 1
 
 
+def test_live_director_render_failure_preserves_audit(tmp_path, monkeypatch):
+    text = "Keep me sharp and blur everything behind me."
+    store, job_id = _job(tmp_path, text)
+    processor = JobProcessor(store, _bundle(text))
+
+    def fail_render(*args, **kwargs):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr("clipforge_worker.processor.render_video", fail_render)
+    assert processor.process(job_id) == JobStatus.FAILED.value
+
+    record = store.get(job_id)
+    assert record.status == JobStatus.FAILED
+    assert record.error is not None and record.error.code == "RuntimeError"
+    assert record.result is not None
+    audit = record.result.director_audit
+    assert audit is not None
+    assert audit.job_id == job_id
+    assert audit.validation_status == "accepted"
+    assert audit.prompt_tokens == 100
+    assert record.result.director_usage is not None
+    assert record.result.director_usage["completion_tokens"] == 50
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+
+
 def test_live_director_replacement_waits_for_approval_without_render(tmp_path):
     text = "Replace the background with a professional recording studio."
     store, job_id = _job(tmp_path, text)

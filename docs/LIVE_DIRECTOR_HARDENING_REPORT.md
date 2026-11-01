@@ -3,7 +3,7 @@
 **Date:** 2026-11-01
 **Status:** Implementation complete; **no live call made in this milestone**.
 **Meta budget available:** **$31.78**.
-**Tests:** 211 backend tests passing; 49 targeted director/lite/worker tests; `scripts/check.ps1`
+**Tests:** 212 backend tests passing; 50 targeted director/lite/worker tests; `scripts/check.ps1`
 exits 0 (pytest + frontend typecheck + production build).
 
 ## 1. Why this milestone
@@ -187,7 +187,7 @@ Full log: `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
 - Explicit mock env confirmed: `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`,
   `CLIPFORGE_DIRECTOR_MODE=mock`; `get_providers()` returned mock/mock/mock with
   `MockProfessionalEditingDirector`.
-- Full suite: **211 passed**; `scripts/check.ps1` exit 0 (backend + typecheck + production build).
+- Full suite: **212 passed**; `scripts/check.ps1` exit 0 (backend + typecheck + production build).
 - Browser smoke: page loaded with all five areas and **MOCK TRANSCRIPTION**; zero console errors.
 - Ledger: `transcription=3`, `director=2`; no `.lock` or `.tmp` artifacts.
 - LIVE-CALL 006 plan-only request prepared, **not executed**:

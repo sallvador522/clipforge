@@ -117,7 +117,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Persist `director_audit` in `JobResult` on success and failure; keep usage/request id on rejected plans.
 - [x] Serialise job result responses with `model_dump(mode="json")` (audit datetime).
 - [x] Regression fixture recreates the rejected `op1_…` pattern from a valid mock plan (raw model response unavailable); historical job records untouched.
-- [x] 211 backend tests; targeted director/lite/worker 49; `scripts/check.ps1` exit 0.
+- [x] 212 backend tests; targeted director/lite/worker 50; `scripts/check.ps1` exit 0.
 - [x] Mock-only verification with explicit `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`, `CLIPFORGE_DIRECTOR_MODE=mock`: factory modes confirmed; browser smoke showed `MOCK TRANSCRIPTION` with zero console errors; ledger `3/2`, no lock/tmp artifacts.
 - [x] Docs: ADR-016, STATUS, TASKS, ARCHITECTURE, API_CONTRACTS, hardening report.
 - [x] Live retest after hardening — executed as a full approved E2E rather than plan-only (LIVE-E2E 006). Muse generated a valid 5-operation plan; the worker rendered 360×640/177 frames/6.177 s with audio. Audit persisted and verified (`accepted`, HTTP 200, server request id).
@@ -145,7 +145,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (211 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (212 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6 — Live Integration Gate (blocked)

@@ -208,7 +208,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **211 tests passing**. The frontend typecheck and production build
+Current backend suite: **212 tests passing**. The frontend typecheck and production build
 also pass. No GitHub Actions or paid CI is required; checks run locally.
 
 ---

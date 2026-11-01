@@ -139,7 +139,7 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
   - **Provider timing:** the audit record is created before the HTTP request and updated on transport/HTTP/validation outcomes. Usage is recorded before plan validation, so truncated/rejected 200 responses still carry token and cost estimates.
   - **Worker persistence:** the worker persists `director_audit` (plus usage/request id) in `JobResult` immediately after the call, on success **and** failure. Failed jobs now retain the audit in `job.json`; the original historical job record was not modified.
   - **API serialisation:** job result responses use `model_dump(mode="json")`, so the audit timestamp and enums are valid JSON.
-- **Evidence:** 211 backend tests pass; targeted director/lite/worker tests 49 pass; `scripts/check.ps1` exits 0. The rejected pattern is recreated in tests from a valid mock plan because the raw model response was never stored. No live request was made.
+- **Evidence:** 212 backend tests pass; targeted director/lite/worker tests 50 pass; `scripts/check.ps1` exits 0. The rejected pattern is recreated in tests from a valid mock plan because the raw model response was never stored. No live request was made.
 - **Consequences:** A model-generated id no longer blocks an otherwise valid plan. Failed calls are auditable without claiming billed cost. A plan-only live retest remains **blocked on explicit approval**; expected cost is ~$0.00066 (Contributor, ~2.8k in / ~1.9k out) or ~$0.0116 (Standard), with the current 16k cap bounding the worst case.
 
 
