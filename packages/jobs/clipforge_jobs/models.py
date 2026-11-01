@@ -15,7 +15,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clipforge_contracts import BackgroundResult, DirectorAudit, EditingPlan, ProfessionalEditingPlan, RenderResult, SegmentationResult, TranscriptResult
+from clipforge_contracts import (
+    BackgroundResult,
+    DirectorAudit,
+    EditingPlan,
+    ProfessionalEditingPlan,
+    RenderResult,
+    SegmentationResult,
+    SubjectDetectionConsent,
+    TranscriptResult,
+)
 from clipforge_contracts.edl import EditHistoryEntry
 
 
@@ -93,6 +102,8 @@ class JobRecord(BaseModel):
     original_filename: str
     source_relative_path: str  # relative to the storage root, forward slashes
     source_info: SourceInfo
+    source_sha256: str | None = None
+    subject_detection_consent: SubjectDetectionConsent | None = None
     audio_fixture_id: str | None = None
     confirmed_transcript: str | None = None
     transcript_is_mock: bool = False

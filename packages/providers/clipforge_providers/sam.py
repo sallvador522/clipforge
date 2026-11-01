@@ -21,7 +21,6 @@ POST. There are no automatic retries.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -41,7 +40,14 @@ from meta_sam_parser import (
     video_segmentation_format,
 )
 
-from clipforge_contracts import SegmentationResult, SegmentationSubject
+from clipforge_contracts import (
+    ConsentValidationError,
+    SegmentationResult,
+    SegmentationSubject,
+    SubjectDetectionConsent,
+    sha256_file,
+    validate_subject_detection_consent,
+)
 from clipforge_providers.subject_previews import write_subject_preview
 from clipforge_worker.masks import MaskSequenceWriter
 
@@ -98,14 +104,6 @@ class SamIncompleteStreamError(SamError):
 
 class SamValidationError(SamError):
     pass
-
-
-def _sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _probe(path: Path, *, count_frames: bool = False) -> dict[str, Any]:
@@ -184,6 +182,10 @@ class SamSegmentationProvider:
         self.last_file_id: str | None = None
         self.last_file_cleanup: str = "not_applicable"
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     # -- public interface ----------------------------------------------------
     def segment(
         self,
@@ -198,17 +200,25 @@ class SamSegmentationProvider:
         source_path: str | Path | None = None,
         prompt: str = "person",
         authorization=None,
+        consent: SubjectDetectionConsent | None = None,
     ) -> SegmentationResult:
         if source_path is None:
             raise SamValidationError("SAM live segmentation requires the source video path.")
         if width <= 0 or height <= 0 or frame_count <= 0 or fps <= 0:
             raise SamValidationError("width, height, frame_count and fps must be positive.")
-        self._require_authorization(authorization)
-
         source = Path(source_path)
         if not source.is_file():
             raise SamValidationError("Source video not found for SAM segmentation.")
-        source_sha256 = _sha256(source)
+        source_sha256 = sha256_file(source)
+        validate_subject_detection_consent(
+            consent,
+            job_id=job_id,
+            source_video_hash=source_sha256,
+            provider=self.provider_name,
+            model=self._model,
+        )
+        self._require_authorization(authorization)
+
         effective_prompt = (prompt or self._prompt).strip() or DEFAULT_PROMPT
         root = Path(output_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -223,6 +233,12 @@ class SamSegmentationProvider:
                 frame_count=frame_count,
                 fps=fps,
             )
+            if sha256_file(source) != source_sha256:
+                raise ConsentValidationError(
+                    "subject_detection_consent_source_mismatch",
+                    "The source video changed while the SAM input was being prepared; "
+                    "no upload was attempted.",
+                )
             file_id: str | None = None
             cleanup = "not_uploaded"
             try:

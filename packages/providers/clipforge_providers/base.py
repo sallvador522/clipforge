@@ -35,6 +35,7 @@ class SegmentationProvider(Protocol):
         source_path: str | Path | None = None,
         prompt: str = "person",
         authorization=None,
+        consent=None,
     ) -> SegmentationResult: ...
 
 

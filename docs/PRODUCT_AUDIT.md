@@ -1,7 +1,7 @@
 # ClipForge — Product Audit
 
 **Audit date:** 2026-11-01
-**Product state:** Milestone 6D complete for implementation/offline validation (real SAM 3.1 provider, subject selection); live SAM inference is **not** validated.
+**Product state:** Milestone 6D complete for implementation/offline validation (real SAM 3.1 provider, subject selection, explicit consent gate); live SAM inference is **not** validated.
 **Execution mode for this audit:** `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`, `CLIPFORGE_DIRECTOR_MODE=mock`, `CLIPFORGE_SEGMENTATION_MODE=mock`
 **Live calls made while producing this audit:** none
 
@@ -131,14 +131,19 @@ background generation remains unimplemented. Selective person blur remains unsup
    at 1.74 FPS, peak 637.7 MB, 300 frames and AAC audio verified.
 7. **Zero-detection handling.** A valid empty SAM result becomes a terminal
    `NoSubjectsDetected` job; no render occurs.
-8. **Scope honesty.** SAM live is implemented but **not live-validated**. Selective person
+8. **External-processing consent.** Live SAM requires explicit, unchecked-by-default
+   consent in the Studio before the voice request. The API persists a source-bound record
+   (job, SHA-256, timestamp, disclosure version, provider, model, live mode), rejects
+   missing/false consent before ready/worker/upload, and the worker/provider revalidate it.
+   Plan approval is separate. Mock mode has no consent prompt.
+9. **Scope honesty.** SAM live is implemented but **not live-validated**. Selective person
    blur is not supported.
 
 ## Verified evidence
 
 ### Backend and rendering
 
-- Full backend suite: **256 tests passed** in mock mode.
+- Full backend suite: **272 tests passed** in mock mode.
 - Coverage includes: approval/rejection/clarification/unsupported, duplicate approval,
   concurrent transition locking, worker restart resume, clarification limit, render failure
   audit, failure after render but before status persistence, original preservation, verified
@@ -191,6 +196,9 @@ each 64×36, 1.0 s, video + audio.
 - The live-call ledger is fail-closed, atomic and never automatically reset; direct live
   provider calls require a one-shot authorization.
 - No live calls, SAM calls or Muse Image calls were made in Milestone 6C or 6D.
+- Live SAM consent is explicit, source-bound and persisted; mock segmentation does not
+  require or display it. A malicious local API client can still assert consent, since the
+  app has no authentication model; the disclosure itself is a UI responsibility.
 - The API does not expose provider credentials, raw provider payloads or internal audit
   secrets. `state_history` remains in `job.json`; the public job response does not expose it.
 

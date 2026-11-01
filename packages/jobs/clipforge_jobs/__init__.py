@@ -9,6 +9,7 @@ from clipforge_jobs.models import (
     JobStatus,
     SourceInfo,
 )
+from clipforge_contracts import SubjectDetectionConsent
 from clipforge_jobs.store import JobNotFoundError, JobStore, JobTransitionError
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "JobTransitionError",
     "MAX_CLARIFICATIONS",
     "SourceInfo",
+    "SubjectDetectionConsent",
 ]

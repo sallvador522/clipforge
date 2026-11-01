@@ -160,7 +160,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (256 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (272 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6C — Plan Review, Approval & Resume (complete, mock mode)
@@ -204,7 +204,9 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Full-resolution benchmark: 300 frames/1280×720/30 FPS/10 s/audio; 1.74 FPS; 637.7 MB peak; verified 300 frames + AAC.
 - [x] Browser E2E updated for subject selection and approval.
 - [x] Docs: ADR-019, `docs/SAM_31_INTEGRATION.md`, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README, PRODUCT_AUDIT.
-- [ ] **Live SAM 3.1 validation — blocked on explicit approval and a cost estimate.** No live request has been made; detection quality, live stream behaviour, Files API expiry encoding and live cleanup remain unverified.
+- [x] ADR-020 + explicit live-SAM consent gate: Portuguese pre-send dialog, unchecked consent, decline without request; API 422 before ready/worker; source-bound consent record (job, SHA-256, timestamp, disclosure version, provider, model, live mode); worker/provider revalidation before upload; mock mode unaffected.
+- [x] Regression tests: missing/false consent, no ready/worker, valid persistence, changed source, another-job reuse, approval-without-consent, worker refusal, provider refusal before upload, mock no-consent. Browser E2E desktop/mobile + mock no-dialog + zero `api.meta.ai` requests.
+- [ ] **Live SAM 3.1 validation - blocked on explicit approval and a cost estimate.** No live request has been made; detection quality, live stream behaviour, Files API expiry encoding and live cleanup remain unverified.
 - [ ] Muse Image background generation - planned, not implemented.
 - [ ] Authentication/ownership and stale-claim recovery - not implemented.
 

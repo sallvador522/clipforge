@@ -170,6 +170,7 @@ class MockSegmentationProvider:
         source_path: str | Path | None = None,
         prompt: str = "person",
         authorization=None,
+        consent=None,
     ) -> SegmentationResult:
         if frame_count <= 0 or width <= 0 or height <= 0 or fps <= 0:
             raise ValueError("width, height, frame_count and fps must be positive.")

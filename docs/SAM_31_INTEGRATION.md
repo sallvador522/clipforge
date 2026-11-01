@@ -167,6 +167,29 @@ The UI does not perform identity recognition. Labels are generic
 is the user. Zero detections is a valid result and becomes a terminal `unsupported` job
 with `NoSubjectsDetected`; it never renders.
 
+## Explicit consent gate (ADR-020)
+
+Live external processing is now gated before any upload:
+
+- `POST /api/jobs/{job_id}/voice` accepts `subject_detection_consent: bool | None`.
+- When `CLIPFORGE_SEGMENTATION_MODE=live` and consent is absent or false, the API returns
+  **422 `subject_detection_consent_required`** and does not mark the job ready. No worker
+  can claim it and no SAM upload/inference is scheduled.
+- With true consent, the API binds a `SubjectDetectionConsent` record to the job, source
+  SHA-256, provider (`meta-sam`), model (`sam-3.1`), disclosure version
+  (`sam31-external-video-v1`) and live mode, and persists it atomically with the voice
+  instruction before the job becomes claimable.
+- The worker re-hashes the source and validates the record before creating the one-shot
+  ledger authorization or calling the provider. A source change invalidates consent.
+- `SamSegmentationProvider.segment()` validates the consent again **before the Files API
+  upload**. A direct provider call with only an authorization is rejected.
+- Editing-plan approval is separate and can never substitute for SAM consent.
+- Mock segmentation does not require consent and never shows the disclosure.
+
+The UI displays the Portuguese disclosure before the voice request. Consent is an
+unchecked checkbox; “Cancelar” sends nothing and “Autorizar e continuar” submits the
+explicit field. No deletion guarantee or “only on your device” claim is made.
+
 ## Renderer integration
 
 `combine_subject_masks()` streams one mask per selected object per frame, computes the
@@ -215,7 +238,8 @@ SAM detection quality.
 ## Remaining limitations
 
 - **Real SAM inference is unvalidated.** The first live test still needs explicit approval,
-  a cost estimate, a ledger slot and a controlled request.
+  a cost estimate, a ledger slot and a controlled request. The consent gate is implemented;
+  it does not validate live SAM behavior by itself.
 - Detection quality, real object continuity through occlusion and prompt tuning on real
   footage are unknown.
 - The Files API nested expiration encoding is not live-validated.

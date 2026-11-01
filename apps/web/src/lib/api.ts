@@ -104,12 +104,16 @@ export function submitTranscript(
   jobId: string,
   transcript: string,
   transcriptionSessionId: string | null,
+  subjectDetectionConsent?: boolean,
 ): Promise<JobResponse> {
   return requestJson<JobResponse>(`/api/jobs/${jobId}/voice`, {
     method: "POST",
     body: JSON.stringify({
       transcript,
       transcription_session_id: transcriptionSessionId ?? undefined,
+      ...(subjectDetectionConsent === undefined
+        ? {}
+        : { subject_detection_consent: subjectDetectionConsent }),
     }),
   });
 }

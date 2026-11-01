@@ -11,7 +11,15 @@ from __future__ import annotations
 
 import logging
 
-from clipforge_contracts import ApprovalStatus, EditingIntent, PlanOutcome, TranscriptResult
+from clipforge_contracts import (
+    ApprovalStatus,
+    ConsentValidationError,
+    EditingIntent,
+    PlanOutcome,
+    TranscriptResult,
+    sha256_file,
+    validate_subject_detection_consent,
+)
 from clipforge_director import DirectorVideoMetadata, LiveCallAuthorization, LiveCallBudget
 from clipforge_jobs import MAX_CLARIFICATIONS, JobError, JobResult, JobStatus, JobStore
 from clipforge_providers import ProviderBundle
@@ -61,8 +69,28 @@ class JobProcessor:
 
     def _run_segmentation(self, job_id: str, record):
         info = record.source_info
+        source_path = self.store.source_path(record)
         authorization = None
+        consent = None
         if self.providers.segmentation_mode == "live":
+            source_hash = sha256_file(source_path)
+            if record.source_sha256 and source_hash != record.source_sha256:
+                raise ConsentValidationError(
+                    "subject_detection_consent_source_mismatch",
+                    "The source video changed after upload; live subject detection is refused.",
+                )
+            provider_name = getattr(self.providers.segmentation, "provider_name", None)
+            model = getattr(self.providers.segmentation, "model", None)
+            if not provider_name or not model:
+                raise RuntimeError("Live segmentation provider is missing provider/model identity.")
+            validate_subject_detection_consent(
+                record.subject_detection_consent,
+                job_id=job_id,
+                source_video_hash=source_hash,
+                provider=provider_name,
+                model=model,
+            )
+            consent = record.subject_detection_consent
             authorization = LiveCallAuthorization(
                 LiveCallBudget(self.store.root), "segmentation"
             )
@@ -74,9 +102,10 @@ class JobProcessor:
             height=info.height,
             frame_count=info.frame_count,
             fps=info.fps,
-            source_path=self.store.source_path(record),
+            source_path=source_path,
             prompt="person",
             authorization=authorization,
+            consent=consent,
         )
 
     def _execute_approved_plan(self, job_id: str, record, transcript: TranscriptResult) -> str:
@@ -409,7 +438,10 @@ class JobProcessor:
                 job_id,
                 status=JobStatus.FAILED,
                 stage="failed",
-                error=JobError(code=type(exc).__name__, message=str(exc)),
+                error=JobError(
+                    code=getattr(exc, "code", type(exc).__name__),
+                    message=str(exc),
+                ),
                 result=error_result,
             )
             return JobStatus.FAILED.value

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -17,7 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from clipforge_contracts import get_capability
+from clipforge_contracts import (
+    SUBJECT_DETECTION_DISCLOSURE_VERSION,
+    SubjectDetectionConsent,
+    get_capability,
+    sha256_file,
+)
 from clipforge_api.media import UploadValidationError, probe_video
 from clipforge_api.transcribe import (
     AudioValidationError,
@@ -46,6 +52,7 @@ class VoiceRequest(BaseModel):
     audio_fixture_id: str | None = Field(default=None, min_length=1)
     transcript: str | None = Field(default=None, min_length=1, max_length=500)
     transcription_session_id: str | None = Field(default=None, max_length=128)
+    subject_detection_consent: bool | None = None
 
     @model_validator(mode="after")
     def _exactly_one_source(self) -> "VoiceRequest":
@@ -191,6 +198,7 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             "transcribe_mode": bundle.transcription_mode,
             "director_mode": bundle.director_mode,
             "segmentation_mode": bundle.segmentation_mode,
+            "subject_detection_disclosure_version": SUBJECT_DETECTION_DISCLOSURE_VERSION,
             "live_transcription_available": bundle.transcription_mode == "live",
             "live_call_limits": budget.limits,
             "live_calls_used": {function: budget.used(function) for function in budget.limits},
@@ -219,16 +227,24 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             if size == 0:
                 raise UploadValidationError("empty_file", "Uploaded file is empty.", 400)
             info = probe_video(source_path)
+            source_sha256 = sha256_file(source_path)
         except UploadValidationError:
             # Invalid uploads leave no orphaned files or job records behind.
             source_path.unlink(missing_ok=True)
             upload_dir.rmdir()
             raise
+        except OSError as exc:
+            source_path.unlink(missing_ok=True)
+            upload_dir.rmdir()
+            raise UploadValidationError(
+                "file_unreadable", "Uploaded file could not be read.", 422
+            ) from exc
         record = JobRecord(
             job_id=job_id,
             original_filename=original_name,
             source_relative_path=f"uploads/{job_id}/source{suffix}",
             source_info=info,
+            source_sha256=source_sha256,
         )
         store.create(record)
         logger.info("job_created job_id=%s file=%s size=%d", job_id, original_name, size)
@@ -240,19 +256,67 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         if record.status.value != "queued" or record.ready:
             return _error(409, "job_not_accepting_voice",
                           f"Job {job_id} is {record.status.value} (stage={record.stage}) and cannot accept voice input.")
+
+        consent_record = None
+        source_hash = None
+        if bundle.segmentation_mode == "live":
+            if body.subject_detection_consent is not True:
+                return _error(
+                    422,
+                    "subject_detection_consent_required",
+                    "Live SAM subject detection requires explicit consent before a "
+                    "video-only copy is sent to Meta. Set subject_detection_consent=true "
+                    "only after showing the disclosure.",
+                )
+            source_path = store.source_path(record)
+            try:
+                source_hash = sha256_file(source_path)
+            except OSError:
+                return _error(
+                    409,
+                    "source_video_unreadable",
+                    "The source video could not be read for consent binding.",
+                )
+            if record.source_sha256 and source_hash != record.source_sha256:
+                return _error(
+                    409,
+                    "subject_detection_consent_source_mismatch",
+                    "The source video changed after upload; upload it again and provide consent.",
+                )
+            provider_name = getattr(bundle.segmentation, "provider_name", None)
+            model = getattr(bundle.segmentation, "model", None)
+            if not provider_name or not model:
+                return _error(
+                    500,
+                    "segmentation_provider_misconfigured",
+                    "Live segmentation provider is missing provider/model identity.",
+                )
+            consent_record = SubjectDetectionConsent(
+                job_id=job_id,
+                source_video_hash=source_hash,
+                consent_given=True,
+                consent_timestamp=datetime.now(timezone.utc),
+                disclosure_version=SUBJECT_DETECTION_DISCLOSURE_VERSION,
+                provider=provider_name,
+                model=model,
+                segmentation_mode="live",
+            )
+
+        changes: dict[str, object] = {"ready": True, "stage": "queued"}
+        if consent_record is not None:
+            changes["subject_detection_consent"] = consent_record
+            changes["source_sha256"] = source_hash
         if body.transcript:
-            record = store.update(
-                job_id,
+            changes.update(
                 confirmed_transcript=body.transcript.strip(),
                 transcript_is_mock=bundle.transcription_mode == "mock",
                 transcription_session_id=body.transcription_session_id,
-                ready=True,
-                stage="queued",
             )
             logger.info("transcript_confirmed job_id=%s chars=%d", job_id, len(body.transcript.strip()))
         else:
-            record = store.update(job_id, audio_fixture_id=body.audio_fixture_id, ready=True, stage="queued")
+            changes["audio_fixture_id"] = body.audio_fixture_id
             logger.info("voice_attached job_id=%s fixture=%s", job_id, body.audio_fixture_id)
+        record = store.update(job_id, **changes)
         return _to_response(record)
 
     @app.post("/api/transcribe", response_model=None)

@@ -41,6 +41,9 @@ The MVP targets 10-second clips at up to 720p / 30 FPS.
   approve. You can reject or answer up to three inline clarification rounds.
 - **Subject selection**: detected people appear as source-frame preview cards with stable
   SAM object IDs. Choose one or more to keep sharp before rendering.
+- **Explicit SAM consent**: when segmentation is live, an unchecked Portuguese disclosure
+  appears before the voice request. Declining sends nothing; authorizing persists a
+  source-bound consent record. Plan approval is separate. Mock mode has no prompt.
 - Real background blur and background replacement with **FFmpeg + OpenCV**.
 - A real SAM 3.1 provider (official Responses/Files contract + `meta-sam-parser`), fully
   implemented and offline-validated. **No live SAM request has been made yet**, so real
@@ -186,8 +189,10 @@ MODEL_API_KEY=your_server_side_key
 CLIPFORGE_DEV_ALLOW_LIVE=1
 ```
 
-SAM live is implemented but has **not** been validated against Meta. Do not enable it
-without a separate approval and cost estimate.
+SAM live is implemented but has **not** been validated against Meta. When enabled, the
+Studio requires explicit, source-bound consent before the voice request; the API and worker
+reject live segmentation without it. Do not enable live mode without a separate approval
+and cost estimate.
 
 Safety rails:
 
@@ -235,7 +240,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **256 tests passing**. The frontend typecheck and production build
+Current backend suite: **272 tests passing**. The frontend typecheck and production build
 also pass. Browser E2E for subject selection, approval, rejection, clarification, replacement
 and unsupported flows is available in `apps/web/scripts/qa-approval.mjs` (run with the mock
 stack on `:3000`/`:8001`). No GitHub Actions or paid CI is required; checks run locally.
@@ -271,6 +276,7 @@ tests/          Backend test suite
 - [Architecture](docs/ARCHITECTURE.md)
 - [API contracts](docs/API_CONTRACTS.md)
 - [SAM 3.1 integration](docs/SAM_31_INTEGRATION.md)
+- [SAM 3.1 live validation plan](docs/SAM_31_LIVE_VALIDATION_PLAN.md)
 - [Decisions (ADRs)](docs/DECISIONS.md)
 - [Status and handoff](docs/STATUS.md)
 - [Tasks](docs/TASKS.md)

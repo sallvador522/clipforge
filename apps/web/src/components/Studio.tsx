@@ -20,6 +20,7 @@ import { TopBar } from "./TopBar";
 import { MediaPanel, type SourceMeta } from "./MediaPanel";
 import { Viewer } from "./Viewer";
 import { AssistantPanel, type TranscribeStatus } from "./AssistantPanel";
+import { ConsentDialog } from "./ConsentDialog";
 import { PlanReviewDialog } from "./PlanReviewDialog";
 import { Timeline } from "./Timeline";
 
@@ -29,6 +30,7 @@ const REVIEW_WAIT = new Set(["awaiting_approval", "awaiting_clarification"]);
 export function Studio() {
   const [apiMode, setApiMode] = useState<string | null>(null);
   const [liveAvailable, setLiveAvailable] = useState(false);
+  const [segmentationMode, setSegmentationMode] = useState<"mock" | "live" | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -46,6 +48,8 @@ export function Studio() {
   const [planDialogOpen, setPlanDialogOpen] = useState(false);
   const [decisionSubmitting, setDecisionSubmitting] = useState<"approve" | "reject" | "clarify" | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
 
   const [recording, setRecording] = useState<{ blob: Blob; filename: string } | null>(null);
   const [transcribeStatus, setTranscribeStatus] = useState<TranscribeStatus>("idle");
@@ -69,6 +73,7 @@ export function Studio() {
       .then((h) => {
         setApiMode(h.ai_mode);
         setLiveAvailable(h.live_transcription_available);
+        setSegmentationMode(h.segmentation_mode ?? "mock");
         setApiError(null);
       })
       .catch((e) => setApiError(e instanceof ApiClientError ? e.message : "Backend unreachable."));
@@ -163,20 +168,46 @@ export function Studio() {
     }
   }
 
-  async function handleSubmitVoice() {
+  function requestConfirmTranscript() {
+    if (!job || !draft.trim() || segmentationMode === null) return;
+    setError(null);
+    if (segmentationMode === "live") {
+      setConsentError(null);
+      setConsentOpen(true);
+      return;
+    }
+    void submitConfirmedTranscript(undefined);
+  }
+
+  async function submitConfirmedTranscript(subjectDetectionConsent?: boolean) {
     if (!job || !draft.trim()) return;
     setSubmitting(true);
     setError(null);
+    setConsentError(null);
     try {
-      const updated = await submitTranscript(job.job_id, draft.trim(), transcript?.session_id ?? null);
+      const updated = await submitTranscript(
+        job.job_id,
+        draft.trim(),
+        transcript?.session_id ?? null,
+        subjectDetectionConsent,
+      );
       setJob(updated);
       setVoiceSubmitted(true);
+      setConsentOpen(false);
       pollJob(job.job_id);
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Could not submit the confirmed transcript.");
+      const message = e instanceof ApiClientError ? e.message : "Could not submit the confirmed transcript.";
+      if (subjectDetectionConsent === true) setConsentError(message);
+      else setError(message);
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function declineConsent() {
+    if (submitting) return;
+    setConsentOpen(false);
+    setConsentError(null);
   }
 
   async function handleApprovePlan(subjectIds: string[]) {
@@ -270,6 +301,8 @@ export function Studio() {
     setPlanDialogOpen(false);
     setDecisionSubmitting(null);
     setDecisionError(null);
+    setConsentOpen(false);
+    setConsentError(null);
     setFile(null);
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setOriginalUrl(null);
@@ -453,14 +486,23 @@ export function Studio() {
             onDraftChange={setDraft}
             onTranscribe={handleTranscribe}
             onTypedInstruction={handleTypedInstruction}
-            canConfirm={Boolean(job && job.status === "queued" && !job.ready)}
+            canConfirm={Boolean(job && job.status === "queued" && !job.ready && segmentationMode !== null)}
             confirming={submitting}
             submitted={voiceSubmitted}
-            onConfirmTranscript={handleSubmitVoice}
+            onConfirmTranscript={requestConfirmTranscript}
             onRetry={reset}
           />
         </div>
       </div>
+
+      {consentOpen && (
+        <ConsentDialog
+          submitting={submitting}
+          error={consentError}
+          onAuthorize={() => void submitConfirmedTranscript(true)}
+          onDecline={declineConsent}
+        />
+      )}
 
       {planReview && planDialogOpen && (
         <PlanReviewDialog

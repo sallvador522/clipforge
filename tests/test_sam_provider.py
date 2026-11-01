@@ -11,6 +11,7 @@ import dataclasses
 import hashlib
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -19,6 +20,11 @@ import pytest
 from PIL import Image
 
 from clipforge_director import LiveCallAuthorization, LiveCallBudget
+from clipforge_contracts import (
+    SUBJECT_DETECTION_DISCLOSURE_VERSION,
+    SubjectDetectionConsent,
+    sha256_file,
+)
 from clipforge_providers import (
     SamIncompleteStreamError,
     SamNotAuthorizedError,
@@ -63,6 +69,19 @@ def _probe(path: Path) -> dict:
 def _auth(tmp_path: Path) -> LiveCallAuthorization:
     return LiveCallAuthorization(
         LiveCallBudget(tmp_path / "storage", limits={"segmentation": 2}), "segmentation"
+    )
+
+
+def _consent(video: Path, job_id: str) -> SubjectDetectionConsent:
+    return SubjectDetectionConsent(
+        job_id=job_id,
+        source_video_hash=sha256_file(video),
+        consent_given=True,
+        consent_timestamp=datetime.now(timezone.utc),
+        disclosure_version=SUBJECT_DETECTION_DISCLOSURE_VERSION,
+        provider="meta-sam",
+        model="sam-3.1",
+        segmentation_mode="live",
     )
 
 
@@ -127,6 +146,7 @@ def test_sam_request_contract_and_mask_conversion(tmp_path):
         fps=10.0,
         source_path=video,
         authorization=_auth(tmp_path),
+        consent=_consent(video, "job-sam"),
     )
 
     assert result.provider_name == "meta-sam"
@@ -184,6 +204,7 @@ def test_sam_preserves_sparse_object_ids_and_out_of_order_frames(tmp_path):
         fps=10.0,
         source_path=video,
         authorization=_auth(tmp_path),
+        consent=_consent(video, "job-order"),
     )
     assert [s.object_id for s in result.subjects] == ["0"]
     masks = MaskLoader().load(Path(result.subjects[0].mask_manifest_path).parent).masks
@@ -207,6 +228,7 @@ def test_sam_preserves_sparse_non_contiguous_object_ids(tmp_path):
         fps=10.0,
         source_path=video,
         authorization=_auth(tmp_path),
+        consent=_consent(video, "job-sparse"),
     )
     assert [s.object_id for s in result.subjects] == ["0", "2"]
     object_two = next(s for s in result.subjects if s.object_id == "2")
@@ -228,6 +250,7 @@ def test_sam_enter_leave_and_occlusion_fill_absent_frames(tmp_path):
         fps=10.0,
         source_path=video,
         authorization=_auth(tmp_path),
+        consent=_consent(video, "job-enter"),
     )
     assert [s.object_id for s in result.subjects] == ["0", "1"]
     object_one = next(s for s in result.subjects if s.object_id == "1")
@@ -250,6 +273,7 @@ def test_sam_zero_detections_is_explicit_empty_result(tmp_path):
         fps=10.0,
         source_path=video,
         authorization=_auth(tmp_path),
+        consent=_consent(video, "job-empty"),
     )
     assert result.status == "completed"
     assert result.subjects == []
@@ -280,6 +304,7 @@ def test_sam_rejects_incomplete_or_malformed_output(tmp_path, fixture, error):
             fps=10.0,
             source_path=video,
             authorization=_auth(tmp_path),
+            consent=_consent(video, "job-bad"),
         )
     assert not (out / "manifest.json").exists()
 
@@ -320,6 +345,7 @@ def test_sam_requires_authorization_before_upload(tmp_path):
             fps=10.0,
             source_path=video,
             authorization=None,
+            consent=_consent(video, "job-noauth"),
         )
     assert uploaded == []
 
@@ -341,6 +367,7 @@ def test_sam_cleanup_runs_after_stream_failure(tmp_path):
             fps=10.0,
             source_path=video,
             authorization=_auth(tmp_path),
+            consent=_consent(video, "job-fail"),
         )
     assert deleted == ["file-test123"]
 
@@ -360,6 +387,7 @@ def test_sam_cleanup_failure_is_recorded_but_does_not_hide_masks(tmp_path):
         fps=10.0,
         source_path=video,
         authorization=_auth(tmp_path),
+        consent=_consent(video, "job-cleanup"),
     )
     assert result.file_cleanup == "failed"
     assert any("cleanup" in message.lower() for message in result.diagnostics)

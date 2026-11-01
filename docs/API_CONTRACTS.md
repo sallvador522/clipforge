@@ -63,9 +63,9 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 
 | Endpoint | Status | Purpose |
 |---|---|---|
-| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
+| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, subject_detection_disclosure_version, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
-| `POST /api/jobs/{job_id}/voice` | live | Body with exactly one of `{audio_fixture_id}` or `{transcript, transcription_session_id?}`; attaches the instruction and makes the job claimable; 409 if not queued/awaiting |
+| `POST /api/jobs/{job_id}/voice` | live | Body with exactly one of `{audio_fixture_id}` or `{transcript, transcription_session_id?}`, plus optional `subject_detection_consent: boolean`. When segmentation is live, consent must be exactly `true` or the request returns 422 `subject_detection_consent_required` before the job is made ready; no worker/segmentation is scheduled. With true consent, a source-bound consent record is persisted atomically with the instruction. Mock segmentation requires no consent. 409 if not queued/awaiting. |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`, `completed`, `failed`, plus `stage` progress detail |
 | `GET /api/jobs` | live | List all jobs |
 | `GET /api/jobs/{job_id}/plan` | live (6C/6D) | Persisted v2 plan and review metadata. Requires a persisted plan, otherwise 409 `plan_not_ready`. Returns `status`, `stage`, `ready`, `plan`, `legacy_plan` (v1 adapter), `capabilities` (id, name, status, `simulated`, `requires_approval`, provider), `requires_approval`, `requires_clarification`, `clarification_question`, `clarification_count`, `render_status`, `error`, `subjects[]` (stable `object_id`, generic `label`, `preview_url`, first/last frame, detected count, confidence), `segmentation` (provider, model, `is_mock`, status, dimensions/fps, diagnostics, file cleanup), `selected_subject_ids`, `selection_required` and `no_subjects`. Works while awaiting review and after terminal states; it is the read path for non-completed jobs (the `/result` endpoint remains completed-only). |
@@ -131,7 +131,22 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 Every ready plan is stopped at `awaiting_approval` with no render, regardless of provider mode or whether the capability itself requires approval. Detection runs before review so the user can select subjects. `approval_status` remains a capability-level field inside the plan; product review and subject selection are separate and mandatory. Approval resumes the persisted plan exactly once; rejection is terminal; clarification rebuilds the plan up to 3 rounds before returning to review. See ADR-018 and ADR-019. The UI reflects backend state and never decides execution locally.
 
-## SAM 3.1 Segmentation (ADR-019)
+## SAM 3.1 Segmentation (ADR-019) and Consent (ADR-020)
+
+### External-processing consent record
+
+Live SAM detection requires a persisted `SubjectDetectionConsent` bound to:
+
+- `job_id`
+- `source_video_hash` (SHA-256 of the original upload)
+- `consent_given` (must be true)
+- `consent_timestamp`
+- `disclosure_version` (`sam31-external-video-v1`)
+- `provider` (`meta-sam`)
+- `model` (`sam-3.1`)
+- `segmentation_mode` (`live`)
+
+`POST /voice` rejects missing/false consent with 422 `subject_detection_consent_required`. It also rejects a source hash that no longer matches the upload with 409 `subject_detection_consent_source_mismatch`. The worker re-hashes the source and validates the record before creating the ledger authorization or calling the provider; `SamSegmentationProvider.segment()` validates again before the Files API upload. Plan approval is a separate transition and does not create or substitute consent. Mock segmentation ignores consent.
 
 **Implementation complete; offline validation complete; live inference NOT validated.**
 

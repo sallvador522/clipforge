@@ -1,5 +1,14 @@
 """ClipForge shared contracts: single source of truth for plans and normalized provider data."""
 
+from clipforge_contracts.consent import (
+    SUBJECT_DETECTION_DISCLOSURE_VERSION,
+    SUBJECT_DETECTION_MODEL,
+    SUBJECT_DETECTION_PROVIDER,
+    ConsentValidationError,
+    SubjectDetectionConsent,
+    sha256_file,
+    validate_subject_detection_consent,
+)
 from clipforge_contracts.capabilities import (
     CAPABILITIES,
     Capability,
@@ -127,6 +136,13 @@ __all__ = [
     "canonical_hash",
     "capability_summary_for_prompt",
     "compute_decision_hash",
+    "ConsentValidationError",
+    "SubjectDetectionConsent",
+    "SUBJECT_DETECTION_DISCLOSURE_VERSION",
+    "SUBJECT_DETECTION_MODEL",
+    "SUBJECT_DETECTION_PROVIDER",
+    "sha256_file",
+    "validate_subject_detection_consent",
     "disabled_capability_ids",
     "edl_from_professional_plan",
     "executable_capabilities",
