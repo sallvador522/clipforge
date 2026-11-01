@@ -17,13 +17,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from clipforge_contracts import get_capability
 from clipforge_api.media import UploadValidationError, probe_video
 from clipforge_api.transcribe import (
     AudioValidationError,
     ensure_ffmpeg_available,
     transcribe_upload,
 )
-from clipforge_jobs import JobNotFoundError, JobRecord, JobStore
+from clipforge_jobs import (
+    MAX_CLARIFICATIONS,
+    JobNotFoundError,
+    JobRecord,
+    JobStatus,
+    JobStore,
+    JobTransitionError,
+)
 from clipforge_director import LiveCallBudget
 from clipforge_providers import ProviderBundle, get_providers
 
@@ -44,6 +52,16 @@ class VoiceRequest(BaseModel):
         if bool(self.audio_fixture_id) == bool(self.transcript):
             raise ValueError("Provide exactly one of audio_fixture_id (mock) or transcript (reviewed text).")
         return self
+
+
+class PlanDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note: str | None = Field(default=None, max_length=300)
+
+
+class ClarificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answer: str = Field(min_length=1, max_length=300)
 
 
 class JobResponse(BaseModel):
@@ -103,6 +121,10 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
     @app.exception_handler(JobNotFoundError)
     async def _not_found(_: Request, exc: JobNotFoundError) -> JSONResponse:
         return _error(404, "job_not_found", str(exc))
+
+    @app.exception_handler(JobTransitionError)
+    async def _invalid_transition(_: Request, exc: JobTransitionError) -> JSONResponse:
+        return _error(409, exc.code, str(exc))
 
     @app.exception_handler(UploadValidationError)
     async def _invalid_upload(_: Request, exc: UploadValidationError) -> JSONResponse:
@@ -213,6 +235,136 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             return _error(409, "result_not_ready",
                           f"Job {job_id} is {record.status.value}; result available only when completed.")
         return JSONResponse(content=record.result.model_dump(mode="json"))
+
+    @app.get("/api/jobs/{job_id}/plan")
+    async def job_plan(job_id: str) -> JSONResponse:
+        record = store.get(job_id)
+        result = record.result
+        plan = result.director_plan if result is not None else None
+        if result is None or plan is None:
+            return _error(409, "plan_not_ready", f"Job {job_id} has no persisted editing plan.")
+        question = plan.clarification_questions[0] if plan.clarification_questions else None
+        capabilities = []
+        for operation in plan.operations:
+            capability = get_capability(operation.capability_id)
+            if capability is not None:
+                capabilities.append(
+                    {
+                        "capability_id": capability.capability_id,
+                        "name": capability.name,
+                        "status": capability.status.value,
+                        "simulated": capability.simulated,
+                        "requires_approval": capability.requires_approval,
+                        "provider": capability.required_provider,
+                    }
+                )
+        return JSONResponse(
+            content={
+                "job_id": record.job_id,
+                "status": record.status.value,
+                "stage": record.stage,
+                "ready": record.ready,
+                "plan": plan.model_dump(mode="json"),
+                "legacy_plan": result.plan.model_dump(mode="json") if result.plan else None,
+                "capabilities": capabilities,
+                "requires_approval": result.requires_approval,
+                "requires_clarification": result.requires_clarification,
+                "clarification_question": question,
+                "clarification_count": record.clarification_count,
+                "render_status": result.render_status,
+                "error": record.error.model_dump() if record.error else None,
+            }
+        )
+
+    @app.post("/api/jobs/{job_id}/approve", response_model=None)
+    async def approve_plan(job_id: str, body: PlanDecisionRequest | None = None) -> JobResponse | JSONResponse:
+        record = store.get(job_id)
+        if record.status is not JobStatus.AWAITING_APPROVAL:
+            return _error(
+                409,
+                "approval_not_allowed",
+                f"Job {job_id} is {record.status.value}; only awaiting_approval plans can be approved.",
+            )
+        if record.result is None or record.result.director_plan is None:
+            return _error(409, "plan_not_ready", f"Job {job_id} has no persisted plan to approve.")
+        result = record.result.model_copy(update={"render_status": "approved"})
+        updated = store.transition(
+            job_id,
+            expected=JobStatus.AWAITING_APPROVAL,
+            status=JobStatus.QUEUED,
+            stage="approved",
+            actor="user",
+            note=(body.note if body and body.note else "plan approved"),
+            approval_granted=True,
+            result=result,
+        )
+        logger.info("plan_approved job_id=%s", job_id)
+        return _to_response(updated)
+
+    @app.post("/api/jobs/{job_id}/reject", response_model=None)
+    async def reject_plan(job_id: str, body: PlanDecisionRequest | None = None) -> JobResponse | JSONResponse:
+        record = store.get(job_id)
+        if record.status not in {JobStatus.AWAITING_APPROVAL, JobStatus.AWAITING_CLARIFICATION}:
+            return _error(
+                409,
+                "rejection_not_allowed",
+                f"Job {job_id} is {record.status.value}; only reviewable plans can be rejected.",
+            )
+        result = (
+            record.result.model_copy(update={"render_status": "rejected"})
+            if record.result is not None
+            else None
+        )
+        updated = store.transition(
+            job_id,
+            expected={JobStatus.AWAITING_APPROVAL, JobStatus.AWAITING_CLARIFICATION},
+            status=JobStatus.REJECTED,
+            stage="rejected",
+            actor="user",
+            note=(body.note if body and body.note else "plan rejected"),
+            approval_granted=False,
+            result=result,
+        )
+        logger.info("plan_rejected job_id=%s", job_id)
+        return _to_response(updated)
+
+    @app.post("/api/jobs/{job_id}/clarify", response_model=None)
+    async def clarify_plan(job_id: str, body: ClarificationRequest) -> JobResponse | JSONResponse:
+        record = store.get(job_id)
+        if record.status is not JobStatus.AWAITING_CLARIFICATION:
+            return _error(
+                409,
+                "clarification_not_allowed",
+                f"Job {job_id} is {record.status.value}; it is not awaiting clarification.",
+            )
+        if record.clarification_count >= MAX_CLARIFICATIONS:
+            return _error(
+                409,
+                "clarification_limit_reached",
+                "Clarification limit reached; start a new session with a more specific instruction.",
+            )
+        answer = body.answer.strip()
+        if not answer:
+            return _error(422, "empty_clarification", "The clarification answer cannot be empty.")
+        result = (
+            record.result.model_copy(update={"render_status": "replanning"})
+            if record.result is not None
+            else None
+        )
+        updated = store.transition(
+            job_id,
+            expected=JobStatus.AWAITING_CLARIFICATION,
+            status=JobStatus.QUEUED,
+            stage="replanning",
+            actor="user",
+            note="clarification answered",
+            approval_granted=False,
+            clarification_answer=answer,
+            clarification_count=record.clarification_count + 1,
+            result=result,
+        )
+        logger.info("clarification_answered job_id=%s round=%d", job_id, updated.clarification_count)
+        return _to_response(updated)
 
     @app.get("/api/jobs")
     async def list_jobs() -> list[JobResponse]:

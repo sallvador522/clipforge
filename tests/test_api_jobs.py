@@ -1,6 +1,7 @@
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from clipforge_api.main import create_app
 from clipforge_contracts import DirectorAudit
-from clipforge_jobs import JobResult, JobStatus, JobStore
+from clipforge_jobs import JobResult, JobStatus, JobStore, JobTransitionError
 from clipforge_providers import get_providers
 from clipforge_worker.masks import MaskLoader
 from clipforge_worker.worker_process import PersistentWorker
@@ -49,6 +50,12 @@ def _drain(worker, timeout=10.0):
         if not worker.run_once():
             return
     raise AssertionError("worker did not drain the queue in time")
+
+
+def _approve(client, job_id):
+    resp = client.post(f"/api/jobs/{job_id}/approve")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 def test_health_reports_mock_mode(env):
@@ -136,13 +143,34 @@ def test_complete_mock_job_lifecycle(env, tiny_video):
 
     _drain(worker)
     body = client.get(f"/api/jobs/{job_id}").json()
-    assert body["status"] == "completed" and body["attempts"] == 1
+    assert body["status"] == "awaiting_approval"
+    assert body["attempts"] == 1
+    assert body["error"] is None
+    assert client.get(f"/api/jobs/{job_id}/result").status_code == 409
+    review = client.get(f"/api/jobs/{job_id}/plan")
+    assert review.status_code == 200
+    plan = review.json()["plan"]
+    assert [op["capability_id"] for op in plan["operations"]] == [
+        "subject.isolate",
+        "background.blur",
+        "audio.preserve",
+        "video.render_mp4",
+        "output.verify",
+    ]
+    assert review.json()["requires_approval"] is True
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+
+    _approve(client, job_id)
+    _drain(worker)
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "completed"
     assert body["error"] is None
 
     result = client.get(f"/api/jobs/{job_id}/result")
     assert result.status_code == 200
     data = result.json()
-    assert data["plan"]["intent"] == "keep_sharp_blur_rest"
+    assert data["plan"]["intent"] == "blur_background"
+    assert data["director_plan"]["operations"][0]["capability_id"] == "subject.isolate"
     assert data["render_status"] == "verified"  # real renderer since Milestone 4
     assert data["rendered"]["mode"] == "blur_background" and data["rendered"]["has_audio"] is True
     assert (store.job_dir(job_id) / "output.mp4").stat().st_size > 0
@@ -159,14 +187,24 @@ def test_complete_mock_job_lifecycle(env, tiny_video):
 
 
 def test_replace_background_lifecycle_includes_background_asset(env, tiny_video):
-    client, _, worker = env
+    client, store, worker = env
     job_id = _upload(client, tiny_video).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_replace_background_studio"})
+    _drain(worker)
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "awaiting_approval"
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    assert review["requires_approval"] is True
+    assert review["plan"]["approval_status"] == "required"
+
+    _approve(client, job_id)
     _drain(worker)
     data = client.get(f"/api/jobs/{job_id}/result").json()
     assert data["plan"]["intent"] == "replace_background"
     assert data["background"]["is_mock"] is True
     assert Path(data["background"]["image_path"]).is_file()
+    assert data["render_status"] == "verified"
 
 
 def test_clarification_lifecycle_completes_without_segmentation(env, tiny_video):
@@ -175,10 +213,28 @@ def test_clarification_lifecycle_completes_without_segmentation(env, tiny_video)
     client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_ambiguous_person"})
     _drain(worker)
     body = client.get(f"/api/jobs/{job_id}").json()
-    assert body["status"] == "completed" and body["stage"] == "clarification_needed"
-    data = client.get(f"/api/jobs/{job_id}/result").json()
-    assert data["requires_clarification"] is True and data["segmentation"] is None
+    assert body["status"] == "awaiting_clarification"
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    assert review["requires_clarification"] is True
+    assert review["clarification_question"]
+    assert client.get(f"/api/jobs/{job_id}/result").status_code == 409
     assert not (store.job_dir(job_id) / "masks").exists()
+
+    answer = client.post(
+        f"/api/jobs/{job_id}/clarify",
+        json={"answer": "Mantém o homem da esquerda nítido."},
+    )
+    assert answer.status_code == 200, answer.text
+    _drain(worker)
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "awaiting_approval"
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+    _approve(client, job_id)
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"
+    data = client.get(f"/api/jobs/{job_id}/result").json()
+    assert data["render_status"] == "verified"
+    assert data["segmentation"] is not None
 
 
 def test_failed_job_is_isolated_and_original_preserved(env, tiny_video):
@@ -195,7 +251,126 @@ def test_failed_job_is_isolated_and_original_preserved(env, tiny_video):
     assert store.source_path(store.get(bad_id)).is_file()  # original preserved on failure
 
     good = client.get(f"/api/jobs/{good_id}").json()
-    assert good["status"] == "completed"
+    assert good["status"] == "awaiting_approval"
+    _approve(client, good_id)
+    _drain(worker)
+    assert client.get(f"/api/jobs/{good_id}").json()["status"] == "completed"
+
+
+def test_approve_is_idempotent_and_renders_once(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
+
+    first = client.post(f"/api/jobs/{job_id}/approve")
+    second = client.post(f"/api/jobs/{job_id}/approve")
+    assert first.status_code == 200 and first.json()["stage"] == "approved"
+    assert second.status_code == 409 and second.json()["error"]["code"] == "approval_not_allowed"
+
+    _drain(worker)
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "completed"
+    assert (store.job_dir(job_id) / "output.mp4").is_file()
+    approvals = [
+        entry for entry in store.get(job_id).state_history if entry.to_stage == "approved"
+    ]
+    assert len(approvals) == 1
+
+
+def test_reject_prevents_render_and_preserves_original(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_blur_people_behind"})
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
+
+    rejected = client.post(f"/api/jobs/{job_id}/reject", json={"note": "not the look I want"})
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+    assert store.source_path(store.get(job_id)).is_file()
+    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 409
+
+
+def test_unsupported_plan_never_renders(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_unsupported_command"})
+    _drain(worker)
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "unsupported"
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    assert review["plan"]["outcome"] == "unsupported"
+    assert review["plan"]["unsupported_capabilities"]
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 409
+
+
+def test_concurrent_approval_transition_is_atomic(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+    barrier = threading.Barrier(2)
+
+    def transition(_):
+        barrier.wait()
+        try:
+            store.transition(
+                job_id,
+                expected=JobStatus.AWAITING_APPROVAL,
+                status=JobStatus.QUEUED,
+                stage="approved",
+                actor="user",
+                approval_granted=True,
+            )
+            return "ok"
+        except JobTransitionError as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(transition, range(2)))
+
+    assert results.count("ok") == 1
+    assert set(results) - {"ok"} <= {"job_transition_locked", "job_state_conflict"}
+    assert store.get(job_id).status is JobStatus.QUEUED
+    assert len([e for e in store.get(job_id).state_history if e.to_stage == "approved"]) == 1
+
+
+def test_worker_restart_can_resume_approved_plan(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
+    _approve(client, job_id)
+
+    restarted = PersistentWorker(store, get_providers("mock"), poll_seconds=0.05)
+    assert restarted.run_once() is True
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"
+
+
+def test_clarification_limit_is_enforced(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_ambiguous_person"})
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_clarification"
+    store.update(job_id, clarification_count=3)
+    resp = client.post(f"/api/jobs/{job_id}/clarify", json={"answer": "the man on the left"})
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "clarification_limit_reached"
+
+
+def test_plan_and_decisions_require_reviewable_state(env, tiny_video):
+    client, store, _ = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    assert client.get(f"/api/jobs/{job_id}/plan").status_code == 409
+    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 409
+    assert client.post(f"/api/jobs/{job_id}/reject").status_code == 409
+    assert client.post(f"/api/jobs/{job_id}/clarify", json={"answer": "x"}).status_code == 409
 
 
 def test_job_not_found_shape(env):
@@ -229,6 +404,14 @@ def test_persistent_worker_thread_processes_job(env, tiny_video):
     try:
         deadline = time.time() + 10
         status = None
+        while time.time() < deadline:
+            status = client.get(f"/api/jobs/{job_id}").json()["status"]
+            if status in {JobStatus.AWAITING_APPROVAL.value, JobStatus.FAILED.value}:
+                break
+            time.sleep(0.05)
+        assert status == "awaiting_approval"
+        _approve(client, job_id)
+        deadline = time.time() + 10
         while time.time() < deadline:
             status = client.get(f"/api/jobs/{job_id}").json()["status"]
             if status in {JobStatus.COMPLETED.value, JobStatus.FAILED.value}:

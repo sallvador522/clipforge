@@ -178,15 +178,20 @@ def test_download_only_after_verified_render(tmp_path):
     client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
     while worker.run_once():
         pass
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
+    assert client.get(f"/api/jobs/{job_id}/download").status_code == 409
+    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 200
+    while worker.run_once():
+        pass
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"
     resp = client.get(f"/api/jobs/{job_id}/download")
     assert resp.status_code == 200 and resp.headers["content-type"].startswith("video/mp4")
     assert len(resp.content) > 1000 and resp.content.find(b"ftyp") > -1  # real MP4 bytes
 
-    # Clarification jobs complete without rendering: download still refused.
+    # Clarification jobs wait without rendering: download still refused.
     job2 = _upload(client, source).json()["job_id"]
     client.post(f"/api/jobs/{job2}/voice", json={"audio_fixture_id": "pt_ambiguous_person"})
     while worker.run_once():
         pass
-    assert client.get(f"/api/jobs/{job2}").json()["status"] == "completed"
+    assert client.get(f"/api/jobs/{job2}").json()["status"] == "awaiting_clarification"
     assert client.get(f"/api/jobs/{job2}/download").status_code == 409

@@ -176,6 +176,7 @@ def build_user_prompt(
     transcript: TranscriptResult,
     video: DirectorVideoMetadata | None,
     request_id: str,
+    clarification_answer: str | None = None,
 ) -> str:
     lines = [
         f"Confirmed transcript: {transcript.text}",
@@ -183,6 +184,12 @@ def build_user_prompt(
         f"Required request_id (copy verbatim): {request_id}",
         "Required raw_instruction (copy the confirmed transcript verbatim): " + transcript.text,
     ]
+    if clarification_answer:
+        lines.append(f"User clarification answer: {clarification_answer}")
+        lines.append(
+            "Use the clarification answer to resolve the ambiguity. Do not ask the same "
+            "question again; produce the safest supported plan or an unsupported plan."
+        )
     if video is not None:
         lines.append(
             "Source video metadata: "
@@ -304,6 +311,7 @@ class MetaEditingDirectorProvider:
         video: DirectorVideoMetadata | None = None,
         *,
         request_id: str | None = None,
+        clarification_answer: str | None = None,
     ) -> tuple[dict[str, Any], str]:
         expected_request_id = request_id or ("req_" + hashlib.sha256(transcript.text.encode()).hexdigest()[:12])
         payload: dict[str, Any] = {
@@ -319,7 +327,10 @@ class MetaEditingDirectorProvider:
                 {
                     "role": "user",
                     "content": build_user_prompt(
-                        transcript=transcript, video=video, request_id=expected_request_id
+                        transcript=transcript,
+                        video=video,
+                        request_id=expected_request_id,
+                        clarification_answer=clarification_answer,
                     ),
                 },
             ],
@@ -344,6 +355,7 @@ class MetaEditingDirectorProvider:
         *,
         request_id: str | None = None,
         authorization: LiveCallAuthorization | None = None,
+        clarification_answer: str | None = None,
     ) -> ProfessionalEditingPlan:
         """Generate exactly one v2 plan via a single Chat Completions call. No retries."""
         if not isinstance(authorization, LiveCallAuthorization):
@@ -355,7 +367,12 @@ class MetaEditingDirectorProvider:
         self.last_request_id = None
         self.last_server_request_id = None
         self.last_audit = None
-        payload, expected_request_id = self.request_payload(transcript, video, request_id=request_id)
+        payload, expected_request_id = self.request_payload(
+            transcript,
+            video,
+            request_id=request_id,
+            clarification_answer=clarification_answer,
+        )
         self.last_request_id = expected_request_id
         self.last_audit = self._new_audit(expected_request_id)
         logger.info(

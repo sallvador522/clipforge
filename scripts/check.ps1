@@ -20,6 +20,11 @@ if (-not (Test-Path (Join-Path $web "node_modules"))) {
 }
 
 Push-Location $root
+# PowerShell 5.1 promotes native stderr (e.g. FFmpeg's expected probe noise)
+# to a terminating error when ErrorActionPreference is Stop. Keep it non-
+# terminating for native commands and validate their real exit codes instead.
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 try {
     Write-Host "==> Backend tests (pytest)" -ForegroundColor Cyan
     & $python -m pytest -q
@@ -48,5 +53,6 @@ try {
     Write-Host "All checks passed." -ForegroundColor Green
 }
 finally {
+    $ErrorActionPreference = $previousErrorAction
     Pop-Location
 }

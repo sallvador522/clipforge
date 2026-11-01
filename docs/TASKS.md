@@ -104,7 +104,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] `/health` exposes `live_call_limits` and `live_calls_used`; ledger tests cover env overrides, explicit overrides and invalid values.
 - [ ] After user testing: review real usage/cost and either restore the 2/2 defaults or open a new approved phase.
 - [ ] SAM 3.1 segmentation — blocked on explicit approval; required for real subject tracking.
-- [ ] Approval/rejection endpoint + UI to resume `awaiting_approval` jobs — future milestone.
+- [x] Approval/rejection endpoint + UI to resume `awaiting_approval` jobs — delivered in Milestone 6C (ADR-018).
 
 ## Milestone 6B-LIVE-HARDENING — Director Reliability & Cost Audit
 - [x] Canonicalise model-generated operation ids (`op1_isolate` → `op_1`) in original order; preserve capability ids, params and execution semantics.
@@ -160,10 +160,34 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (226 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (234 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
-## Milestone 6 — Live Integration Gate (blocked)
-- [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
-- [ ] Implement live adapters behind existing interfaces; request logging, idempotency, budget tracking; no automatic billable retries.
-- [ ] Propose one controlled integration test and obtain explicit user approval before any live call.
+## Milestone 6C — Plan Review, Approval & Resume (complete, mock mode)
+
+- [x] Audit product state and save `docs/PRODUCT_AUDIT.md` with verified/mock/unimplemented distinctions.
+- [x] Wire `MockProfessionalEditingDirector` (v2) into the worker for `CLIPFORGE_DIRECTOR_MODE=mock`; keep live validation unchanged; no fallback to the legacy v1 planner.
+- [x] Extend the state machine with `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`; approval resumes via `queued`/stage `approved`.
+- [x] Persist every ready v2 plan (plus v1 adapter) before review; block segmentation and rendering before approval.
+- [x] Add `GET /plan`, `POST /approve`, `POST /reject`, `POST /clarify` with state validation, stable error codes and no provider credentials.
+- [x] Atomic cross-process transitions (`transition.lock`) and auditable `state_history`; claims released after every worker run.
+- [x] Idempotency: duplicate/concurrent approvals cannot double-render; approved jobs resume from the persisted plan without a second director call.
+- [x] Clarification: inline answer, original context preserved, 3-round limit, revised plan returned to review.
+- [x] Rejection/unsupported: terminal, no render, original preserved.
+- [x] Frontend plan review dialog with dynamic operations, subject strategy, parameters, mock/local/live/unavailable status, approval requirements and inline clarification.
+- [x] Truthful step tracker and notices for awaiting approval/clarification, rejected, unsupported, failed and verified completion; no invented percentages.
+- [x] Mock replacement labelled as local/mock asset; no Muse Image claim.
+- [x] Backend tests for approval, rejection, clarification, unsupported, duplicate/concurrent approval, worker restart, clarification limit and render failure.
+- [x] Browser E2E (`apps/web/scripts/qa-approval.mjs`): blur desktop/mobile, replacement, reject, clarification and unsupported; 4 real MP4 downloads; zero console errors.
+- [x] Frontend typecheck and production build.
+- [x] Docs: ADR-018, PRODUCT_AUDIT, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README.
+- [ ] Real SAM 3.1 subject tracking — blocked on explicit approval and a verified contract.
+- [ ] Muse Image background generation — planned, not implemented.
+- [ ] Authentication/ownership for multi-user deployment — not implemented.
+- [ ] Automatic stale-claim recovery after a hard crash mid-render — not implemented.
+
+## Milestone 6 — Live Integration Gate (partial; SAM/Muse remain blocked)
+- [x] Verify official Meta documentation for Muse Voice Transcribe and Muse Spark; implement live adapters with budget tracking and no automatic billable retries (ADR-008, ADR-014, ADR-017).
+- [ ] Verify official SAM 3.1 documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
+- [ ] Verify official Muse Image documentation; keep local/mock assets until then.
+- [ ] Propose one controlled SAM integration test and obtain explicit user approval before any live call.

@@ -1,10 +1,10 @@
 # ClipForge — API Contracts
 
-All contracts below are **internal ClipForge contracts**. Meta's actual SAM/transcription/reasoning/image schemas are **UNVERIFIED**: no Meta endpoint fields or response structures are defined, assumed, or hardcoded anywhere in this codebase. Live adapters must map the verified Meta schema into these internal contracts at integration time (mapping TBD, documented here when verified).
+All contracts below are **internal ClipForge contracts**. Two Meta schemas are verified and implemented: Muse Voice Transcribe (ADR-008) and Muse Spark Chat Completions (ADR-011 to ADR-014). Meta SAM 3.1 and Muse Image remain **UNVERIFIED and unimplemented**: no endpoint, field or response structure for them is assumed or hardcoded. Their adapters must map a verified official schema into these internal contracts when integration is explicitly approved.
 
 ## Provider Mode
 
-`CLIPFORGE_AI_MODE=mock` (default). Mock mode makes zero external requests and needs no credentials. `live` currently raises an explicit error: live adapters are integration placeholders.
+`CLIPFORGE_AI_MODE=mock` (default). Mock mode makes zero external requests and needs no credentials. Two providers can be enabled live independently: `CLIPFORGE_TRANSCRIBE_MODE=live` and `CLIPFORGE_DIRECTOR_MODE=live`; both require a server-side `MODEL_API_KEY`. Segmentation, background generation and the legacy planner remain mocked. `CLIPFORGE_AI_MODE=live` itself is not supported. There is no silent fallback.
 
 ## EditingPlan (packages/contracts, Pydantic, schema_version "1.0")
 
@@ -65,19 +65,23 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 |---|---|---|
 | `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, live_transcription_available, live_call_limits, live_calls_used, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
-| `POST /api/jobs/{job_id}/voice` | live | Body `{audio_fixture_id}`; attaches the voice instruction and makes the job claimable; 409 if not queued/awaiting |
-| `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `completed`, `failed`, plus `stage` progress detail |
+| `POST /api/jobs/{job_id}/voice` | live | Body with exactly one of `{audio_fixture_id}` or `{transcript, transcription_session_id?}`; attaches the instruction and makes the job claimable; 409 if not queued/awaiting |
+| `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`, `completed`, `failed`, plus `stage` progress detail |
 | `GET /api/jobs` | live | List all jobs |
+| `GET /api/jobs/{job_id}/plan` | live (6C) | Persisted v2 plan and review metadata. Requires a persisted plan, otherwise 409 `plan_not_ready`. Returns `status`, `stage`, `ready`, `plan`, `legacy_plan` (v1 adapter), `capabilities` (id, name, status, `simulated`, `requires_approval`, provider), `requires_approval`, `requires_clarification`, `clarification_question`, `clarification_count`, `render_status` and `error`. Works while awaiting review and after terminal states; it is the read path for non-completed jobs (the `/result` endpoint remains completed-only). |
+| `POST /api/jobs/{job_id}/approve` | live (6C) | Optional body `{note?, ≤300}`. Atomic `awaiting_approval → queued` / stage `approved`, sets `approval_granted=true` and `render_status="approved"`. 409 `approval_not_allowed` for any other state, 409 `plan_not_ready` without a persisted plan, 409 `job_state_conflict` / `job_transition_locked` on a concurrent decision. Duplicate approvals are rejected; exactly one can win. |
+| `POST /api/jobs/{job_id}/reject` | live (6C) | Optional body `{note?, ≤300}`. Atomic `awaiting_approval` or `awaiting_clarification → rejected`; terminal, preserves the original, never renders. 409 `rejection_not_allowed` for other states. |
+| `POST /api/jobs/{job_id}/clarify` | live (6C) | Body `{answer: 1..300}`. Atomic `awaiting_clarification → queued` / stage `replanning`, persists the answer and increments `clarification_count`. 409 `clarification_not_allowed` for other states, 409 `clarification_limit_reached` after 3 rounds, 422 `empty_clarification`. |
 | `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `rendered`, `render_status`, `director_plan`, `director_usage`, `director_request_id`, `director_audit`, `requires_approval`); 409 until `completed` |
 | `GET /api/jobs/{job_id}/download` | live (Milestone 4) | Serves the rendered MP4 (`video/mp4`) **only** when the job is `completed`, `render_status` is `"verified"`, and the file exists on disk; otherwise 409 `download_not_ready`. No fake downloads. |
 
 Error shape: `{ "error": { "code": string, "message": string } }` (404 `job_not_found`, 409 conflicts, 422 upload validation, 413 oversize, 400 empty file).
 
-Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Clarification/unsupported jobs complete without rendering and keep `render_status="not_implemented"`. Since ADR-014, approval-required/rejected live director plans complete as `awaiting_approval` with `render_status="awaiting_approval"` and no output file.
+Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Since 6C, every ready plan waits at `awaiting_approval` with `render_status="awaiting_approval"` and no output file; blurred and replacement plans follow the same gate. Clarification waits at `awaiting_clarification`; unsupported and rejected jobs are terminal with no render. Internal state transitions are recorded in `JobRecord.state_history` (actor, before/after status and stage, timestamp, note) and are not exposed in the public job response.
 
 ## Professional Editing Director Contracts (ADR-009, ADR-014, ADR-016)
 
-Director contracts are internal Pydantic models. Since ADR-014, the live worker executes ready plans through the v1 adapter and exposes `director_plan`, `director_usage`, `director_request_id` and `director_audit` in `GET /api/jobs/{job_id}/result` (read-only; there is no director-specific endpoint).
+Director contracts are internal Pydantic models. Since 6C, `GET /api/jobs/{job_id}/plan` exposes the persisted v2 plan and review metadata for any job that has one. A completed job's `GET /result` also contains `director_plan`, `director_usage`, `director_request_id` and `director_audit`. Both are read-only; the only director actions are the approve/reject/clarify endpoints above.
 
 ### Operation-id normalisation and audit (ADR-016)
 
@@ -102,7 +106,7 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 ### v1 adapter
 
-`ProfessionalEditingPlan.to_execution_plan()` produces the existing v1 `EditingPlan` used by the worker: keep-subject-sharp + blur/replace, preserve audio; clarification and unsupported map to v1 intents. Since ADR-014 the live worker validates v2, adapts it to v1 and executes that plan; v2 is never passed to the renderer directly.
+`ProfessionalEditingPlan.to_execution_plan()` produces the existing v1 `EditingPlan` used by the worker: keep-subject-sharp + blur/replace, preserve audio; clarification and unsupported map to v1 intents. Since 6C, both mock and live paths validate v2, persist it for review, adapt it to v1 and execute it only after approval; v2 is never passed to the renderer directly.
 
 ### Director stages
 
@@ -124,8 +128,8 @@ Validators reject: unknown capability, disabled/planned capability, parameter/ca
 
 ### Approval / cancel / revision
 
-The live worker implements the **approval gate**: `approval_status` `required`/`rejected` completes the job as `awaiting_approval` with no render. Approval, rejection, cancellation and revision *resume* are still contract fields only — **no endpoints or UI exist** to continue an awaiting job. Mock-mode execution keeps the legacy auto-execute behaviour.
+Every ready plan is stopped at `awaiting_approval` with no render, regardless of provider mode or whether the capability itself requires approval. `approval_status` remains a capability-level field inside the plan; product review is separate and mandatory. Approval resumes the persisted plan exactly once; rejection is terminal; clarification rebuilds the plan up to 3 rounds before returning to review. See ADR-018. The UI reflects backend state and never decides execution locally.
 
-## Live Provider Mapping (TBD)
+## SAM 3.1 / Muse Image Mapping (TBD)
 
-To be completed only after official documentation verification of: request/response schemas, supported media inputs, mask encoding, sync vs async execution, polling, rate limits, pricing. Until then the mapping section stays empty by design.
+No mapping exists for segmentation or image generation. It will be written only after official documentation verification of: request/response schemas, supported media inputs, mask encoding, sync vs async execution, polling, rate limits and pricing. Until then this section stays empty by design, and no adapter may be built against an assumed schema.

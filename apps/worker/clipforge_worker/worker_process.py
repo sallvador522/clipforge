@@ -34,7 +34,12 @@ class PersistentWorker:
             claimed = self.store.claim(record.job_id)
             if claimed is None:
                 continue  # claimed by another worker/process; isolation preserved
-            self.processor.process(claimed.job_id)
+            try:
+                self.processor.process(claimed.job_id)
+            finally:
+                # Review/approval jobs stop without rendering; the claim lock must
+                # be released so an approved plan can be claimed later.
+                self.store.release_claim(claimed.job_id)
             return True
         return False
 

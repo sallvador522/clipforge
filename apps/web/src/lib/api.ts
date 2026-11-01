@@ -1,4 +1,4 @@
-import type { JobResponse, JobResultData, TranscriptData } from "./types";
+import type { JobResponse, JobResultData, PlanReviewData, TranscriptData } from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -118,6 +118,31 @@ export function getJob(jobId: string): Promise<JobResponse> {
 
 export function getResult(jobId: string): Promise<JobResultData> {
   return requestJson<JobResultData>(`/api/jobs/${jobId}/result`);
+}
+
+export function getPlan(jobId: string): Promise<PlanReviewData> {
+  return requestJson<PlanReviewData>(`/api/jobs/${jobId}/plan`);
+}
+
+export function approvePlan(jobId: string, note?: string): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ note: note?.trim() || null }),
+  });
+}
+
+export function rejectPlan(jobId: string, note?: string): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ note: note?.trim() || null }),
+  });
+}
+
+export function answerClarification(jobId: string, answer: string): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/clarify`, {
+    method: "POST",
+    body: JSON.stringify({ answer: answer.trim() }),
+  });
 }
 
 export function downloadUrl(jobId: string): string {

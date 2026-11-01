@@ -1,19 +1,25 @@
 """Job state machine models.
 
-Status is exactly one of queued / processing / completed / failed.
-`stage` is a finer-grained progress detail (awaiting_voice, transcribing,
-planning, segmenting, preparing_background, done, ...) and never replaces status.
+Status is exactly one of queued / processing / awaiting_approval /
+awaiting_clarification / rejected / unsupported / completed / failed.
+`stage` is a finer-grained progress detail (awaiting_voice, planning,
+awaiting_approval, approved, segmenting, rendering, ...) and never replaces
+status. Every status/stage change is appended to `state_history`.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from clipforge_contracts import BackgroundResult, DirectorAudit, EditingPlan, ProfessionalEditingPlan, RenderResult, SegmentationResult, TranscriptResult
 from clipforge_contracts.edl import EditHistoryEntry
+
+
+MAX_CLARIFICATIONS = 3
 
 
 def utc_now() -> datetime:
@@ -23,6 +29,10 @@ def utc_now() -> datetime:
 class JobStatus(str, Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
+    AWAITING_APPROVAL = "awaiting_approval"
+    AWAITING_CLARIFICATION = "awaiting_clarification"
+    REJECTED = "rejected"
+    UNSUPPORTED = "unsupported"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -41,6 +51,19 @@ class JobError(BaseModel):
     model_config = ConfigDict(extra="forbid")
     code: str
     message: str
+
+
+class JobStateEntry(BaseModel):
+    """Auditable state transition. Persisted in job.json; no media or secrets."""
+
+    model_config = ConfigDict(extra="forbid")
+    at: datetime = Field(default_factory=utc_now)
+    from_status: str
+    to_status: str
+    from_stage: str
+    to_stage: str
+    actor: Literal["user", "worker", "system"]
+    note: str | None = Field(default=None, max_length=300)
 
 
 class JobResult(BaseModel):
@@ -75,6 +98,10 @@ class JobRecord(BaseModel):
     transcript_is_mock: bool = False
     transcription_session_id: str | None = None
     edit_history: list[EditHistoryEntry] = Field(default_factory=list)
+    state_history: list[JobStateEntry] = Field(default_factory=list)
+    approval_granted: bool = False
+    clarification_answer: str | None = Field(default=None, max_length=300)
+    clarification_count: int = Field(default=0, ge=0)
     result: JobResult | None = None
     error: JobError | None = None
     attempts: int = 0

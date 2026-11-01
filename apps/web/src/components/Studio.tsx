@@ -1,15 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiClientError, checkHealth, downloadUrl, getJob, getResult, submitTranscript, transcribeRecording, uploadVideo } from "@/lib/api";
-import type { JobResponse, JobResultData, TranscriptData } from "@/lib/types";
+import {
+  answerClarification,
+  ApiClientError,
+  approvePlan,
+  checkHealth,
+  downloadUrl,
+  getJob,
+  getPlan,
+  getResult,
+  rejectPlan,
+  submitTranscript,
+  transcribeRecording,
+  uploadVideo,
+} from "@/lib/api";
+import type { JobResponse, JobResultData, PlanReviewData, TranscriptData } from "@/lib/types";
 import { TopBar } from "./TopBar";
 import { MediaPanel, type SourceMeta } from "./MediaPanel";
 import { Viewer } from "./Viewer";
 import { AssistantPanel, type TranscribeStatus } from "./AssistantPanel";
+import { PlanReviewDialog } from "./PlanReviewDialog";
 import { Timeline } from "./Timeline";
 
-const TERMINAL = new Set(["completed", "failed"]);
+const TERMINAL = new Set(["completed", "failed", "rejected", "unsupported"]);
+const REVIEW_WAIT = new Set(["awaiting_approval", "awaiting_clarification"]);
 
 export function Studio() {
   const [apiMode, setApiMode] = useState<string | null>(null);
@@ -27,6 +42,10 @@ export function Studio() {
   const [submitting, setSubmitting] = useState(false);
   const [voiceSubmitted, setVoiceSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [planReview, setPlanReview] = useState<PlanReviewData | null>(null);
+  const [planDialogOpen, setPlanDialogOpen] = useState(false);
+  const [decisionSubmitting, setDecisionSubmitting] = useState<"approve" | "reject" | "clarify" | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   const [recording, setRecording] = useState<{ blob: Blob; filename: string } | null>(null);
   const [transcribeStatus, setTranscribeStatus] = useState<TranscribeStatus>("idle");
@@ -72,9 +91,24 @@ export function Studio() {
         try {
           const latest = await getJob(jobId);
           setJob(latest);
-          if (TERMINAL.has(latest.status)) {
+          if (latest.status === "completed") {
             stopPolling();
-            if (latest.status === "completed") setResult(await getResult(jobId));
+            setResult(await getResult(jobId));
+            setPlanReview(null);
+            setPlanDialogOpen(false);
+          } else if (TERMINAL.has(latest.status)) {
+            stopPolling();
+            setResult(null);
+            try {
+              setPlanReview(await getPlan(jobId));
+            } catch {
+              setPlanReview(null);
+            }
+          } else if (REVIEW_WAIT.has(latest.status)) {
+            stopPolling();
+            const review = await getPlan(jobId);
+            setPlanReview(review);
+            setPlanDialogOpen(true);
           }
         } catch (e) {
           stopPolling();
@@ -145,6 +179,56 @@ export function Studio() {
     }
   }
 
+  async function handleApprovePlan() {
+    if (!job || !planReview) return;
+    setDecisionSubmitting("approve");
+    setDecisionError(null);
+    try {
+      const updated = await approvePlan(job.job_id);
+      setJob(updated);
+      setPlanReview(null);
+      setPlanDialogOpen(false);
+      pollJob(job.job_id);
+    } catch (e) {
+      setDecisionError(e instanceof ApiClientError ? e.message : "Could not approve the plan.");
+    } finally {
+      setDecisionSubmitting(null);
+    }
+  }
+
+  async function handleRejectPlan() {
+    if (!job || !planReview) return;
+    setDecisionSubmitting("reject");
+    setDecisionError(null);
+    try {
+      const updated = await rejectPlan(job.job_id);
+      setJob(updated);
+      setPlanReview(null);
+      setPlanDialogOpen(false);
+    } catch (e) {
+      setDecisionError(e instanceof ApiClientError ? e.message : "Could not reject the plan.");
+    } finally {
+      setDecisionSubmitting(null);
+    }
+  }
+
+  async function handleClarifyPlan(answer: string) {
+    if (!job || !planReview || !answer.trim()) return;
+    setDecisionSubmitting("clarify");
+    setDecisionError(null);
+    try {
+      const updated = await answerClarification(job.job_id, answer);
+      setJob(updated);
+      setPlanReview(null);
+      setPlanDialogOpen(false);
+      pollJob(job.job_id);
+    } catch (e) {
+      setDecisionError(e instanceof ApiClientError ? e.message : "Could not submit the clarification.");
+    } finally {
+      setDecisionSubmitting(null);
+    }
+  }
+
   async function handleTranscribe() {
     if (!recording || !liveAvailable) return;
     if (transcribeStatus === "uploading" || transcribeStatus === "transcribing") return;
@@ -178,6 +262,10 @@ export function Studio() {
 
   function reset() {
     stopPolling();
+    setPlanReview(null);
+    setPlanDialogOpen(false);
+    setDecisionSubmitting(null);
+    setDecisionError(null);
     setFile(null);
     if (originalUrl) URL.revokeObjectURL(originalUrl);
     setOriginalUrl(null);
@@ -334,6 +422,8 @@ export function Studio() {
           <AssistantPanel
             job={job}
             result={result}
+            planReview={planReview}
+            onOpenPlanReview={() => setPlanDialogOpen(true)}
             liveAvailable={liveAvailable}
             recorded={Boolean(recording)}
             recordingName={recording?.filename ?? null}
@@ -367,6 +457,19 @@ export function Studio() {
           />
         </div>
       </div>
+
+      {planReview && planDialogOpen && (
+        <PlanReviewDialog
+          key={planReview.plan?.request_id ?? planReview.job_id}
+          review={planReview}
+          submitting={decisionSubmitting}
+          error={decisionError}
+          onApprove={handleApprovePlan}
+          onReject={handleRejectPlan}
+          onClarify={handleClarifyPlan}
+          onClose={() => setPlanDialogOpen(false)}
+        />
+      )}
     </main>
   );
 }

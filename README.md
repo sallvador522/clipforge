@@ -21,8 +21,9 @@ ClipForge turns a spoken instruction into a validated editing plan and a real re
 1. Upload a short clip.
 2. Record the edit by voice.
 3. Review the transcript.
-4. ClipForge plans the edit and renders a verified MP4.
-5. Download the result.
+4. Review the Director's editing plan — subject, operations, parameters and what will change.
+5. Approve, reject, or answer a clarification.
+6. ClipForge renders a verified MP4 and you download the result.
 
 The MVP targets 10-second clips at up to 720p / 30 FPS.
 
@@ -34,6 +35,9 @@ The MVP targets 10-second clips at up to 720p / 30 FPS.
   Transcribe** when live mode is enabled.
 - Editing direction through **Meta Muse Spark** (lite plan schema, Contributor model),
   validated against a capability registry before execution.
+- **Plan review with explicit approval**: every plan shows what ClipForge understood,
+  its dynamic operations, parameters and mock/local/live status. Nothing renders until you
+  approve. You can reject or answer up to three inline clarification rounds.
 - Real background blur and background replacement with **FFmpeg + OpenCV**.
 - Original audio preserved; output verified for stream presence, resolution, frame count,
   duration and audio before download is allowed.
@@ -64,13 +68,13 @@ Verified MP4 download
 
 | Layer | Location | Responsibility |
 |---|---|---|
-| Web | `apps/web` | Next.js 15, React 19, Tailwind 4, Motion; editor workspace and voice capture |
-| API | `apps/api` | Upload validation, transcription endpoint, jobs, results, downloads |
-| Worker | `apps/worker` | Job processing, masks, FFmpeg/OpenCV renderer, output verification |
+| Web | `apps/web` | Next.js 15, React 19, Tailwind 4, Motion; editor workspace, voice capture and plan review |
+| API | `apps/api` | Upload validation, transcription, jobs, plan review/approve/reject/clarify, results, downloads |
+| Worker | `apps/worker` | Job processing, review gating, masks, FFmpeg/OpenCV renderer, output verification |
 | Contracts | `packages/contracts` | EditingPlan, v2 director plan, capability registry, EDL |
 | Providers | `packages/providers` | Mock adapters + live Muse Voice Transcribe |
 | Director | `packages/director` | Mock director, Muse Spark provider, canonical plan validation, per-call audit and live-call ledger |
-| Jobs | `packages/jobs` | Shared job state machine and atomic file store |
+| Jobs | `packages/jobs` | Shared job state machine, auditable transitions and atomic file store |
 
 More detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -95,6 +99,7 @@ execution contract.
 |---|---|
 | Transcription | **Real** Meta Muse Voice Transcribe when live; deterministic fixtures otherwise |
 | Editing direction | **Real** Muse Spark when live; deterministic mock scenarios otherwise |
+| Plan review / approval | **Real** backend-enforced gate; no render before approval |
 | Subject segmentation | **Mock** synthetic ellipse — **not SAM** and does not track a real person |
 | Background replacement | **Local/mock assets** — **not Muse Image** |
 | Rendering | **Real** FFmpeg decode/encode + OpenCV compositing |
@@ -214,8 +219,10 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **226 tests passing**. The frontend typecheck and production build
-also pass. No GitHub Actions or paid CI is required; checks run locally.
+Current backend suite: **234 tests passing**. The frontend typecheck and production build
+also pass. Browser E2E for approval, rejection, clarification, replacement and unsupported
+flows is available in `apps/web/scripts/qa-approval.mjs` (run with the mock stack on
+`:3000`/`:8001`). No GitHub Actions or paid CI is required; checks run locally.
 
 ---
 
@@ -240,6 +247,7 @@ tests/          Backend test suite
 
 ## Documentation
 
+- [Product audit](docs/PRODUCT_AUDIT.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [API contracts](docs/API_CONTRACTS.md)
 - [Decisions (ADRs)](docs/DECISIONS.md)
@@ -259,8 +267,9 @@ tests/          Backend test suite
 - Subject segmentation is a mock synthetic ellipse; real person tracking requires SAM 3.1,
   which is not integrated yet.
 - Background replacement uses local/mock assets, not Muse Image.
-- Approval-required plans stop at `awaiting_approval`, but there is no approval/resume UI
-  or endpoint yet.
+- There is no authentication/ownership model; the API is a local single-user service.
+- A hard worker crash after claiming a job can leave it in `processing` with a claim lock;
+  there is no automatic stale-lock recovery.
 - The MVP is scoped to short clips (up to 10 s, 720p, 30 FPS).
 - The system FFmpeg build is old; a newer build is recommended for production.
 

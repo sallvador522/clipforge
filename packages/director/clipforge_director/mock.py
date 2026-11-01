@@ -1,9 +1,9 @@
-﻿"""ClipForge Professional Editing Director (Milestone 6B-PREP).
+﻿"""ClipForge Professional Editing Director (Milestone 6C).
 
 Deterministic mock director that produces ProfessionalEditingPlan v2 from a
-confirmed transcript. It performs no network calls and is not wired into the
-worker: the current v1 pipeline stays untouched until the Muse Spark integration
-is explicitly approved.
+confirmed transcript. It performs no network calls and is the director used by
+the worker when CLIPFORGE_DIRECTOR_MODE=mock. The worker persists the validated
+plan for review; rendering starts only after explicit user approval.
 """
 
 from __future__ import annotations
@@ -36,7 +36,14 @@ from clipforge_contracts.director_stages import DirectorStage
 
 
 class ProfessionalEditingDirector(Protocol):
-    def create_plan(self, transcript: TranscriptResult) -> ProfessionalEditingPlan: ...
+    def create_plan(
+        self,
+        transcript: TranscriptResult,
+        video=None,
+        *,
+        authorization=None,
+        clarification_answer: str | None = None,
+    ) -> ProfessionalEditingPlan: ...
 
 
 _VERIFICATION = [
@@ -64,6 +71,8 @@ _UNSUPPORTED_KEYWORDS: dict[str, str] = {
     "audio mix": "audio.mix",
     "mixagem": "audio.mix",
     "animated caption": "captions.animate",
+    "captions": "captions.animate",
+    "legendas": "captions.animate",
     "legendas animadas": "captions.animate",
     "scene cut": "scene.detect_cuts",
     "cortes de cena": "scene.detect_cuts",
@@ -99,61 +108,90 @@ def _verification_requirements() -> list[VerificationRequirement]:
 class MockProfessionalEditingDirector:
     """Deterministic, offline professional editing director."""
 
-    def create_plan(self, transcript: TranscriptResult) -> ProfessionalEditingPlan:
+    def create_plan(
+        self,
+        transcript: TranscriptResult,
+        video=None,
+        *,
+        authorization=None,
+        clarification_answer: str | None = None,
+    ) -> ProfessionalEditingPlan:
         """Build a deterministic v2 plan. Pure local computation, no network."""
-        return self._create_plan_impl(transcript)
+        return self._create_plan_impl(transcript, clarification_answer=clarification_answer)
 
-    def create_edl(self, transcript: TranscriptResult) -> EditDecisionList:
-        """Project the mock v2 plan into an EDL. Still offline, still unwired."""
+    def create_edl(
+        self, transcript: TranscriptResult, *, clarification_answer: str | None = None
+    ) -> EditDecisionList:
+        """Project the mock v2 plan into an EDL. Offline and read-only."""
         from clipforge_contracts.edl import edl_from_professional_plan
 
-        return edl_from_professional_plan(self._create_plan_impl(transcript))
+        return edl_from_professional_plan(
+            self._create_plan_impl(transcript, clarification_answer=clarification_answer)
+        )
 
-    def _create_plan_impl(self, transcript: TranscriptResult) -> ProfessionalEditingPlan:
+    def _create_plan_impl(
+        self, transcript: TranscriptResult, *, clarification_answer: str | None = None
+    ) -> ProfessionalEditingPlan:
+        answer = (clarification_answer or "").strip()
         text = _normalize(transcript.text)
+        combined = _normalize(f"{text} {answer}") if answer else text
         request_id = _request_id(transcript.text)
-        unsupported = self._unsupported_capabilities(text)
+        unsupported = self._unsupported_capabilities(combined)
         if unsupported:
             return self._unsupported_plan(transcript, request_id, unsupported)
 
-        if _matches(text, "desfoca ele", "desfoca-a", "desfoca ela", "blur him", "blur them", "that person"):
+        # A clarification answer resolves the ambiguity; do not ask the same question again.
+        if not answer and _matches(
+            text, "desfoca ele", "desfoca-a", "desfoca ela", "blur him", "blur them", "that person"
+        ):
             return self._clarify_subject(transcript, request_id)
 
-        if text in _VAGUE_PHRASES or _matches(text, *(_VAGUE_PHRASES)):
+        if not answer and (text in _VAGUE_PHRASES or _matches(text, *(_VAGUE_PHRASES))):
             return self._clarify_intent(transcript, request_id)
 
-        if _matches(text, "sunset", "pÃ´r do sol", "por do sol", "luanda", "cinematic background"):
+        subject_description = answer[:200] if answer else None
+        if _matches(combined, "sunset", "pÃ´r do sol", "por do sol", "luanda", "cinematic background"):
             return self._replace_plan(
                 transcript,
                 request_id,
                 prompt="cinematic sunset in Luanda, warm golden hour, soft rim light",
                 asset_source="mock_generated",
                 interpretation="Place the subject in a warm cinematic sunset scene while keeping them sharp.",
+                subject_description=subject_description,
             )
 
-        if _matches(text, "replace the background", "substitui o fundo", "substituir o fundo", "studio", "estÃºdio", "estudio"):
+        if _matches(combined, "replace the background", "substitui o fundo", "substituir o fundo", "studio", "estÃºdio", "estudio"):
             return self._replace_plan(
                 transcript,
                 request_id,
                 prompt="professional recording studio with controlled key light",
                 asset_source="local_asset",
                 interpretation="Replace the background with a professional studio while keeping the subject sharp.",
+                subject_description=subject_description,
             )
 
-        if _matches(text, "blur", "desfoca", "desfocar", "sharp", "nÃ­tido", "nitido"):
-            return self._blur_plan(transcript, request_id)
+        if _matches(combined, "blur", "desfoca", "desfocar", "sharp", "nÃ­tido", "nitido"):
+            return self._blur_plan(
+                transcript, request_id, subject_description=subject_description
+            )
 
         return self._clarify_intent(transcript, request_id)
 
     # --- scenario builders ------------------------------------------------
 
-    def _base_subject(self) -> SubjectSelection:
+    def _base_subject(self, description: str | None = None) -> SubjectSelection:
         return SubjectSelection(
             strategy=SubjectStrategy.LARGEST_SUBJECT,
-            description="primary person in the foreground",
+            description=description or "primary person in the foreground",
         )
 
-    def _blur_plan(self, transcript: TranscriptResult, request_id: str) -> ProfessionalEditingPlan:
+    def _blur_plan(
+        self,
+        transcript: TranscriptResult,
+        request_id: str,
+        *,
+        subject_description: str | None = None,
+    ) -> ProfessionalEditingPlan:
         ops = [
             DirectorOperation(
                 operation_id="op_01_isolate",
@@ -203,7 +241,7 @@ class MockProfessionalEditingDirector:
             request_id=request_id,
             raw_instruction=transcript.text,
             interpreted_intention="Keep the main subject sharp and blur the background.",
-            subject=self._base_subject(),
+            subject=self._base_subject(subject_description),
             operations=ops,
             required_providers=["segmentation"],
             estimated_stages=[
@@ -238,6 +276,7 @@ class MockProfessionalEditingDirector:
         prompt: str,
         asset_source: str,
         interpretation: str,
+        subject_description: str | None = None,
     ) -> ProfessionalEditingPlan:
         simulated_note = (
             "The background is a simulated asset from the local mock provider; "
@@ -300,7 +339,7 @@ class MockProfessionalEditingDirector:
             request_id=request_id,
             raw_instruction=transcript.text,
             interpreted_intention=interpretation,
-            subject=self._base_subject(),
+            subject=self._base_subject(subject_description),
             target=OutputTarget(aspect_ratio=OutputAspect.SOURCE),
             operations=ops,
             required_providers=["background_generation", "segmentation"],

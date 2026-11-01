@@ -302,11 +302,15 @@ def test_confirmed_transcript_is_planned_without_retranscribing(spoken_webm, tmp
     worker = PersistentWorker(JobStore(tmp_path / "storage"), get_providers("mock"))
     assert worker.run_once() is True
     body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "awaiting_approval"
+    assert client.post(f"/api/jobs/{job_id}/approve").status_code == 200
+    assert worker.run_once() is True
+    body = client.get(f"/api/jobs/{job_id}").json()
     assert body["status"] == "completed"
     result = client.get(f"/api/jobs/{job_id}/result").json()
     assert result["transcript"]["text"] == transcribed["text"]
     assert result["transcript"]["provider_name"] == "user-confirmed"
-    assert result["plan"]["intent"] == "keep_sharp_blur_rest"
+    assert result["plan"]["intent"] == "blur_background"
 
 
 def test_voice_requires_exactly_one_source(tmp_path):

@@ -135,7 +135,14 @@ class _FixedDirector:
             finish_reason="stop",
         )
 
-    def create_plan(self, transcript: TranscriptResult, video=None, *, authorization=None):
+    def create_plan(
+        self,
+        transcript: TranscriptResult,
+        video=None,
+        *,
+        authorization=None,
+        clarification_answer=None,
+    ):
         if authorization is not None:
             authorization.reserve()
         return self._plan
@@ -169,7 +176,14 @@ class _FailingDirector:
             finish_reason="stop",
         )
 
-    def create_plan(self, transcript: TranscriptResult, video=None, *, authorization=None):
+    def create_plan(
+        self,
+        transcript: TranscriptResult,
+        video=None,
+        *,
+        authorization=None,
+        clarification_answer=None,
+    ):
         if authorization is not None:
             authorization.reserve()
         raise DirectorValidationError(
@@ -209,10 +223,30 @@ def _job(tmp_path: Path, transcript_text: str) -> tuple[JobStore, str]:
     return store, record.job_id
 
 
+def _approve(store: JobStore, job_id: str) -> None:
+    store.transition(
+        job_id,
+        expected=JobStatus.AWAITING_APPROVAL,
+        status=JobStatus.QUEUED,
+        stage="approved",
+        actor="user",
+        approval_granted=True,
+    )
+
+
 def test_live_director_blur_executes_and_records_plan(tmp_path):
     text = "Keep me sharp and blur everything behind me."
     store, job_id = _job(tmp_path, text)
     processor = JobProcessor(store, _bundle(text))
+
+    assert processor.process(job_id) == JobStatus.AWAITING_APPROVAL.value
+    pending = store.get(job_id)
+    assert pending.result is not None and pending.result.director_plan is not None
+    assert pending.result.render_status == "awaiting_approval"
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+    assert LiveCallBudget(store.root).used("director") == 1
+
+    _approve(store, job_id)
     assert processor.process(job_id) == JobStatus.COMPLETED.value
     record = store.get(job_id)
     assert record.stage == "completed"
@@ -269,6 +303,9 @@ def test_live_director_render_failure_preserves_audit(tmp_path, monkeypatch):
     store, job_id = _job(tmp_path, text)
     processor = JobProcessor(store, _bundle(text))
 
+    assert processor.process(job_id) == JobStatus.AWAITING_APPROVAL.value
+    _approve(store, job_id)
+
     def fail_render(*args, **kwargs):
         raise RuntimeError("render failed")
 
@@ -289,13 +326,53 @@ def test_live_director_render_failure_preserves_audit(tmp_path, monkeypatch):
     assert not (store.job_dir(job_id) / "output.mp4").exists()
 
 
+def test_render_success_but_status_persistence_failure_never_claims_verified(
+    tmp_path, monkeypatch
+):
+    text = "Keep me sharp and blur everything behind me."
+    store, job_id = _job(tmp_path, text)
+    processor = JobProcessor(store, _bundle(text))
+
+    assert processor.process(job_id) == JobStatus.AWAITING_APPROVAL.value
+    _approve(store, job_id)
+
+    original_update = store.update
+
+    def fail_completion(target_job_id, **changes):
+        if changes.get("status") is JobStatus.COMPLETED:
+            raise RuntimeError("status persistence failed after render")
+        return original_update(target_job_id, **changes)
+
+    monkeypatch.setattr(store, "update", fail_completion)
+    assert processor.process(job_id) == JobStatus.FAILED.value
+
+    record = store.get(job_id)
+    assert record.status is JobStatus.FAILED
+    assert record.result is not None
+    assert record.result.render_status == "failed"  # never "verified" without persisted success
+    assert record.result.rendered is None
+    assert (store.job_dir(job_id) / "output.mp4").is_file()  # render happened before persistence failed
+    assert store.source_path(record).is_file()  # original untouched
+    assert store.claim(job_id) is None  # a failed job cannot be claimed again
+
+
 def test_live_director_replacement_waits_for_approval_without_render(tmp_path):
     text = "Replace the background with a professional recording studio."
     store, job_id = _job(tmp_path, text)
     processor = JobProcessor(store, _bundle(text))
-    assert processor.process(job_id) == JobStatus.COMPLETED.value
+
+    assert processor.process(job_id) == JobStatus.AWAITING_APPROVAL.value
     record = store.get(job_id)
+    assert record.status is JobStatus.AWAITING_APPROVAL
     assert record.stage == "awaiting_approval"
     assert record.result is not None and record.result.requires_approval is True
     assert record.result.render_status == "awaiting_approval"
     assert not (store.job_dir(job_id) / "output.mp4").exists()
+    assert not (store.job_dir(job_id) / "masks").exists()
+
+    _approve(store, job_id)
+    assert processor.process(job_id) == JobStatus.COMPLETED.value
+    record = store.get(job_id)
+    assert record.stage == "completed"
+    assert record.result is not None and record.result.render_status == "verified"
+    assert (store.job_dir(job_id) / "output.mp4").is_file()

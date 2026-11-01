@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import type { JobResponse, JobResultData, TranscriptData } from "@/lib/types";
+import type { JobResponse, JobResultData, PlanReviewData, TranscriptData } from "@/lib/types";
 import { Button } from "./ui/button";
 
 type RecorderState = "idle" | "recording" | "recorded" | "unsupported" | "denied";
@@ -12,19 +12,24 @@ type TranscriptSource = "live" | "mock-audio" | "mock-fixture" | "typed" | null;
 const STEPS = [
   { key: "transcribing", label: "Transcribe voice" },
   { key: "planning", label: "Build editing plan" },
+  { key: "review", label: "Review plan" },
   { key: "segmenting", label: "Segment subject (mock masks)" },
   { key: "rendering", label: "Render — FFmpeg + OpenCV" },
   { key: "verifying", label: "Verify output file" },
   { key: "completed", label: "Done — verified MP4" },
 ];
 const STAGE_INDEX: Record<string, number> = {
-  transcribing: 0, planning: 1, segmenting: 2, preparing_background: 2, rendering: 3, verifying: 4,
-  completed: 5, pipeline_completed: 5,
+  transcribing: 0, planning: 1, replanning: 1,
+  awaiting_approval: 2, awaiting_clarification: 2, approved: 3,
+  segmenting: 3, preparing_background: 3, rendering: 4, verifying: 5,
+  completed: 6, pipeline_completed: 6,
 };
 
 interface Props {
   job: JobResponse | null;
   result: JobResultData | null;
+  planReview: PlanReviewData | null;
+  onOpenPlanReview: () => void;
   liveAvailable: boolean;
   recorded: boolean;
   recordingName: string | null;
@@ -47,7 +52,7 @@ interface Props {
 }
 
 export function AssistantPanel({
-  job, result, liveAvailable, recorded, recordingName,
+  job, result, planReview, onOpenPlanReview, liveAvailable, recorded, recordingName,
   onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress, transcriptionError,
   transcript, transcriptSource, draft, onDraftChange, onTranscribe,
   onTypedInstruction, canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
@@ -127,8 +132,18 @@ export function AssistantPanel({
   }
 
   const busy = transcribeStatus === "uploading" || transcribeStatus === "transcribing";
-  const stageIndex = job ? STAGE_INDEX[job.stage] ?? (job.status === "queued" ? -1 : 0) : -1;
+  const verified = Boolean(job?.status === "completed" && result?.render_status === "verified");
+  // No step is invented for failed or no-render terminal jobs; the explicit
+  // notice/error below carries the real state instead.
+  const hideSteps =
+    job?.status === "failed" || job?.status === "rejected" || job?.status === "unsupported";
+  const stageIndex = job
+    ? job.status === "completed" && !verified
+      ? 2
+      : STAGE_INDEX[job.stage] ?? (job.status === "queued" ? -1 : 0)
+    : -1;
   const plan = result?.plan ?? job?.result?.plan ?? null;
+  const directorPlan = planReview?.plan ?? result?.director_plan ?? job?.result?.director_plan ?? null;
 
   return (
     <section aria-label="AI editing assistant" className="flex min-h-0 flex-col bg-surface lg:h-full">
@@ -325,39 +340,63 @@ export function AssistantPanel({
               </div>
               <p className="mt-1.5 text-sm">
                 Status:{" "}
-                <span className={job.status === "failed" ? "text-danger" : job.status === "completed" ? "text-success" : "text-accent"}>
+                <span className={job.status === "failed" || job.status === "rejected" || job.status === "unsupported" ? "text-danger" : verified ? "text-success" : "text-accent"}>
                   {job.status}
                 </span>{" "}
                 <span className="font-mono text-[11px] text-muted">({job.stage})</span>
               </p>
-              <ol className="mt-2.5 space-y-1.5">
-                {STEPS.map((step, i) => {
-                  const done = job.status === "completed" || i < stageIndex;
-                  const active = job.status !== "completed" && job.status !== "failed" && i === stageIndex;
-                  return (
-                    <li key={step.key} className={`flex items-center gap-2 text-[13px] ${done ? "text-success" : active ? "text-foreground" : "text-muted/60"}`}>
-                      <span className={`flex h-4 w-4 items-center justify-center rounded-full border font-mono text-[9px] ${done ? "border-success" : active ? "border-accent" : "border-border"}`}>
-                        {done ? "✓" : active ? "●" : ""}
-                      </span>
-                      {step.label}
-                    </li>
-                  );
-                })}
-              </ol>
+
+              {job.status === "awaiting_approval" && (
+                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
+                  <p className="text-[13px] font-medium">Plan ready for your review.</p>
+                  <p className="mt-1 text-[12px] text-muted">No video changes have been made. Approve the plan to render.</p>
+                  <Button className="mt-2" onClick={onOpenPlanReview}>Open plan review</Button>
+                </div>
+              )}
+              {job.status === "awaiting_clarification" && (
+                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
+                  <p className="text-[13px] font-medium">ClipForge needs one clarification.</p>
+                  <p className="mt-1 text-[12px] text-muted">Answer the question to rebuild the plan; no rendering has started.</p>
+                  <Button className="mt-2" onClick={onOpenPlanReview}>Answer clarification</Button>
+                </div>
+              )}
+              {job.status === "rejected" && (
+                <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
+                  <p className="text-[13px] font-medium text-danger">Plan rejected</p>
+                  <p className="mt-1 text-[12px]">No rendering was started. Your original video is untouched.</p>
+                  <Button variant="secondary" className="mt-2" onClick={onRetry}>Start a new session</Button>
+                </div>
+              )}
+              {job.status === "unsupported" && (
+                <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
+                  <p className="text-[13px] font-medium text-danger">Request not supported</p>
+                  <p className="mt-1 text-[12px]">{planReview?.plan?.summary_explanation ?? "This build cannot perform the requested edit."}</p>
+                  {planReview && <Button className="mt-2" onClick={onOpenPlanReview}>View details</Button>}
+                </div>
+              )}
+
+              {!hideSteps && (
+                <ol className="mt-2.5 space-y-1.5">
+                  {STEPS.map((step, i) => {
+                    const done = verified || i < stageIndex;
+                    const active = !verified && job.status !== "failed" && i === stageIndex;
+                    return (
+                      <li key={step.key} className={`flex items-center gap-2 text-[13px] ${done ? "text-success" : active ? "text-foreground" : "text-muted/60"}`}>
+                        <span className={`flex h-4 w-4 items-center justify-center rounded-full border font-mono text-[9px] ${done ? "border-success" : active ? "border-accent" : "border-border"}`}>
+                          {done ? "✓" : active ? "●" : ""}
+                        </span>
+                        {step.label}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
 
               {job.status === "failed" && job.error && (
                 <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
                   <p className="font-mono text-[11px] text-danger">{job.error.code}</p>
                   <p className="mt-1 text-[13px]">{job.error.message}</p>
                   <Button variant="danger" className="mt-2.5" onClick={onRetry}>Start a new session</Button>
-                </div>
-              )}
-
-              {result?.requires_clarification && plan?.subject.clarification_question && (
-                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
-                  <p className="text-[13px] font-medium">One clarification before editing:</p>
-                  <p className="mt-1 text-[15px]">“{plan.subject.clarification_question}”</p>
-                  <p className="mt-1 font-mono text-[11px] text-muted">Start a new session and name who stays sharp.</p>
                 </div>
               )}
 
@@ -368,6 +407,11 @@ export function AssistantPanel({
                   {plan && (
                     <p className="mt-1 font-mono text-[11px] text-muted">
                       plan: {plan.intent} · {plan.operations.map((o) => o.type).join(", ") || "no operations"}
+                    </p>
+                  )}
+                  {directorPlan && (
+                    <p className="mt-1 font-mono text-[11px] text-muted">
+                      director: {directorPlan.operations.map((o) => o.title).join(" · ") || "no operations"}
                     </p>
                   )}
                   {result?.rendered && (
