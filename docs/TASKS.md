@@ -119,8 +119,11 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Regression fixture recreates the rejected `op1_…` pattern from a valid mock plan (raw model response unavailable); historical job records untouched.
 - [x] 211 backend tests; targeted director/lite/worker 49; `scripts/check.ps1` exit 0.
 - [x] Docs: ADR-016, STATUS, TASKS, ARCHITECTURE, API_CONTRACTS, hardening report.
-- [ ] One plan-only live retest — **blocked on explicit approval**; estimated ~$0.00066 Contributor / ~$0.0116 Standard.
-- [ ] Reconcile actual billed cost from the Meta panel (audit stores estimated cost only).
+- [x] Live retest after hardening — executed as a full approved E2E rather than plan-only (LIVE-E2E 006). Muse generated a valid 5-operation plan; the worker rendered 360×640/177 frames/6.177 s with audio. Audit persisted and verified (`accepted`, HTTP 200, server request id).
+- [x] Live audit fields verified on the real run: usage 2,792 in / 2,293 out, estimated **$0.000738**, request `req_03bff7ae260f`, server id `6096b398-7ce7-46ba-b4bf-c7a693cabbe7`.
+- [x] Output saved outside the repository in the user's `Videos\Video` folder; source untouched; no frames or user video committed.
+- [ ] Reconcile actual billed cost from the Meta panel (audit stores estimated cost only; run estimate $0.001010 including ASR).
+- [ ] Improve real subject tracking (SAM 3.1 or a manual mask). The mock ellipse kept only one side subject sharp at a time; documented in `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
 
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 

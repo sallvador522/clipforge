@@ -160,7 +160,24 @@ would only return a plan; it would not execute tools or render.
 - `docs/API_CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md` (ADR-016),
   `docs/STATUS.md`, `docs/TASKS.md`, `README.md`
 
-## 8. Zero external calls
+## 8. Zero external calls during implementation
 
-All tests use `httpx.MockTransport` or in-process fakes. No request reached Meta in this
-milestone. No SAM, Muse Image, FFmpeg or renderer call was made by the director.
+All tests use `httpx.MockTransport` or in-process fakes. No request reached Meta during the
+implementation/test phase. No SAM, Muse Image, FFmpeg or renderer call was made by the director.
+
+## 9. Follow-up — approved live retest (same day)
+
+The user approved one real execution. It was run as a full E2E rather than plan-only:
+
+- User portrait clip 360×640, 30 FPS, 6.177 s, audio; source untouched.
+- Live ASR: 5.440 s, **$0.000272**.
+- Muse Spark: 5-operation plan, 2,792 in / 2,293 out, **$0.000738**, request
+  `req_03bff7ae260f`, server id `6096b398-7ce7-46ba-b4bf-c7a693cabbe7`.
+- Audit persisted and verified: `accepted`, HTTP 200, `finish_reason=stop`,
+  `actual_cost_usd=null`.
+- Render: 360×640, 30 FPS, 177 frames, 6.177007 s, 166,088 bytes, audio preserved.
+- Output saved in the user's `Videos\Video` folder. Run total: **$0.001010**.
+- Limitation confirmed: the mock segmentation ellipse kept one side subject sharp at a
+  time, not both. Real subject tracking still requires SAM 3.1 or a manual mask.
+
+Full log: `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
