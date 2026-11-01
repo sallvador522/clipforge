@@ -106,6 +106,22 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [ ] SAM 3.1 segmentation — blocked on explicit approval; required for real subject tracking.
 - [ ] Approval/rejection endpoint + UI to resume `awaiting_approval` jobs — future milestone.
 
+## Milestone 6B-LIVE-HARDENING — Director Reliability & Cost Audit
+- [x] Canonicalise model-generated operation ids (`op1_isolate` → `op_1`) in original order; preserve capability ids, params and execution semantics.
+- [x] Maintain the complete original → canonical map; rewrite dependency references.
+- [x] Reject duplicate original ids, unknown dependencies, cycles and forward dependencies before full v2 validation.
+- [x] Keep the strict full-plan `DirectorOperation` pattern; do not weaken Pydantic validation.
+- [x] Recompute EDL provenance from canonical ids and verify every decision hash.
+- [x] Add `DirectorAudit` (job/request/server ids, provider, model, execution/service mode, wire schema, tokens, estimated cost, actual cost only when available, validation status, error category/code, HTTP status, finish reason, timestamp).
+- [x] Instrument the provider before/after the request; record usage before plan validation.
+- [x] Persist `director_audit` in `JobResult` on success and failure; keep usage/request id on rejected plans.
+- [x] Serialise job result responses with `model_dump(mode="json")` (audit datetime).
+- [x] Regression fixture recreates the rejected `op1_…` pattern from a valid mock plan (raw model response unavailable); historical job records untouched.
+- [x] 211 backend tests; targeted director/lite/worker 49; `scripts/check.ps1` exit 0.
+- [x] Docs: ADR-016, STATUS, TASKS, ARCHITECTURE, API_CONTRACTS, hardening report.
+- [ ] One plan-only live retest — **blocked on explicit approval**; estimated ~$0.00066 Contributor / ~$0.0116 Standard.
+- [ ] Reconcile actual billed cost from the Meta panel (audit stores estimated cost only).
+
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 
 - Instruction: same as 001/002 + benchmark-unit video metadata. No audio bytes, no tools, no web search.
@@ -121,7 +137,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (194 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (211 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6 — Live Integration Gate (blocked)

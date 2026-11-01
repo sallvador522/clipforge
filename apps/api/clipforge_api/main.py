@@ -71,7 +71,7 @@ def _to_response(record: JobRecord) -> JobResponse:
         original_filename=record.original_filename,
         audio_fixture_id=record.audio_fixture_id,
         source_info=record.source_info.model_dump(),
-        result=record.result.model_dump() if record.result else None,
+        result=record.result.model_dump(mode="json") if record.result else None,
         error=record.error.model_dump() if record.error else None,
         attempts=record.attempts,
         created_at=record.created_at.isoformat(),
@@ -212,7 +212,7 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         if record.status.value != "completed" or record.result is None:
             return _error(409, "result_not_ready",
                           f"Job {job_id} is {record.status.value}; result available only when completed.")
-        return JSONResponse(content=record.result.model_dump())
+        return JSONResponse(content=record.result.model_dump(mode="json"))
 
     @app.get("/api/jobs")
     async def list_jobs() -> list[JobResponse]:

@@ -4,7 +4,8 @@ The full v2 schema (~8.4 KB, 16 $defs) is the prime suspect for the Contributor
 500s, so the wire carries a hand-written minimal schema: zero $refs, flat
 operation objects, no timing fields at all (timing stays forbidden while
 `timeline.trim` is disabled). Strictness is NOT relaxed: the response is parsed
-into `LitePlan`, converted to a full `ProfessionalEditingPlan`, and the full
+into `LitePlan`, model-generated operation ids are canonicalised (`op_1`...),
+converted to a full `ProfessionalEditingPlan`, and the full
 registry/dependency/approval validators run unchanged.
 """
 
@@ -139,7 +140,9 @@ def lite_capability_summary() -> str:
 class LiteOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    operation_id: str = Field(pattern=r"^op_[a-z0-9_]{1,40}$")
+    # The wire may carry a model-generated id (e.g. `op1_isolate`). The provider
+    # canonicalises every id to `op_1`...`op_n` before full v2 validation.
+    operation_id: str = Field(min_length=1, max_length=80)
     capability_id: Literal[
         "subject.isolate",
         "background.blur",
@@ -210,15 +213,96 @@ def _typed_params(capability_id: str, raw: dict[str, Any]) -> BaseModel:
     raise ValueError(f"No params mapping for capability {capability_id!r}.")
 
 
-def _param_type_for(capability_id: str) -> str:
-    for param_type, mapped in CAPABILITY_BY_PARAM_TYPE.items():
-        if mapped == capability_id:
-            return param_type
-    raise ValueError(f"No params type for capability {capability_id!r}.")
+def normalize_lite_operation_ids(
+    operations: list[LiteOperation],
+) -> tuple[list[LiteOperation], dict[str, str]]:
+    """Assign deterministic canonical ids and rewrite dependencies.
+
+    The model owns the operation semantics but not the internal id format. We
+    keep the incoming order, map every original id to `op_1`...`op_n`, rewrite
+    dependency references through the same map, and reject ambiguous graphs
+    before the full v2 validators run.
+
+    Returns the normalized operations and the complete original -> canonical map.
+    """
+    mapping: dict[str, str] = {}
+    originals: list[str] = []
+
+    for index, operation in enumerate(operations, start=1):
+        original = operation.operation_id.strip()
+        if not original:
+            raise ValueError("Operation id must not be empty.")
+        if original in mapping:
+            raise ValueError(f"Duplicate operation id {original!r}.")
+        mapping[original] = f"op_{index}"
+        originals.append(original)
+
+    dependencies: dict[str, list[str]] = {}
+    for operation in operations:
+        original = operation.operation_id.strip()
+        rewritten: list[str] = []
+        for raw_dependency in operation.dependencies:
+            dependency = raw_dependency.strip()
+            if dependency not in mapping:
+                raise ValueError(
+                    f"Operation {original!r} depends on unknown operation {dependency!r}."
+                )
+            rewritten.append(dependency)
+        dependencies[original] = rewritten
+
+    # Explicit cycle detection gives a precise error before the forward-order check.
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str, path: list[str]) -> None:
+        if node in visited:
+            return
+        if node in visiting:
+            cycle = " -> ".join(path + [node])
+            raise ValueError(f"Dependency cycle detected: {cycle}.")
+        visiting.add(node)
+        for dependency in dependencies[node]:
+            visit(dependency, path + [node])
+        visiting.remove(node)
+        visited.add(node)
+
+    for original in originals:
+        visit(original, [])
+
+    index_by_id = {original: index for index, original in enumerate(originals)}
+    normalized: list[LiteOperation] = []
+    for index, operation in enumerate(operations):
+        original = operation.operation_id.strip()
+        canonical_dependencies: list[str] = []
+        for dependency in dependencies[original]:
+            if index_by_id[dependency] >= index:
+                raise ValueError(
+                    f"Operation {original!r} depends on {dependency!r}, which must appear earlier."
+                )
+            canonical_dependencies.append(mapping[dependency])
+        normalized.append(
+            operation.model_copy(
+                update={
+                    "operation_id": mapping[original],
+                    "dependencies": canonical_dependencies,
+                }
+            )
+        )
+
+    return normalized, mapping
 
 
 def lite_to_full_plan(lite: LitePlan) -> ProfessionalEditingPlan:
     """Convert a lite plan into a full v2 plan. Full validators run on construction."""
+    plan, _ = lite_to_full_plan_with_mapping(lite)
+    return plan
+
+
+def lite_to_full_plan_with_mapping(
+    lite: LitePlan,
+) -> tuple[ProfessionalEditingPlan, dict[str, str]]:
+    """Convert a lite plan and expose the original -> canonical operation id map."""
+    normalized_operations, operation_id_map = normalize_lite_operation_ids(lite.operations)
     subject = SubjectSelection(
         strategy=SubjectStrategy.LARGEST_SUBJECT,
         description=lite.subject_description,
@@ -226,7 +310,7 @@ def lite_to_full_plan(lite: LitePlan) -> ProfessionalEditingPlan:
         clarification_question=lite.clarification_question or None,
     )
     operations: list[DirectorOperation] = []
-    for lite_op in lite.operations:
+    for lite_op in normalized_operations:
         if lite_op.capability_id not in _EXECUTABLE_IDS:
             raise ValueError(f"Capability {lite_op.capability_id!r} is not executable.")
         operations.append(
@@ -256,7 +340,7 @@ def lite_to_full_plan(lite: LitePlan) -> ProfessionalEditingPlan:
     if needs_approval:
         stages.append(DirectorStage.WAITING_FOR_APPROVAL)
     stages.extend([DirectorStage.EXECUTING, DirectorStage.VERIFYING, DirectorStage.COMPLETED])
-    return ProfessionalEditingPlan(
+    plan = ProfessionalEditingPlan(
         request_id=lite.request_id,
         raw_instruction=lite.raw_instruction,
         interpreted_intention=lite.interpreted_intention,
@@ -276,3 +360,4 @@ def lite_to_full_plan(lite: LitePlan) -> ProfessionalEditingPlan:
         unsupported_capabilities=list(lite.unsupported_capabilities),
         approval_status=lite.approval_status,
     )
+    return plan, operation_id_map

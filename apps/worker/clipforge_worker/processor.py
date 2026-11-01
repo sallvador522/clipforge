@@ -29,9 +29,45 @@ class JobProcessor:
         self.store = store
         self.providers = providers
 
+    def _capture_director_metadata(
+        self,
+        job_id: str,
+        transcript: TranscriptResult | None,
+        director_plan,
+        provider,
+    ):
+        """Persist usage/request/audit metadata as soon as a director call returns.
+
+        This runs on success and on validation failure, so a rejected plan still has
+        a request id, token counts and an estimated cost in the job record.
+        """
+        usage = getattr(provider, "last_usage", None)
+        usage_dict = usage.model_dump(mode="json") if usage is not None else None
+        request_id = getattr(provider, "last_request_id", None)
+        audit = getattr(provider, "last_audit", None)
+        if audit is not None:
+            audit = audit.model_copy(update={"job_id": job_id})
+        if audit is not None or director_plan is not None:
+            self.store.update(
+                job_id,
+                result=JobResult(
+                    transcript=transcript,
+                    director_plan=director_plan,
+                    director_usage=usage_dict,
+                    director_request_id=request_id,
+                    director_audit=audit,
+                ),
+            )
+        return usage_dict, request_id, audit
+
     def process(self, job_id: str) -> str:
         """Process one job to completion or failure. Returns the final status value."""
         record = self.store.get(job_id)
+        transcript: TranscriptResult | None = None
+        director_plan = None
+        director_usage = None
+        director_request_id = None
+        director_audit = None
         try:
             if not record.audio_fixture_id and not record.confirmed_transcript:
                 raise ValueError("Job has no voice instruction attached.")
@@ -50,26 +86,33 @@ class JobProcessor:
                 self.store.update(job_id, stage="transcribing")
                 transcript = self.providers.transcription.transcribe(record.audio_fixture_id or "")
 
-            director_plan = None
-            director_usage = None
-            director_request_id = None
             if self.providers.director_mode == "live" and self.providers.director is not None:
                 LiveCallBudget(self.store.root).reserve("director")
                 info = record.source_info
-                director_plan = self.providers.director.create_plan(  # type: ignore[union-attr]
-                    transcript,
-                    DirectorVideoMetadata(
-                        width=info.width,
-                        height=info.height,
-                        fps=info.fps,
-                        duration_seconds=info.duration_seconds,
-                        frame_count=info.frame_count,
-                        has_audio=info.has_audio,
-                    ),
+                try:
+                    director_plan = self.providers.director.create_plan(  # type: ignore[union-attr]
+                        transcript,
+                        DirectorVideoMetadata(
+                            width=info.width,
+                            height=info.height,
+                            fps=info.fps,
+                            duration_seconds=info.duration_seconds,
+                            frame_count=info.frame_count,
+                            has_audio=info.has_audio,
+                        ),
+                    )
+                except Exception:
+                    director_usage, director_request_id, director_audit = (
+                        self._capture_director_metadata(
+                            job_id, transcript, None, self.providers.director
+                        )
+                    )
+                    raise
+                director_usage, director_request_id, director_audit = (
+                    self._capture_director_metadata(
+                        job_id, transcript, director_plan, self.providers.director
+                    )
                 )
-                usage = getattr(self.providers.director, "last_usage", None)
-                director_usage = usage.model_dump(mode="json") if usage is not None else None
-                director_request_id = getattr(self.providers.director, "last_request_id", None)
                 if director_plan.outcome is PlanOutcome.NEEDS_CLARIFICATION:
                     result = JobResult(
                         transcript=transcript,
@@ -77,6 +120,7 @@ class JobProcessor:
                         director_plan=director_plan,
                         director_usage=director_usage,
                         director_request_id=director_request_id,
+                        director_audit=director_audit,
                         requires_clarification=True,
                     )
                     self.store.update(
@@ -90,6 +134,7 @@ class JobProcessor:
                         director_plan=director_plan,
                         director_usage=director_usage,
                         director_request_id=director_request_id,
+                        director_audit=director_audit,
                     )
                     self.store.update(
                         job_id, status=JobStatus.COMPLETED, stage="unsupported_intent", result=result
@@ -105,6 +150,7 @@ class JobProcessor:
                         director_plan=director_plan,
                         director_usage=director_usage,
                         director_request_id=director_request_id,
+                        director_audit=director_audit,
                         requires_approval=True,
                         render_status="awaiting_approval",
                     )
@@ -181,9 +227,16 @@ class JobProcessor:
             )
 
             result = JobResult(
-                transcript=transcript, plan=plan, segmentation=segmentation, background=background,
-                rendered=rendered, render_status="verified", director_plan=director_plan,
-                director_usage=director_usage, director_request_id=director_request_id,
+                transcript=transcript,
+                plan=plan,
+                segmentation=segmentation,
+                background=background,
+                rendered=rendered,
+                render_status="verified",
+                director_plan=director_plan,
+                director_usage=director_usage,
+                director_request_id=director_request_id,
+                director_audit=director_audit,
             )
             self.store.update(job_id, status=JobStatus.COMPLETED, stage="completed", result=result)
             logger.info("job_completed job_id=%s outcome=rendered_and_verified frames=%d", job_id, rendered.frame_count)
@@ -191,10 +244,20 @@ class JobProcessor:
 
         except Exception as exc:  # recorded + logged, never swallowed; original upload preserved
             logger.exception("job_failed job_id=%s error=%s", job_id, exc)
+            error_result = None
+            if transcript is not None or director_plan is not None or director_audit is not None:
+                error_result = JobResult(
+                    transcript=transcript,
+                    director_plan=director_plan,
+                    director_usage=director_usage,
+                    director_request_id=director_request_id,
+                    director_audit=director_audit,
+                )
             self.store.update(
                 job_id,
                 status=JobStatus.FAILED,
                 stage="failed",
                 error=JobError(code=type(exc).__name__, message=str(exc)),
+                result=error_result,
             )
             return JobStatus.FAILED.value

@@ -69,7 +69,7 @@ Verified MP4 download
 | Worker | `apps/worker` | Job processing, masks, FFmpeg/OpenCV renderer, output verification |
 | Contracts | `packages/contracts` | EditingPlan, v2 director plan, capability registry, EDL |
 | Providers | `packages/providers` | Mock adapters + live Muse Voice Transcribe |
-| Director | `packages/director` | Mock director, Muse Spark provider, validation and live-call ledger |
+| Director | `packages/director` | Mock director, Muse Spark provider, canonical plan validation, per-call audit and live-call ledger |
 | Jobs | `packages/jobs` | Shared job state machine and atomic file store |
 
 More detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -208,7 +208,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **194 tests passing**. The frontend typecheck and production build
+Current backend suite: **211 tests passing**. The frontend typecheck and production build
 also pass. No GitHub Actions or paid CI is required; checks run locally.
 
 ---
@@ -240,6 +240,7 @@ tests/          Backend test suite
 - [Status and handoff](docs/STATUS.md)
 - [Tasks](docs/TASKS.md)
 - [Live end-to-end report](docs/LIVE_E2E_AUDIO_BLUR_REPORT.md)
+- [Director hardening report](docs/LIVE_DIRECTOR_HARDENING_REPORT.md)
 - [Product spec](docs/PRODUCT_SPEC.md)
 
 ---

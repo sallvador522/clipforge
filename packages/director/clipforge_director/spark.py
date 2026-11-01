@@ -1,7 +1,8 @@
 """Meta Muse Spark professional editing director provider (Milestone 6B-LIVE).
 
-Prepared but NOT live-tested: every test uses an injected httpx MockTransport.
-No request may reach api.meta.ai without explicit user approval.
+Live-tested in LIVE-E2E 005 and LIVE-CALL 001-005. Every automated test uses an
+injected httpx MockTransport; no request may reach api.meta.ai without explicit
+user approval. Every call exposes a `DirectorAudit` record for cost review.
 
 Official configuration verified against current Meta docs:
 - Models: `muse-spark-1.3` (Standard) and `muse-spark-1.3-contributor`
@@ -44,7 +45,14 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from clipforge_contracts import ProfessionalEditingPlan, TranscriptResult
+from clipforge_contracts import (
+    DirectorAudit,
+    DirectorExecutionMode,
+    DirectorServiceMode,
+    DirectorValidationStatus,
+    ProfessionalEditingPlan,
+    TranscriptResult,
+)
 
 logger = logging.getLogger("clipforge.director.spark")
 
@@ -102,9 +110,16 @@ class DirectorAPIError(SparkDirectorError):
 
 
 class DirectorValidationError(SparkDirectorError):
-    def __init__(self, message: str, server_request_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        server_request_id: str | None = None,
+        *,
+        category: str = "validation",
+    ) -> None:
         super().__init__(message)
         self.server_request_id = server_request_id
+        self.category = category
 
 
 class DirectorVideoMetadata(BaseModel):
@@ -187,6 +202,7 @@ class MetaEditingDirectorProvider:
     """Hosted Muse Spark director. Plan generation only; never executes tools."""
 
     provider_name = "meta-muse-spark-director"
+    wire_schema = "full"
 
     def __init__(
         self,
@@ -243,6 +259,8 @@ class MetaEditingDirectorProvider:
         )
         self.last_usage: DirectorUsage | None = None
         self.last_request_id: str | None = None
+        self.last_server_request_id: str | None = None
+        self.last_audit: DirectorAudit | None = None
 
     @property
     def model(self) -> str:
@@ -251,6 +269,27 @@ class MetaEditingDirectorProvider:
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
+
+    def _new_audit(self, request_id: str) -> DirectorAudit:
+        return DirectorAudit(
+            request_id=request_id,
+            provider=self.provider_name,
+            model=self._model,
+            execution_mode=DirectorExecutionMode.LIVE,
+            service_mode=DirectorServiceMode(self._pricing_mode),
+            wire_schema=self.wire_schema,
+        )
+
+    def _update_audit(self, **changes: Any) -> None:
+        if self.last_audit is not None:
+            self.last_audit = self.last_audit.model_copy(update=changes)
+
+    @staticmethod
+    def _finish_reason(body: Any) -> str | None:
+        try:
+            return body["choices"][0].get("finish_reason")
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return None
 
     def _wire_schema(self) -> dict:
         return ProfessionalEditingPlan.model_json_schema()
@@ -305,8 +344,13 @@ class MetaEditingDirectorProvider:
         request_id: str | None = None,
     ) -> ProfessionalEditingPlan:
         """Generate exactly one v2 plan via a single Chat Completions call. No retries."""
+        self.last_usage = None
+        self.last_request_id = None
+        self.last_server_request_id = None
+        self.last_audit = None
         payload, expected_request_id = self.request_payload(transcript, video, request_id=request_id)
         self.last_request_id = expected_request_id
+        self.last_audit = self._new_audit(expected_request_id)
         logger.info(
             "director_request model=%s max_tokens=%d transcript_chars=%d",
             self._model,
@@ -320,25 +364,50 @@ class MetaEditingDirectorProvider:
                 json=payload,
             )
         except httpx.TimeoutException as exc:
+            self._update_audit(
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="timeout",
+                error_code=type(exc).__name__,
+            )
             raise DirectorTimeoutError(
                 f"Director request timed out after {self._timeout_seconds:.0f}s."
             ) from exc
         except httpx.HTTPError as exc:
+            self._update_audit(
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="transport",
+                error_code=type(exc).__name__,
+            )
             raise SparkDirectorError("Could not reach the director service.") from exc
 
+        server_request_id = response.headers.get("x-request-id")
+        self.last_server_request_id = server_request_id
         if response.status_code == 429:
+            self._update_audit(
+                server_request_id=server_request_id,
+                http_status=response.status_code,
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="rate_limited",
+                error_code="DirectorRateLimitedError",
+            )
             raise DirectorRateLimitedError(
                 "Director is rate limited. No automatic retry was attempted.",
                 retry_after=response.headers.get("Retry-After"),
             )
         if response.status_code >= 400:
             message, error_type = self._safe_error(response)
-            server_request_id = response.headers.get("x-request-id")
             logger.warning(
                 "director_api_error status=%d type=%s server_request_id=%s",
                 response.status_code,
                 error_type,
                 server_request_id or "absent",
+            )
+            self._update_audit(
+                server_request_id=server_request_id,
+                http_status=response.status_code,
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="api_error",
+                error_code="DirectorAPIError",
             )
             raise DirectorAPIError(
                 response.status_code,
@@ -350,15 +419,66 @@ class MetaEditingDirectorProvider:
         try:
             body = response.json()
         except ValueError as exc:
+            self._update_audit(
+                server_request_id=server_request_id,
+                http_status=response.status_code,
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="invalid_json",
+                error_code="DirectorAPIError",
+            )
             raise DirectorAPIError(502, "Director returned invalid JSON.") from exc
 
-        server_request_id = response.headers.get("x-request-id")
+        finish_reason = self._finish_reason(body)
+        if not isinstance(body, dict):
+            self._update_audit(
+                server_request_id=server_request_id,
+                http_status=response.status_code,
+                finish_reason=finish_reason,
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="malformed_response",
+                error_code="DirectorAPIError",
+            )
+            raise DirectorAPIError(502, "Director returned an unexpected JSON shape.")
+
         # Record usage BEFORE validation: a truncated but successful (billed) call
         # must still feed token accounting even though no plan is accepted.
         self.last_usage = self._record_usage(body)
-        content = self._extract_content(body, server_request_id)
-        plan = self._validate_content(content, expected_request_id, transcript, server_request_id)
+        usage_body = body.get("usage")
+        has_usage = isinstance(usage_body, dict) and any(
+            key in usage_body for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        )
+        self._update_audit(
+            server_request_id=server_request_id,
+            http_status=response.status_code,
+            finish_reason=finish_reason,
+            prompt_tokens=self.last_usage.prompt_tokens if has_usage else None,
+            completion_tokens=self.last_usage.completion_tokens if has_usage else None,
+            total_tokens=self.last_usage.total_tokens if has_usage else None,
+            estimated_cost_usd=self.last_usage.cost_usd if has_usage else None,
+        )
+        try:
+            content = self._extract_content(body, server_request_id)
+            plan = self._validate_content(content, expected_request_id, transcript, server_request_id)
+        except DirectorValidationError as exc:
+            self._update_audit(
+                validation_status=DirectorValidationStatus.REJECTED,
+                error_category=exc.category,
+                error_code=type(exc).__name__,
+            )
+            raise
+        except Exception as exc:
+            self._update_audit(
+                validation_status=DirectorValidationStatus.ERROR,
+                error_category="internal_error",
+                error_code=type(exc).__name__,
+            )
+            raise
 
+        self._update_audit(
+            validation_status=DirectorValidationStatus.ACCEPTED,
+            error_category=None,
+            error_code=None,
+        )
         logger.info(
             "director_ok outcome=%s ops=%d prompt=%d completion=%d cost_usd=%.6f",
             plan.outcome.value,
@@ -370,7 +490,9 @@ class MetaEditingDirectorProvider:
         return plan
 
     def _record_usage(self, body: dict[str, Any]) -> DirectorUsage:
-        usage = body.get("usage") or {}
+        usage = body.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
         try:
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             completion_tokens = int(usage.get("completion_tokens", 0))
@@ -391,22 +513,28 @@ class MetaEditingDirectorProvider:
             message = choice["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise DirectorValidationError(
-                "Director response has no choices[0].message.", server_request_id
+                "Director response has no choices[0].message.",
+                server_request_id,
+                category="malformed_response",
             ) from exc
 
         if message.get("tool_calls"):
             raise DirectorValidationError(
                 "Director returned tool calls; this provider never executes tools.",
                 server_request_id,
+                category="tool_calls",
             )
         if choice.get("finish_reason") == "length":
             raise DirectorValidationError(
                 "Director output was truncated (finish_reason=length); no partial plan accepted.",
                 server_request_id,
+                category="truncated",
             )
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise DirectorValidationError("Director returned empty content.", server_request_id)
+            raise DirectorValidationError(
+                "Director returned empty content.", server_request_id, category="empty_content"
+            )
         return content
 
     def _validate_content(
@@ -420,25 +548,29 @@ class MetaEditingDirectorProvider:
             raw_plan = json.loads(content)
         except ValueError as exc:
             raise DirectorValidationError(
-                "Director content is not valid JSON.", server_request_id
+                "Director content is not valid JSON.", server_request_id, category="invalid_json"
             ) from exc
 
         try:
             plan = ProfessionalEditingPlan.model_validate(raw_plan)
         except Exception as exc:
             raise DirectorValidationError(
-                f"Director plan failed validation: {exc}", server_request_id
+                f"Director plan failed validation: {exc}",
+                server_request_id,
+                category="validation",
             ) from exc
 
         if plan.request_id != expected_request_id:
             raise DirectorValidationError(
                 f"Director request_id {plan.request_id!r} does not match {expected_request_id!r}.",
                 server_request_id,
+                category="request_id_mismatch",
             )
         if plan.raw_instruction != transcript.text:
             raise DirectorValidationError(
                 "Director raw_instruction must equal the confirmed transcript.",
                 server_request_id,
+                category="raw_instruction_mismatch",
             )
         return plan
 
@@ -477,6 +609,7 @@ class LiteMetaEditingDirectorProvider(MetaEditingDirectorProvider):
     """
 
     provider_name = "meta-muse-spark-director-lite"
+    wire_schema = "lite"
 
     def _wire_schema(self) -> dict[str, Any]:
         from clipforge_contracts.director_lite import LITE_WIRE_SCHEMA
@@ -499,7 +632,7 @@ class LiteMetaEditingDirectorProvider(MetaEditingDirectorProvider):
             raw_lite = json.loads(content)
         except ValueError as exc:
             raise DirectorValidationError(
-                "Director content is not valid JSON.", server_request_id
+                "Director content is not valid JSON.", server_request_id, category="invalid_json"
             ) from exc
 
         try:
@@ -507,17 +640,21 @@ class LiteMetaEditingDirectorProvider(MetaEditingDirectorProvider):
             plan = lite_to_full_plan(lite)
         except Exception as exc:
             raise DirectorValidationError(
-                f"Lite plan failed validation: {exc}", server_request_id
+                f"Lite plan failed validation: {exc}",
+                server_request_id,
+                category="validation",
             ) from exc
 
         if plan.request_id != expected_request_id:
             raise DirectorValidationError(
                 f"Director request_id {plan.request_id!r} does not match {expected_request_id!r}.",
                 server_request_id,
+                category="request_id_mismatch",
             )
         if plan.raw_instruction != transcript.text:
             raise DirectorValidationError(
                 "Director raw_instruction must equal the confirmed transcript.",
                 server_request_id,
+                category="raw_instruction_mismatch",
             )
         return plan

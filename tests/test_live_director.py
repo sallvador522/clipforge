@@ -7,8 +7,18 @@ from pathlib import Path
 
 import pytest
 
-from clipforge_contracts import TranscriptResult
-from clipforge_director import LiveBudgetExceeded, LiveCallBudget, MockProfessionalEditingDirector
+from clipforge_contracts import (
+    DirectorAudit,
+    DirectorValidationStatus,
+    TranscriptResult,
+)
+from clipforge_director import (
+    DirectorUsage,
+    DirectorValidationError,
+    LiveBudgetExceeded,
+    LiveCallBudget,
+    MockProfessionalEditingDirector,
+)
 from clipforge_jobs import JobRecord, JobStatus, JobStore
 from clipforge_jobs.models import SourceInfo
 from clipforge_providers import (
@@ -103,15 +113,69 @@ def _tiny_video(path: Path) -> None:
 
 class _FixedDirector:
     def __init__(self, transcript_text: str) -> None:
-        self._text = transcript_text
+        self._plan = MockProfessionalEditingDirector().create_plan(
+            TranscriptResult(text=transcript_text, language="pt-BR", provider_name="t", is_mock=True)
+        )
+        self.last_usage = DirectorUsage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150, cost_usd=0.0001
+        )
+        self.last_request_id = self._plan.request_id
+        self.last_audit = DirectorAudit(
+            request_id=self._plan.request_id,
+            provider="test-director",
+            model="test-model",
+            service_mode="standard",
+            wire_schema="full",
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            estimated_cost_usd=0.0001,
+            validation_status="accepted",
+            http_status=200,
+            finish_reason="stop",
+        )
 
     def create_plan(self, transcript: TranscriptResult, video=None):
-        return MockProfessionalEditingDirector().create_plan(
-            TranscriptResult(text=self._text, language="pt-BR", provider_name="t", is_mock=True)
+        return self._plan
+
+
+class _FailingDirector:
+    def __init__(self) -> None:
+        self.last_usage = DirectorUsage(
+            prompt_tokens=2781,
+            completion_tokens=1500,
+            total_tokens=4281,
+            cost_usd=0.0005781,
+        )
+        self.last_request_id = "req_failing1234"
+        self.last_server_request_id = "srv-failing-1"
+        self.last_audit = DirectorAudit(
+            request_id="req_failing1234",
+            server_request_id="srv-failing-1",
+            provider="meta-muse-spark-director-lite",
+            model="muse-spark-1.3-contributor",
+            service_mode="contributor",
+            wire_schema="lite",
+            prompt_tokens=2781,
+            completion_tokens=1500,
+            total_tokens=4281,
+            estimated_cost_usd=0.0005781,
+            validation_status="rejected",
+            error_category="validation",
+            error_code="DirectorValidationError",
+            http_status=200,
+            finish_reason="stop",
+        )
+
+    def create_plan(self, transcript: TranscriptResult, video=None):
+        raise DirectorValidationError(
+            "Lite plan failed validation: invalid operation id",
+            "srv-failing-1",
+            category="validation",
         )
 
 
-def _bundle(transcript_text: str) -> ProviderBundle:
+def _bundle(transcript_text: str, director=None) -> ProviderBundle:
     return ProviderBundle(
         transcription=MockTranscriptionProvider(),
         planner=MockEditingPlannerProvider(),
@@ -119,7 +183,7 @@ def _bundle(transcript_text: str) -> ProviderBundle:
         background=MockBackgroundGenerationProvider(),
         mode="mock",
         transcription_mode="mock",
-        director=_FixedDirector(transcript_text),
+        director=director or _FixedDirector(transcript_text),
         director_mode="live",
     )
 
@@ -153,6 +217,46 @@ def test_live_director_blur_executes_and_records_plan(tmp_path):
     assert record.result.render_status == "verified"
     assert (store.job_dir(job_id) / "output.mp4").is_file()
     assert LiveCallBudget(store.root).used("director") == 1
+    assert record.result.director_audit is not None
+    assert record.result.director_audit.job_id == job_id
+    assert record.result.director_audit.validation_status == "accepted"
+    assert record.result.director_request_id == record.result.director_audit.request_id
+
+
+def test_live_director_validation_failure_persists_audit(tmp_path):
+    text = "Keep me sharp and blur everything behind me."
+    store, job_id = _job(tmp_path, text)
+    processor = JobProcessor(store, _bundle(text, _FailingDirector()))
+
+    assert processor.process(job_id) == JobStatus.FAILED.value
+
+    record = store.get(job_id)
+    assert record.status == JobStatus.FAILED
+    assert record.error is not None
+    assert record.error.code == "DirectorValidationError"
+    assert not (store.job_dir(job_id) / "output.mp4").exists()
+
+    result = record.result
+    assert result is not None
+    audit = result.director_audit
+    assert audit is not None
+    assert audit.job_id == job_id
+    assert audit.request_id == "req_failing1234"
+    assert audit.server_request_id == "srv-failing-1"
+    assert audit.provider == "meta-muse-spark-director-lite"
+    assert audit.model == "muse-spark-1.3-contributor"
+    assert audit.service_mode == "contributor"
+    assert audit.wire_schema == "lite"
+    assert audit.validation_status == DirectorValidationStatus.REJECTED
+    assert audit.error_category == "validation"
+    assert audit.error_code == "DirectorValidationError"
+    assert audit.http_status == 200
+    assert (audit.prompt_tokens, audit.completion_tokens, audit.total_tokens) == (2781, 1500, 4281)
+    assert audit.estimated_cost_usd == pytest.approx(0.0005781)
+    assert audit.actual_cost_usd is None
+    assert result.director_request_id == "req_failing1234"
+    assert result.director_usage is not None
+    assert result.director_usage["prompt_tokens"] == 2781
 
 
 def test_live_director_replacement_waits_for_approval_without_render(tmp_path):

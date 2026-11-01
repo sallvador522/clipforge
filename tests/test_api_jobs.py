@@ -7,7 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from clipforge_api.main import create_app
-from clipforge_jobs import JobStatus, JobStore
+from clipforge_contracts import DirectorAudit
+from clipforge_jobs import JobResult, JobStatus, JobStore
 from clipforge_providers import get_providers
 from clipforge_worker.masks import MaskLoader
 from clipforge_worker.worker_process import PersistentWorker
@@ -87,6 +88,39 @@ def test_upload_sanitizes_filename_and_creates_queued_job(env, tiny_video):
     record = store.get(body["job_id"])
     assert store.source_path(record).is_file()
     assert body["source_info"]["width"] == 64 and body["source_info"]["frame_count"] >= 9
+
+
+def test_result_serializes_director_audit_with_datetime(env, tiny_video):
+    client, store, _ = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    audit = DirectorAudit(
+        request_id="req_abcdef123456",
+        server_request_id="srv-audit-1",
+        provider="meta-muse-spark-director-lite",
+        model="muse-spark-1.3-contributor",
+        service_mode="contributor",
+        wire_schema="lite",
+        prompt_tokens=2781,
+        completion_tokens=1856,
+        total_tokens=4637,
+        estimated_cost_usd=0.000649,
+        validation_status="accepted",
+        http_status=200,
+        finish_reason="stop",
+    )
+    store.update(
+        job_id,
+        status=JobStatus.COMPLETED,
+        stage="completed",
+        result=JobResult(director_audit=audit, render_status="awaiting_approval"),
+    )
+
+    resp = client.get(f"/api/jobs/{job_id}/result")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["director_audit"]["request_id"] == "req_abcdef123456"
+    assert body["director_audit"]["validation_status"] == "accepted"
+    assert isinstance(body["director_audit"]["recorded_at"], str)
 
 
 def test_complete_mock_job_lifecycle(env, tiny_video):

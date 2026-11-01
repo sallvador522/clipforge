@@ -60,9 +60,12 @@ def provider(handler, **kwargs) -> MetaEditingDirectorProvider:
     return MetaEditingDirectorProvider(client=client, **defaults)
 
 
-def ok_response(plan_json: dict, usage: dict | None = None) -> httpx.Response:
+def ok_response(
+    plan_json: dict, usage: dict | None = None, headers: dict | None = None
+) -> httpx.Response:
     return httpx.Response(
         200,
+        headers=headers or {},
         json={
             "id": "chatcmpl-test",
             "object": "chat.completion",
@@ -307,9 +310,15 @@ def test_exactly_one_request_even_on_validation_failure():
         calls["n"] += 1
         return httpx.Response(200, json={"choices": [{"message": {"content": "nope"}, "finish_reason": "stop"}]})
 
+    instance = provider(handler)
     with pytest.raises(DirectorValidationError):
-        provider(handler).create_plan(transcript(text))
+        instance.create_plan(transcript(text))
     assert calls["n"] == 1
+    assert instance.last_audit is not None
+    assert instance.last_audit.validation_status == "rejected"
+    assert instance.last_audit.prompt_tokens is None
+    assert instance.last_audit.completion_tokens is None
+    assert instance.last_audit.estimated_cost_usd is None
 
 
 def test_mock_path_makes_zero_external_calls(monkeypatch):
@@ -467,3 +476,136 @@ def test_contributor_cost_math():
     assert instance.last_usage is not None
     assert instance.last_usage.prompt_tokens == 3215
     assert instance.last_usage.cost_usd == pytest.approx(calculate_cost_usd(3215, 914, "contributor"))
+
+
+# --- Audit record (6B-LIVE-HARDENING) ----------------------------------------
+
+
+def test_success_audit_records_request_tokens_cost_and_status():
+    text = "Keep me sharp and blur the background."
+    plan_json = mock_plan_json(text)
+    usage = {"prompt_tokens": 3215, "completion_tokens": 914, "total_tokens": 4129}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok_response(plan_json, usage=usage, headers={"x-request-id": "srv-ok-1"})
+
+    instance = provider(
+        handler,
+        model="muse-spark-1.3-contributor",
+        reasoning_effort="medium",
+        require_contributor=True,
+    )
+    instance.create_plan(transcript(text), video_meta())
+
+    audit = instance.last_audit
+    assert audit is not None
+    assert audit.job_id is None
+    assert audit.request_id == instance.last_request_id
+    assert audit.server_request_id == "srv-ok-1"
+    assert audit.provider == "meta-muse-spark-director"
+    assert audit.model == "muse-spark-1.3-contributor"
+    assert audit.execution_mode == "live"
+    assert audit.service_mode == "contributor"
+    assert audit.wire_schema == "full"
+    assert (audit.prompt_tokens, audit.completion_tokens, audit.total_tokens) == (3215, 914, 4129)
+    assert audit.estimated_cost_usd == pytest.approx(calculate_cost_usd(3215, 914, "contributor"))
+    assert audit.actual_cost_usd is None
+    assert audit.validation_status == "accepted"
+    assert audit.error_category is None
+    assert audit.error_code is None
+    assert audit.http_status == 200
+    assert audit.finish_reason == "stop"
+
+
+def test_validation_failure_audit_records_tokens_and_error_category():
+    text = "Keep me sharp and blur the background."
+    plan_json = mock_plan_json(text)
+    usage = {"prompt_tokens": 2781, "completion_tokens": 16000, "total_tokens": 18781}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "srv-rejected-1"},
+            json={
+                "id": "chatcmpl-rejected",
+                "object": "chat.completion",
+                "model": "muse-spark-1.3-contributor",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": json.dumps(plan_json)},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": usage,
+            },
+        )
+
+    instance = provider(
+        handler,
+        model="muse-spark-1.3-contributor",
+        reasoning_effort="medium",
+        require_contributor=True,
+        max_output_tokens=16000,
+    )
+    with pytest.raises(DirectorValidationError) as exc:
+        instance.create_plan(transcript(text))
+
+    assert exc.value.category == "truncated"
+    audit = instance.last_audit
+    assert audit is not None
+    assert audit.request_id == instance.last_request_id
+    assert audit.server_request_id == "srv-rejected-1"
+    assert audit.validation_status == "rejected"
+    assert audit.error_category == "truncated"
+    assert audit.error_code == "DirectorValidationError"
+    assert audit.http_status == 200
+    assert audit.finish_reason == "length"
+    assert (audit.prompt_tokens, audit.completion_tokens, audit.total_tokens) == (2781, 16000, 18781)
+    assert audit.estimated_cost_usd == pytest.approx(calculate_cost_usd(2781, 16000, "contributor"))
+    assert audit.actual_cost_usd is None
+
+
+def test_http_error_audit_records_status_and_server_request_id():
+    text = "Keep me sharp and blur the background."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            headers={"x-request-id": "srv-500-1"},
+            json={"error": {"message": "boom", "type": "server_error"}},
+        )
+
+    instance = provider(handler)
+    with pytest.raises(DirectorAPIError):
+        instance.create_plan(transcript(text))
+
+    audit = instance.last_audit
+    assert audit is not None
+    assert audit.validation_status == "error"
+    assert audit.error_category == "api_error"
+    assert audit.error_code == "DirectorAPIError"
+    assert audit.http_status == 500
+    assert audit.server_request_id == "srv-500-1"
+    assert audit.prompt_tokens is None
+    assert audit.estimated_cost_usd is None
+    assert audit.actual_cost_usd is None
+
+
+def test_timeout_audit_records_error_category_without_http_status():
+    text = "Keep me sharp and blur the background."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    instance = provider(handler, timeout_seconds=2)
+    with pytest.raises(DirectorTimeoutError):
+        instance.create_plan(transcript(text))
+
+    audit = instance.last_audit
+    assert audit is not None
+    assert audit.validation_status == "error"
+    assert audit.error_category == "timeout"
+    assert audit.http_status is None
+    assert audit.prompt_tokens is None
+    assert audit.actual_cost_usd is None

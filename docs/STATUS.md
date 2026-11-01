@@ -6,15 +6,16 @@
 - **Milestones 0–6B-LIVE:** complete through LIVE-E2E 005 — real Portuguese audio → Muse Spark plan → real blur render → verified download. Director usage 2,781 in / 1,856 out = **$0.000649**; ASR **$0.000184**; run total **$0.000833**. Full log: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
 - **Frontend note (6A follow-up):** the mock command selector was removed from the studio. Mock transcription remains available only through the backend API/tests; the UI now either transcribes live (when enabled) or offers the typed instruction. Recorded audio in mock mode is not transcribed, and says so.
 - **Next milestone:** SAM 3.1 segmentation — **blocked on explicit approval**. The director path is proven end-to-end; live planning uses the lite schema, cap 16,000.
-- **Local user-testing phase (2026-11-01):** the fixed 2-call caps blocked a UI retry, so ADR-015 makes them configurable. `.env` currently sets **100 transcription + 25 director**; the phase-005 ledger (`2/1`) is archived and the active ledger is `0/0`. Defaults for a fresh checkout remain 2/2.
+- **Local user-testing phase (2026-11-01):** the fixed 2-call caps blocked a UI retry, so ADR-015 makes them configurable. `.env` sets **100 transcription + 25 director**. The phase-005 ledger was archived; the active ledger is now `2/1` after user testing, leaving **98 transcription / 24 director**. Defaults for a fresh checkout remain 2/2.
+- **6B-LIVE-HARDENING (2026-11-01):** model-generated operation ids are canonicalised (`op_1`…`op_n`) with dependency rewriting and cycle/forward/duplicate rejection; every director call now persists a `DirectorAudit` (request ids, tokens, estimated cost, validation/error/HTTP status) even when validation fails. **211 backend tests**; no live call was made in this milestone. Meta budget available: **$31.78**. See `docs/LIVE_DIRECTOR_HARDENING_REPORT.md` and ADR-016.
 
 ## What Exists
 
-- Docs: PRODUCT_SPEC, ARCHITECTURE, DESIGN_SYSTEM (tokens finalized), API_CONTRACTS, DECISIONS (ADR-001…ADR-014), TASKS, STATUS, live-call reports.
+- Docs: PRODUCT_SPEC, ARCHITECTURE, DESIGN_SYSTEM (tokens finalized), API_CONTRACTS, DECISIONS (ADR-001…ADR-016), TASKS, STATUS, live-call and hardening reports.
 - Skills: 9 project skills (≤10 limit) — 6 custom in `.opencode/skills/` (including `clipforge-editing-director`), `frontend-design` and `web-design-guidelines` in `.agents/skills/`, plus `motion` in `.opencode/skills/` (Motion AI Kit free tier; no Motion+ purchase).
 - Backend: contracts, mock providers with explicit live transcription/director modes, job store, FastAPI (upload/voice/status/result/download, CORS for localhost:3000), persistent worker, FFmpeg+OpenCV renderer with verified outputs.
 - Frontend (`apps/web`): Next.js 15 + React 19 + TS + Tailwind 4 + Motion. **Editor workspace (5.1):** TopBar (logo, project, job state, resolution/duration, Export MP4), Media panel (source thumbnail + real metadata, upload progress), central Viewer (custom play/seek transport, before/compare/after with synced edited overlay, fullscreen), AI Assistant (signal-orange mic with real voice-level ring, MediaRecorder capture, mock-labelled command confirmation, typed-instruction alternative with deterministic matching, live job step tracker, clarification/failure states), Timeline (time ruler, 10 real frame thumbnails captured from the file, real WebAudio audio peaks, click/keyboard seek, playhead synced to the video). `MotionConfig reducedMotion="user"` globally.
-- Tests: **194 backend tests passing** (70 preserved pre-director + 124 director/registry/playbook/EDL/evaluation/Spark/lite/live-wiring); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
+- Tests: **211 backend tests passing** (70 preserved pre-director + 141 director/registry/playbook/EDL/evaluation/Spark/lite/live-wiring/hardening); frontend `tsc` clean and `next build` succeeding; web-design-guidelines audit applied.
 - Local verification: `scripts/check.ps1` runs the backend suite, frontend typecheck and production build (exit code 0). No GitHub Actions/paid CI is required.
 
 ### First live director test — LIVE-CALL 001/002 (500) and 003 (200 truncated)
@@ -47,6 +48,15 @@
 - **Defects fixed:** WAV temporary input/output shared the same filename (FFmpeg refused; no network call made) — input is now `upload{suffix}`; budget reservation moved after local conversion; dev launchers load `.env` and `packages/director`.
 - **Verification:** 191 backend tests, frontend typecheck + production build, independent ffprobe + frame inspection, browser smoke at `:3000` (all five regions, LIVE TRANSCRIPTION badge, `/health` on `:8001`, zero console errors). Full report: `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`.
 - **Limitations:** mock segmentation is a synthetic ellipse (not SAM); replacement backgrounds remain local/mock (not Muse Image); approval is backend-only (no resume endpoint/UI). SAM 3.1 waits for explicit approval.
+
+## Director Hardening (6B-LIVE-HARDENING)
+
+- **Issue found in a live user test:** job `0563760dec3444fd86fb797880187e46` returned a lite plan with operation ids `op1_isolate`…`op5_verify`. The internal pattern `^op_[a-z0-9_]{1,40}$` rejected an otherwise valid plan; the failure path lost usage/request metadata.
+- **Normalisation:** `normalize_lite_operation_ids()` assigns `op_1`…`op_n` in original order, returns the full original → canonical map, rewrites dependencies, and rejects duplicate/unknown/cyclic/forward dependencies before full v2 validation. Capability ids, params, order and execution semantics are unchanged; the strict full-plan contract remains in force. EDL provenance is recomputed from canonical ids.
+- **Audit:** `DirectorAudit` (job id, client and server request ids, provider, model, live/standard/contributor mode, wire schema, tokens, estimated cost, actual cost only when available, validation status, error category/code, HTTP status, finish reason, timestamp). The provider updates it before/after the request; the worker persists it in `JobResult.director_audit` on success **and** failure. API result serialisation uses JSON mode.
+- **Verification:** 211 backend tests (49 targeted director/lite/worker), `scripts/check.ps1` exit 0. The rejected ID pattern is recreated in tests from a valid mock plan; the raw model response was not stored. Historical job records were not modified.
+- **No live call was made in this milestone.** Meta budget available: **$31.78**. A plan-only retest is blocked on explicit approval; see `docs/LIVE_DIRECTOR_HARDENING_REPORT.md`.
+- **Remaining:** actual billed cost remains external (Meta panel); failed-job audit is persisted in `job.json`, while `/result` remains completed-only; approval/resume UI is still absent.
 
 ## Transcription (Milestone 6A)
 
@@ -106,4 +116,4 @@ For live runs, set `CLIPFORGE_TRANSCRIBE_MODE=live` and/or `CLIPFORGE_DIRECTOR_M
 
 ## Handoff
 
-Read AGENTS.md, this file, TASKS.md and `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`. The MVP loop is demonstrable with real rendering; the voice → Muse Spark → render path has been executed once end-to-end in live mode. Defaults remain mock. Next step is SAM 3.1, and only with explicit approval. The local `.env` has transcription and director live with testing caps 100/25; the active ledger is `0/0` (phase 005 archived). Do not increase limits or reset the ledger again without approval.
+Read AGENTS.md, this file, TASKS.md, `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md` and `docs/LIVE_DIRECTOR_HARDENING_REPORT.md`. The MVP loop is demonstrable with real rendering; the voice → Muse Spark → render path has been executed once end-to-end in live mode. Defaults remain mock. 6B-LIVE-HARDENING is complete: operation ids are canonicalised and every director call has a persisted audit record. Next is a single approved plan-only live retest, then SAM 3.1. The local `.env` has transcription and director live with testing caps 100/25; the active ledger is `2/1` (98/24 remaining). Meta budget available: **$31.78**. Do not increase limits, reset the ledger or make live calls without approval.

@@ -68,16 +68,22 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 | `POST /api/jobs/{job_id}/voice` | live | Body `{audio_fixture_id}`; attaches the voice instruction and makes the job claimable; 409 if not queued/awaiting |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `completed`, `failed`, plus `stage` progress detail |
 | `GET /api/jobs` | live | List all jobs |
-| `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `rendered`, `render_status`, `director_plan`, `director_usage`, `director_request_id`, `requires_approval`); 409 until `completed` |
+| `GET /api/jobs/{job_id}/result` | live | Pipeline result (transcript, plan, segmentation, background, `rendered`, `render_status`, `director_plan`, `director_usage`, `director_request_id`, `director_audit`, `requires_approval`); 409 until `completed` |
 | `GET /api/jobs/{job_id}/download` | live (Milestone 4) | Serves the rendered MP4 (`video/mp4`) **only** when the job is `completed`, `render_status` is `"verified"`, and the file exists on disk; otherwise 409 `download_not_ready`. No fake downloads. |
 
 Error shape: `{ "error": { "code": string, "message": string } }` (404 `job_not_found`, 409 conflicts, 422 upload validation, 413 oversize, 400 empty file).
 
 Note: since Milestone 4, an edit job's `completed` includes a real rendered + verified MP4. The result's `rendered` object reports measured facts (mode, resolution, fps, frame count, duration, file size, audio presence) from ffprobe verification of the actual file. Clarification/unsupported jobs complete without rendering and keep `render_status="not_implemented"`. Since ADR-014, approval-required/rejected live director plans complete as `awaiting_approval` with `render_status="awaiting_approval"` and no output file.
 
-## Professional Editing Director Contracts (ADR-009, ADR-014)
+## Professional Editing Director Contracts (ADR-009, ADR-014, ADR-016)
 
-Director contracts are internal Pydantic models. Since ADR-014, the live worker executes ready plans through the v1 adapter and exposes `director_plan`, `director_usage` and `director_request_id` in `GET /api/jobs/{job_id}/result` (read-only; there is no director-specific endpoint).
+Director contracts are internal Pydantic models. Since ADR-014, the live worker executes ready plans through the v1 adapter and exposes `director_plan`, `director_usage`, `director_request_id` and `director_audit` in `GET /api/jobs/{job_id}/result` (read-only; there is no director-specific endpoint).
+
+### Operation-id normalisation and audit (ADR-016)
+
+- The lite wire accepts model-generated `operation_id` strings. Before full v2 validation the server assigns canonical ids `op_1`…`op_n` in original order, returns the complete original → canonical map, rewrites dependencies and rejects duplicate, unknown, cyclic or forward dependencies. Capability ids, params and execution semantics are unchanged; the full `DirectorOperation` pattern remains strict.
+- `DirectorAudit` fields: `job_id`, `request_id`, `server_request_id`, `provider`, `model`, `execution_mode`, `service_mode`, `wire_schema`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `estimated_cost_usd`, `actual_cost_usd` (only when reliably available; currently null), `validation_status`, `error_category`, `error_code`, `http_status`, `finish_reason`, `recorded_at`.
+- The audit is persisted in `JobResult` on success and on failure. A failed director job keeps `director_audit`, `director_usage` and `director_request_id` in `job.json`; `/api/jobs/{job_id}/result` still returns 409 for non-completed jobs, so the audit is read from the job record rather than that endpoint.
 
 ### Capability registry
 

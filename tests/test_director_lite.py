@@ -6,15 +6,23 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
-from clipforge_contracts import PlanOutcome, TranscriptResult, capability_summary_for_prompt
+from clipforge_contracts import (
+    DirectorOperation,
+    PlanOutcome,
+    TranscriptResult,
+    capability_summary_for_prompt,
+)
 from clipforge_contracts.director_lite import (
     LITE_BRIEF,
     LITE_WIRE_SCHEMA,
     LitePlan,
     lite_capability_summary,
     lite_to_full_plan,
+    lite_to_full_plan_with_mapping,
 )
+from clipforge_contracts.edl import compute_decision_hash, edl_from_professional_plan
 from clipforge_director import LiteMetaEditingDirectorProvider, MockProfessionalEditingDirector
 
 
@@ -228,6 +236,10 @@ def test_lite_provider_roundtrip_single_post_contributor_cost():
     assert provider.last_usage.prompt_tokens == 1500
     # Contributor rates: 1500*0.10/1e6 + 600*0.20/1e6 = 0.00015 + 0.00012
     assert provider.last_usage.cost_usd == pytest.approx(0.00027)
+    assert provider.last_audit is not None
+    assert provider.last_audit.wire_schema == "lite"
+    assert provider.last_audit.service_mode == "contributor"
+    assert provider.last_audit.validation_status == "accepted"
 
 
 def test_full_capability_summary_still_available_for_audit():
@@ -251,3 +263,284 @@ def test_lite_provider_1500_cap_payload():
     assert payload["model"] == "muse-spark-1.3-contributor"
     assert payload["reasoning_effort"] == "medium"
     assert payload["response_format"]["json_schema"]["name"] == "ProfessionalEditingPlanLite"
+
+
+# --- Operation-id normalisation (6B-LIVE-HARDENING) --------------------------
+
+
+def _lite_payload_with_ids(text: str, ids: list[str]):
+    """Build a valid lite payload from the mock plan, replacing operation ids."""
+    full = MockProfessionalEditingDirector().create_plan(transcript(text))
+    original_ids = [op.operation_id for op in full.operations]
+    assert len(ids) == len(original_ids)
+    id_map = {original: replacement for original, replacement in zip(original_ids, ids)}
+    operations = []
+    for op in full.operations:
+        operations.append(
+            {
+                "operation_id": id_map[op.operation_id],
+                "capability_id": op.capability_id,
+                "title": op.title,
+                "explanation": op.explanation,
+                "params": op.params.model_dump(mode="json"),
+                "dependencies": [id_map[dependency] for dependency in op.dependencies],
+                "expected_output": op.expected_output,
+            }
+        )
+    payload = {
+        "request_id": full.request_id,
+        "raw_instruction": full.raw_instruction,
+        "interpreted_intention": full.interpreted_intention,
+        "outcome": "plan_ready",
+        "subject_description": full.subject.description,
+        "subject_is_ambiguous": False,
+        "clarification_question": "",
+        "preserve_audio": True,
+        "operations": operations,
+        "summary_explanation": full.summary_explanation,
+        "clarification_questions": [],
+        "unsupported_capabilities": [],
+        "approval_status": full.approval_status.value,
+    }
+    return payload, full
+
+
+def test_operation_ids_are_canonicalised_in_order_and_dependencies_rewritten():
+    text = "Keep me sharp and blur the background."
+    ids = ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"]
+    payload, full = _lite_payload_with_ids(text, ids)
+    plan, id_map = lite_to_full_plan_with_mapping(LitePlan.model_validate(payload))
+
+    assert id_map == {
+        "op1_isolate": "op_1",
+        "op2_blur": "op_2",
+        "op3_audio": "op_3",
+        "op4_render": "op_4",
+        "op5_verify": "op_5",
+    }
+    assert [op.operation_id for op in plan.operations] == ["op_1", "op_2", "op_3", "op_4", "op_5"]
+    assert plan.operations[1].dependencies == ["op_1"]
+    assert plan.operations[3].dependencies == ["op_1", "op_2", "op_3"]
+    assert plan.operations[4].dependencies == ["op_4"]
+    assert [op.capability_id for op in plan.operations] == [
+        op.capability_id for op in full.operations
+    ]
+    assert [op.params.model_dump(mode="json") for op in plan.operations] == [
+        op.params.model_dump(mode="json") for op in full.operations
+    ]
+    assert plan.to_execution_plan().intent == full.to_execution_plan().intent
+
+
+def test_canonical_and_mixed_ids_are_normalised_deterministically():
+    text = "Keep me sharp and blur the background."
+
+    canonical_payload, _ = _lite_payload_with_ids(
+        text, ["op_1", "op_2", "op_3", "op_4", "op_5"]
+    )
+    canonical, canonical_map = lite_to_full_plan_with_mapping(
+        LitePlan.model_validate(canonical_payload)
+    )
+    assert canonical_map == {
+        "op_1": "op_1",
+        "op_2": "op_2",
+        "op_3": "op_3",
+        "op_4": "op_4",
+        "op_5": "op_5",
+    }
+    assert [op.operation_id for op in canonical.operations] == [
+        "op_1",
+        "op_2",
+        "op_3",
+        "op_4",
+        "op_5",
+    ]
+
+    mixed_payload, _ = _lite_payload_with_ids(
+        text, ["isolate", "op_2", "AudioStep", "render_4", "verify_5"]
+    )
+    mixed, mixed_map = lite_to_full_plan_with_mapping(LitePlan.model_validate(mixed_payload))
+    assert mixed_map == {
+        "isolate": "op_1",
+        "op_2": "op_2",
+        "AudioStep": "op_3",
+        "render_4": "op_4",
+        "verify_5": "op_5",
+    }
+    assert [op.operation_id for op in mixed.operations] == [
+        "op_1",
+        "op_2",
+        "op_3",
+        "op_4",
+        "op_5",
+    ]
+    assert mixed.operations[1].dependencies == ["op_1"]
+
+
+def test_duplicate_original_operation_ids_are_rejected():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["duplicate", "duplicate", "op3", "op4", "op5"],
+    )
+    lite = LitePlan.model_validate(payload)
+    with pytest.raises(ValueError, match="Duplicate operation id"):
+        lite_to_full_plan(lite)
+
+
+def test_unknown_dependency_is_rejected():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    payload["operations"][1]["dependencies"] = ["missing_operation"]
+    with pytest.raises(ValueError, match="unknown operation"):
+        lite_to_full_plan(LitePlan.model_validate(payload))
+
+
+def test_dependency_cycle_is_rejected():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    payload["operations"][0]["dependencies"] = ["op2_blur"]
+    payload["operations"][1]["dependencies"] = ["op1_isolate"]
+    with pytest.raises(ValueError, match="Dependency cycle"):
+        lite_to_full_plan(LitePlan.model_validate(payload))
+
+
+def test_forward_dependency_is_rejected():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    payload["operations"][0]["dependencies"] = ["op2_blur"]
+    payload["operations"][1]["dependencies"] = []
+    with pytest.raises(ValueError, match="must appear earlier"):
+        lite_to_full_plan(LitePlan.model_validate(payload))
+
+
+def test_invalid_capability_id_is_rejected():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    payload["operations"][0]["capability_id"] = "transition.apply"
+    with pytest.raises(ValidationError):
+        LitePlan.model_validate(payload)
+
+
+def test_full_v2_contract_still_rejects_non_canonical_ids():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    plan = lite_to_full_plan(LitePlan.model_validate(payload))
+    operation = plan.operations[0].model_dump(mode="json")
+    operation["operation_id"] = "op1_isolate"
+    with pytest.raises(ValidationError):
+        DirectorOperation.model_validate(operation)
+
+
+def test_invalid_operation_parameters_are_rejected():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    payload["operations"][1]["params"]["strength"] = 99.0
+    lite = LitePlan.model_validate(payload)
+    with pytest.raises(ValidationError):
+        lite_to_full_plan(lite)
+
+
+def test_provenance_hashes_are_recomputed_after_canonicalisation():
+    payload, _ = _lite_payload_with_ids(
+        "Keep me sharp and blur the background.",
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    plan = lite_to_full_plan(LitePlan.model_validate(payload))
+    edl = edl_from_professional_plan(plan)
+
+    assert [decision.operation_id for decision in edl.decisions] == [
+        "op_1",
+        "op_2",
+        "op_3",
+        "op_4",
+        "op_5",
+    ]
+    for decision in edl.decisions:
+        decision.verify_provenance(edl_id=edl.edl_id, request_id=edl.request_id)
+        assert decision.provenance_hash == compute_decision_hash(
+            edl_id=edl.edl_id,
+            request_id=edl.request_id,
+            decision=decision,
+        )
+
+
+def test_lite_provider_normalises_model_ids_and_audits_the_call():
+    text = "Keep me sharp and blur the background."
+    calls = {"n": 0}
+    response_payload: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "srv-lite-normalised"},
+            json={
+                "id": "chatcmpl-lite-normalised",
+                "object": "chat.completion",
+                "model": "muse-spark-1.3-contributor",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(response_payload),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2781, "completion_tokens": 1856, "total_tokens": 4637},
+            },
+        )
+
+    provider = LiteMetaEditingDirectorProvider(
+        "test-key",
+        LITE_BRIEF,
+        lite_capability_summary(),
+        model="muse-spark-1.3-contributor",
+        reasoning_effort="medium",
+        require_contributor=True,
+        max_output_tokens=16000,
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="https://api.meta.ai"
+        ),
+    )
+    _, expected_request_id = provider.request_payload(transcript(text), None)
+    payload, _ = _lite_payload_with_ids(
+        text,
+        ["op1_isolate", "op2_blur", "op3_audio", "op4_render", "op5_verify"],
+    )
+    payload["request_id"] = expected_request_id
+    payload["raw_instruction"] = text
+    response_payload.update(payload)
+
+    plan = provider.create_plan(transcript(text), request_id=expected_request_id)
+
+    assert calls["n"] == 1
+    assert [op.operation_id for op in plan.operations] == [
+        "op_1",
+        "op_2",
+        "op_3",
+        "op_4",
+        "op_5",
+    ]
+    assert plan.operations[1].dependencies == ["op_1"]
+    audit = provider.last_audit
+    assert audit is not None
+    assert audit.validation_status == "accepted"
+    assert audit.wire_schema == "lite"
+    assert audit.service_mode == "contributor"
+    assert audit.server_request_id == "srv-lite-normalised"
+    assert (audit.prompt_tokens, audit.completion_tokens) == (2781, 1856)
+    assert audit.estimated_cost_usd == pytest.approx(0.000649)
+    assert audit.actual_cost_usd is None

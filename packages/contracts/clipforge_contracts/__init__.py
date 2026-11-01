@@ -9,6 +9,12 @@ from clipforge_contracts.capabilities import (
     executable_capabilities,
     get_capability,
 )
+from clipforge_contracts.director_audit import (
+    DirectorAudit,
+    DirectorExecutionMode,
+    DirectorServiceMode,
+    DirectorValidationStatus,
+)
 from clipforge_contracts.director_lite import (
     LITE_BRIEF,
     LITE_WIRE_SCHEMA,
@@ -16,6 +22,8 @@ from clipforge_contracts.director_lite import (
     LitePlan,
     lite_capability_summary,
     lite_to_full_plan,
+    lite_to_full_plan_with_mapping,
+    normalize_lite_operation_ids,
 )
 from clipforge_contracts.director_plan import (
     ApprovalStatus,
@@ -70,10 +78,14 @@ __all__ = [
     "CAPABILITIES",
     "Capability",
     "CapabilityStatus",
+    "DirectorAudit",
+    "DirectorExecutionMode",
     "DirectorOperation",
     "DirectorPlanError",
+    "DirectorServiceMode",
     "DirectorStage",
     "DirectorState",
+    "DirectorValidationStatus",
     "DecisionTransparency",
     "EditDecision",
     "EditDecisionList",
@@ -115,6 +127,8 @@ __all__ = [
     "get_capability",
     "lite_capability_summary",
     "lite_to_full_plan",
+    "lite_to_full_plan_with_mapping",
+    "normalize_lite_operation_ids",
     "require_operation_transition",
     "require_transition",
     "stage_from_job_stage",
