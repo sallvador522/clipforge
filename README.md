@@ -242,6 +242,7 @@ tests/          Backend test suite
 - [Live end-to-end report](docs/LIVE_E2E_AUDIO_BLUR_REPORT.md)
 - [User-video live run](docs/LIVE_E2E_006_USER_VIDEO_REPORT.md)
 - [Director hardening report](docs/LIVE_DIRECTOR_HARDENING_REPORT.md)
+- [Prepared plan-only test proposal](docs/LIVE_CALL_006_PROPOSAL.md)
 - [Product spec](docs/PRODUCT_SPEC.md)
 
 ---

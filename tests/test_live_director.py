@@ -257,6 +257,7 @@ def test_live_director_validation_failure_persists_audit(tmp_path):
     assert result.director_request_id == "req_failing1234"
     assert result.director_usage is not None
     assert result.director_usage["prompt_tokens"] == 2781
+    assert LiveCallBudget(store.root).used("director") == 1
 
 
 def test_live_director_replacement_waits_for_approval_without_render(tmp_path):

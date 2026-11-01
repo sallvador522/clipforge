@@ -181,3 +181,16 @@ The user approved one real execution. It was run as a full E2E rather than plan-
   time, not both. Real subject tracking still requires SAM 3.1 or a manual mask.
 
 Full log: `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
+
+## 10. Mock verification for the hardening spec
+
+- Explicit mock env confirmed: `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`,
+  `CLIPFORGE_DIRECTOR_MODE=mock`; `get_providers()` returned mock/mock/mock with
+  `MockProfessionalEditingDirector`.
+- Full suite: **211 passed**; `scripts/check.ps1` exit 0 (backend + typecheck + production build).
+- Browser smoke: page loaded with all five areas and **MOCK TRANSCRIPTION**; zero console errors.
+- Ledger: `transcription=3`, `director=2`; no `.lock` or `.tmp` artifacts.
+- LIVE-CALL 006 plan-only request prepared, **not executed**:
+  `scripts/prepare_live_call_006.py`, `docs/LIVE_CALL_006_PROPOSAL.md`, and exact payloads in
+  `storage/live_call_006_request_standard.json` / `..._contributor.json`.
+- No external API request was made by the preparation or mock verification.

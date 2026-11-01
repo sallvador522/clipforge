@@ -118,12 +118,17 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Serialise job result responses with `model_dump(mode="json")` (audit datetime).
 - [x] Regression fixture recreates the rejected `op1_…` pattern from a valid mock plan (raw model response unavailable); historical job records untouched.
 - [x] 211 backend tests; targeted director/lite/worker 49; `scripts/check.ps1` exit 0.
+- [x] Mock-only verification with explicit `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`, `CLIPFORGE_DIRECTOR_MODE=mock`: factory modes confirmed; browser smoke showed `MOCK TRANSCRIPTION` with zero console errors; ledger `3/2`, no lock/tmp artifacts.
 - [x] Docs: ADR-016, STATUS, TASKS, ARCHITECTURE, API_CONTRACTS, hardening report.
 - [x] Live retest after hardening — executed as a full approved E2E rather than plan-only (LIVE-E2E 006). Muse generated a valid 5-operation plan; the worker rendered 360×640/177 frames/6.177 s with audio. Audit persisted and verified (`accepted`, HTTP 200, server request id).
 - [x] Live audit fields verified on the real run: usage 2,792 in / 2,293 out, estimated **$0.000738**, request `req_03bff7ae260f`, server id `6096b398-7ce7-46ba-b4bf-c7a693cabbe7`.
 - [x] Output saved outside the repository in the user's `Videos\Video` folder; source untouched; no frames or user video committed.
 - [ ] Reconcile actual billed cost from the Meta panel (audit stores estimated cost only; run estimate $0.001010 including ASR).
 - [ ] Improve real subject tracking (SAM 3.1 or a manual mask). The mock ellipse kept only one side subject sharp at a time; documented in `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`.
+- [x] Prepare the exact LIVE-CALL 006 plan-only request without executing it: `scripts/prepare_live_call_006.py`, `storage/live_call_006_request_standard.json`, `..._contributor.json`, and `docs/LIVE_CALL_006_PROPOSAL.md`.
+- [x] Cost proposal: input estimate 2,950 tokens, expected output 2,400, cap 16,000; Standard **$0.013888** expected / **$0.071688** cap; Contributor **$0.000775** expected / **$0.003495** cap.
+- [ ] Execute LIVE-CALL 006 plan-only — **blocked on Salvador's explicit approval**; no tools, SAM, Muse Image, EDL or render.
+- [ ] Then proceed to SAM 3.1 integration with a separate approved cost/scope.
 
 ## Milestone 6B-LIVE — LIVE-CALL 003 Lite Schema (EXECUTED: HTTP 200, truncated)
 
