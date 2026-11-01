@@ -1,10 +1,14 @@
 # ClipForge
 
+[![CI](https://github.com/sallvador522/clipforge/actions/workflows/ci.yml/badge.svg)](https://github.com/sallvador522/clipforge/actions/workflows/ci.yml)
+
 **Voice-first AI video editing studio — speak the edit, get a real MP4.**
 
 Built for the **Meta Global Hackathon**. ClipForge is not a UI mockup: rendering is real
 FFmpeg + OpenCV, outputs are verified with ffprobe, and live runs use Meta Muse models for
 transcription and editing direction.
+
+![ClipForge editor with a clip loaded, timeline populated and a voice instruction ready](docs/assets/clipforge-editor.png)
 
 ---
 
@@ -245,3 +249,8 @@ Built for the **Meta Global Hackathon** around a real-use goal: let creators edi
 speaking, while keeping the execution honest and verifiable. The project demonstrates
 live Meta models, strict contracts, real media rendering and a mock-first development
 discipline.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party notices are listed in
+[`docs/THIRD_PARTY_NOTICES.md`](docs/THIRD_PARTY_NOTICES.md).
