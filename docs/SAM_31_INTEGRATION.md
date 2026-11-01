@@ -237,12 +237,15 @@ SAM detection quality.
 
 ## Remaining limitations
 
-- **Real SAM inference is unvalidated.** The first live test still needs explicit approval,
-  a cost estimate, a ledger slot and a controlled request. The consent gate is implemented;
-  it does not validate live SAM behavior by itself.
-- Detection quality, real object continuity through occlusion and prompt tuning on real
-  footage are unknown.
-- The Files API nested expiration encoding is not live-validated.
+- **Real SAM inference is validated on one prepared clip (2026-11-01).** One request
+  returned HTTP 200 with 2 subjects, 177/177 frames each, and real masks, previews and
+  renders. Broader detection quality is not claimed. Full evidence:
+  `docs/SAM_31_LIVE_TEST_REPORT.md`.
+- Detection quality was stable on one 5.9 s clip (no occlusion); continuity through
+  occlusion, 720p quality, overlaid-label mask holes and prompt tuning on other footage
+  remain unknown.
+- The Files API upload/expiration fields were accepted live on 2026-11-01 (HTTP 200); the
+  DELETE also returned HTTP 200.
 - Cleanup failure leaves the file to expire after one hour; it is recorded but cannot be
   retried automatically.
 - Mock masks are synthetic ellipses; the browser/demo flow proves the contract, not SAM.

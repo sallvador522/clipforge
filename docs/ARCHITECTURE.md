@@ -70,7 +70,7 @@ Mode selection: `CLIPFORGE_AI_MODE=mock` is the default; `live` there is still r
 - **Per-object masks:** each SAM object gets its own ADR-005 PNG sequence (all frames, zeros where absent); the job root holds the union. Stable SAM object IDs are preserved as strings, not list positions. Duplicate/non-increasing revisions, >16 objects per frame, out-of-range frames/bounds, mask/bounds dimension mismatch, incomplete streams and malformed output are rejected. The loader refuses `segmentation_status="incomplete"`.
 - **Selection:** `GET /plan` exposes subject IDs, preview URLs and detection metadata. `POST /approve` takes `subject_ids`; the backend validates them and stores the selection. One subject is preselected; multiple require an explicit choice. Zero detections is a terminal `NoSubjectsDetected` outcome with no render.
 - **Renderer:** `combine_subject_masks()` streams selected per-object masks into `masks/selected/` with bounded memory. The existing renderer keeps the selected people sharp and blurs/replaces the background outside them. **Selective person blur is not supported.**
-- **Live status:** implemented but **not live-validated**. No request was made in 6D; detection quality and live cleanup/stream behaviour are unknown. See `docs/SAM_31_INTEGRATION.md`.
+- **Live status:** **live-validated on one prepared clip (2026-11-01).** One request returned HTTP 200, 2 subjects and 177/177 frames each; masks, previews and renders were real. Detection quality beyond that clip, occlusion and a follow-up cleanup existence check remain unknown. See `docs/SAM_31_LIVE_TEST_REPORT.md`.
 
 ## Video Pipeline (ADR-001, ADR-002, ADR-005, ADR-006, ADR-019)
 
@@ -119,7 +119,10 @@ storage/
 
 ## Deferred / Placeholder
 
-- **SAM 3.1 live inference:** `SamSegmentationProvider` is implemented and offline-validated, but **no live request has been made**. Live detection quality, live stream behaviour and the Files API nested expiry encoding remain to be validated with explicit approval (ADR-019). Mock mode remains synthetic.
+- **SAM 3.1 live inference:** `SamSegmentationProvider` is implemented, offline-validated
+  and live-validated on one prepared clip (2026-11-01; 1 request, HTTP 200, 2 subjects).
+  Broader detection quality, 720p/occlusion behavior, the overlaid-label mask artifact and
+  a follow-up cleanup existence check remain open. Mock mode remains synthetic.
 - **Selective person blur:** not implemented. The renderer can keep selected people sharp and blur/replace the background; it cannot blur chosen people while keeping the scene sharp.
 - **Muse Image:** `background.generate` is planned but disabled; replacement uses local/mock assets, never a live image model.
 - **Live legacy planner:** `EditingPlannerProvider` remains deterministic; live planning goes through the director.

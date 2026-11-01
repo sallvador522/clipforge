@@ -46,8 +46,8 @@ The MVP targets 10-second clips at up to 720p / 30 FPS.
   source-bound consent record. Plan approval is separate. Mock mode has no prompt.
 - Real background blur and background replacement with **FFmpeg + OpenCV**.
 - A real SAM 3.1 provider (official Responses/Files contract + `meta-sam-parser`), fully
-  implemented and offline-validated. **No live SAM request has been made yet**, so real
-  detection quality is not claimed.
+  implemented, offline-validated and live-validated on one prepared clip on 2026-11-01;
+  broader detection quality is not claimed.
 - Original audio preserved; output verified for stream presence, resolution, frame count,
   duration and audio before download is allowed.
 - A five-area editor workspace: Media, Viewer, Timeline, AI Assistant and Top Bar.
@@ -95,7 +95,7 @@ More detail: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 |---|---|---|
 | Speech-to-text | `muse-voice-transcribe-1.0` | Live, opt-in (`CLIPFORGE_TRANSCRIBE_MODE=live`) |
 | Editing director | `muse-spark-1.3-contributor` (lite schema, medium reasoning) | Live, opt-in (`CLIPFORGE_DIRECTOR_MODE=live`) |
-| Subject segmentation | `sam-3.1` (Responses + Files API, `meta-sam-parser`) | Implemented; opt-in (`CLIPFORGE_SEGMENTATION_MODE=live`), **not live-validated** |
+| Subject segmentation | `sam-3.1` (Responses + Files API, `meta-sam-parser`) | Live-validated on one clip; opt-in (`CLIPFORGE_SEGMENTATION_MODE=live`) |
 
 Model output never contains file paths, shell commands or arbitrary parameters. Plans are
 validated by Pydantic and the capability registry, then adapted to the worker's v1
@@ -110,8 +110,8 @@ execution contract.
 | Transcription | **Real** Meta Muse Voice Transcribe when live; deterministic fixtures otherwise |
 | Editing direction | **Real** Muse Spark when live; deterministic mock scenarios otherwise |
 | Plan review / approval | **Real** backend-enforced gate; no render before approval |
-| Subject detection | **Mock verified** (two synthetic tracks); **SAM 3.1 implemented, not live-validated** |
-| Subject selection | **Real local UI/backend** (mock detection in this demo) |
+| Subject detection | **SAM 3.1 live-validated on one clip**; mock mode uses two synthetic tracks |
+| Subject selection | **Real local UI/backend** (live SAM or mock detection depending on mode) |
 | Background replacement | **Local/mock assets** — **not Muse Image** |
 | Rendering | **Real** FFmpeg decode/encode + OpenCV compositing |
 | Audio | **Real** original audio preserved in the output |
@@ -277,6 +277,7 @@ tests/          Backend test suite
 - [API contracts](docs/API_CONTRACTS.md)
 - [SAM 3.1 integration](docs/SAM_31_INTEGRATION.md)
 - [SAM 3.1 live validation plan](docs/SAM_31_LIVE_VALIDATION_PLAN.md)
+- [SAM 3.1 live test report](docs/SAM_31_LIVE_TEST_REPORT.md)
 - [Decisions (ADRs)](docs/DECISIONS.md)
 - [Status and handoff](docs/STATUS.md)
 - [Tasks](docs/TASKS.md)
@@ -291,9 +292,10 @@ tests/          Backend test suite
 
 ## Current limitations
 
-- The SAM 3.1 provider, official parser, subject selection and mask pipeline are implemented
-  and offline-validated, but **no live SAM request has been made**. Real detection quality is
-  unproven; mock mode uses synthetic ellipses.
+- The SAM 3.1 provider, official parser, subject selection and mask pipeline are implemented,
+  offline-validated and live-validated on one prepared clip (2026-11-01; see
+  `docs/SAM_31_LIVE_TEST_REPORT.md`). Broader detection quality, 720p/occlusion behavior and
+  the overlaid-label mask artifact remain open; mock mode uses synthetic ellipses.
 - Selective person blur is not implemented. Background blur/replacement keeps selected
   subjects sharp and treats the rest of the frame.
 - Background replacement uses local/mock assets, not Muse Image.

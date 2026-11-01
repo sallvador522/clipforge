@@ -1,7 +1,7 @@
 # ClipForge — Product Audit
 
 **Audit date:** 2026-11-01
-**Product state:** Milestone 6D complete for implementation/offline validation (real SAM 3.1 provider, subject selection, explicit consent gate); live SAM inference is **not** validated.
+**Product state:** Milestone 6D complete for implementation/offline validation (real SAM 3.1 provider, subject selection, explicit consent gate). A post-audit live SAM test succeeded on 2026-11-01 (1 request, 2 subjects, verified renders); see `docs/SAM_31_LIVE_TEST_REPORT.md`.
 **Execution mode for this audit:** `CLIPFORGE_AI_MODE=mock`, `CLIPFORGE_TRANSCRIBE_MODE=mock`, `CLIPFORGE_DIRECTOR_MODE=mock`, `CLIPFORGE_SEGMENTATION_MODE=mock`
 **Live calls made while producing this audit:** none
 
@@ -33,9 +33,11 @@ blur-only plan, now stops at `awaiting_approval`; the worker renders only after 
 API approval. Rejection, unsupported requests and pending clarifications never render.
 
 Milestone 6D now implements the real SAM 3.1 provider, official parser, per-object masks,
-source-frame previews and user subject selection. **No live SAM request has been made**, so
-real detection quality is still unproven; mock mode uses two synthetic tracks. Muse Image
-background generation remains unimplemented. Selective person blur remains unsupported.
+source-frame previews and user subject selection. One live SAM request succeeded on
+2026-11-01 (2 subjects, 177/177 frames each; see `docs/SAM_31_LIVE_TEST_REPORT.md`);
+broader detection quality is still unproven, and mock mode uses two synthetic tracks.
+Muse Image background generation remains unimplemented. Selective person blur remains
+unsupported.
 
 ## End-to-end flow
 
@@ -47,12 +49,12 @@ background generation remains unimplemented. Selective person blur remains unsup
 | Transcript review | **Verified local** | Editable transcript, explicit confirmation; the worker never re-transcribes confirmed text. |
 | Intent understanding | **Verified live** (opt-in) / **Mock** default | Both modes produce the same normalized v2 contract. Mock is deterministic. Live uses Muse Spark with registry validation. |
 | Plan review | **Verified local** | Inline dialog shows interpreted intent, subject strategy, every dynamic operation, relevant parameters, capability source (MOCK/LOCAL/LIVE/PLANNED/UNAVAILABLE), approval requirements and verification checks. |
-| Subject detection | **Mock verified / SAM implemented, not live-validated** | Mock mode provides two deterministic preview subjects; the SAM 3.1 provider and parser are offline-validated only. |
-| Subject selection | **Verified local (mock detection)** | Stable object IDs, source-frame previews, single auto-select and explicit multi-select; selection is sent on approval. |
+| Subject detection | **SAM 3.1 verified live once / Mock verified** | One real 2-subject clip produced 177/177-frame masks and previews; broader quality is not claimed. Mock mode remains two deterministic preview subjects. |
+| Subject selection | **Verified local (live or mock detection)** | Stable object IDs, source-frame previews, single auto-select and explicit multi-select; selection is sent on approval. |
 | Approval / rejection | **Verified local** | Backend-enforced atomic transitions. No render before approval; rejected plans are terminal. |
 | Clarification | **Verified local** | Inline answer, original context preserved, maximum 3 rounds, revised plan re-enters review; no render before approval. |
 | Unsupported requests | **Verified local** | Terminal `unsupported` state, named unavailable capability, no render. |
-| Subject identification | **Mock verified / SAM implemented, not live-validated** | Mock: two synthetic ellipses. SAM: official provider/parser code exists, but no real inference has been run. |
+| Subject identification | **SAM 3.1 verified live once / Mock verified** | Mock: two synthetic ellipses. SAM: one real inference produced two distinct subjects. No identity recognition is performed. |
 | Background blur | **Verified local** | Real OpenCV compositing + FFmpeg encode, original audio preserved. |
 | Background replacement | **Verified local** (rendering) / **Mock** (asset) | Real local composite using local/mock background assets. **Not Muse Image.** |
 | Output verification | **Verified local** | ffprobe checks streams, resolution, frame count, duration and audio before download is exposed. |
@@ -68,9 +70,9 @@ background generation remains unimplemented. Selective person blur remains unsup
 | Record / type instruction | **Verified local** | Both paths are supported; voice is primary. |
 | Transcribe Portuguese speech | **Verified live** (opt-in) | Live ASR tested. Mock mode does not fake understanding of recorded audio. |
 | Interpret editing intention | **Verified live** (opt-in) / **Mock** default | v2 plan with typed operations and registry validation. |
-| Identify primary person | **Mock verified / SAM implemented, not live-validated** | Mock uses two ellipses. The SAM provider detects people by a `"person"` prompt, but no real inference has been run. |
-| Segment / track person | **Mock verified / SAM implemented, not live-validated** | Mock writes two per-object sequences. SAM conversion covers stable IDs, sparse frames, occlusion and entry/exit, but real quality is unproven. |
-| Keep selected people sharp | **Verified local with mock masks** | Selected per-object masks are unioned and rendered; live SAM quality awaits validation. |
+| Identify primary person | **SAM 3.1 verified live once / Mock verified** | Mock uses two ellipses. One real SAM request detected two people by a `"person"` prompt; broader quality is not claimed. |
+| Segment / track person | **SAM 3.1 verified live once / Mock verified** | One real clip produced stable IDs, 177/177-frame sequences, previews and selection renders. Occlusion/720p quality remain unproven. |
+| Keep selected people sharp | **Verified local with real and mock masks** | Selected per-object masks are unioned and rendered; real SAM masks drove three verified renders. |
 | Blur background | **Verified local** | Real Gaussian blur outside the mask. |
 | Generate new background | **Not implemented** | `background.generate` is `planned`; Muse Image is not integrated. |
 | Replace background | **Verified local with mock/local asset** | Composite is real; the asset is not generated by Muse Image. |
@@ -136,8 +138,9 @@ background generation remains unimplemented. Selective person blur remains unsup
    (job, SHA-256, timestamp, disclosure version, provider, model, live mode), rejects
    missing/false consent before ready/worker/upload, and the worker/provider revalidate it.
    Plan approval is separate. Mock mode has no consent prompt.
-9. **Scope honesty.** SAM live is implemented but **not live-validated**. Selective person
-   blur is not supported.
+9. **Scope honesty.** SAM live was validated once on a prepared clip (2026-11-01); broader
+   quality, 720p/occlusion behavior and the overlaid-label mask artifact remain open.
+   Selective person blur is not supported.
 
 ## Verified evidence
 
@@ -180,7 +183,7 @@ each 64×36, 1.0 s, video + audio.
 
 | Gap | Impact | Status |
 |---|---|---|
-| **Real SAM inference unvalidated** | The provider/parser/mask pipeline is implemented and offline-tested, but no live call has been made. Detection quality and live API behaviour are unknown. | **Pending** explicit approval, cost estimate and one controlled test. |
+| **Real SAM inference validated once** | The provider/parser/mask pipeline completed one live request with 2 subjects; broader quality (720p, occlusion, overlaid-label holes) is not established. | **Validated on one prepared clip**; further quality tests pending. |
 | **No Muse Image generation** | Replacement backgrounds are local/mock assets. The product must not claim generated imagery. | **Planned**, not implemented. |
 | **No authentication / ownership** | API is local single-user. Any client that knows a job id can read/decide it. Acceptable for a local demo; not for deployment. | **Not implemented.** Must be addressed before multi-user or public hosting. |
 | **No crash recovery mid-render** | A hard worker crash after claim can leave a job in `processing` with its claim lock. Clean restarts before claiming work fine; no automatic stale-lock recovery exists. | **Known limitation.** Manual verification required before removing a lock. |

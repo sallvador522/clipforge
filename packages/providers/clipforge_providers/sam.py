@@ -26,6 +26,7 @@ import logging
 import re
 import subprocess
 import tempfile
+import time
 from collections.abc import AsyncIterable, Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -246,7 +247,9 @@ class SamSegmentationProvider:
                 self.last_file_id = file_id
                 authorization.reserve()  # immediately before the billable Responses POST
                 payload = self._request_payload(file_id, effective_prompt)
+                inference_start = time.perf_counter()
                 parsed = asyncio.run(self._collect(payload))
+                inference_seconds = time.perf_counter() - inference_start
                 result = self._convert(
                     parsed,
                     job_id=job_id,
@@ -270,6 +273,15 @@ class SamSegmentationProvider:
                             "sam_file_cleanup_failed file_id=%s error=%s", file_id, type(exc).__name__
                         )
             self.last_file_cleanup = cleanup
+            logger.info(
+                "sam_segmentation_completed job_id=%s request_id=%s subjects=%d "
+                "inference_seconds=%.2f cleanup=%s",
+                job_id,
+                self.last_request_id,
+                len(result.subjects),
+                inference_seconds,
+                cleanup,
+            )
             diagnostics = list(result.diagnostics)
             if cleanup == "failed":
                 diagnostics.append(
@@ -324,6 +336,7 @@ class SamSegmentationProvider:
             raise SamAPIError("SAM file upload returned no file id.") from exc
         if not isinstance(file_id, str) or not file_id.startswith("file-"):
             raise SamAPIError("SAM file upload returned an invalid file id.")
+        logger.info("sam_file_uploaded file_id=%s", file_id)
         return file_id
 
     def _delete(self, file_id: str) -> None:
@@ -391,6 +404,11 @@ class SamSegmentationProvider:
                 ) as response:
                     self._raise_for_status(response, "SAM Responses request")
                     self.last_request_id = response.headers.get("x-request-id")
+                    logger.info(
+                        "sam_responses_status status=%d request_id=%s",
+                        response.status_code,
+                        self.last_request_id,
+                    )
                     async for event in self._iter_sse(response):
                         yield event
         except httpx.TimeoutException as exc:
@@ -416,6 +434,12 @@ class SamSegmentationProvider:
         if response.status_code < 400:
             return
         request_id = response.headers.get("x-request-id")
+        logger.warning(
+            "%s failed status=%d request_id=%s",
+            operation,
+            response.status_code,
+            request_id,
+        )
         if response.status_code in (401, 403):
             raise SamAPIError(
                 f"{operation} was rejected (HTTP {response.status_code}).",

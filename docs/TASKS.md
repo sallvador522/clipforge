@@ -207,12 +207,12 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] ADR-020 + explicit live-SAM consent gate: Portuguese pre-send dialog, unchecked consent, decline without request; API 422 before ready/worker; source-bound consent record (job, SHA-256, timestamp, disclosure version, provider, model, live mode); worker/provider revalidation before upload; mock mode unaffected.
 - [x] Regression tests: missing/false consent, no ready/worker, valid persistence, changed source, another-job reuse, approval-without-consent, worker refusal, provider refusal before upload, mock no-consent. Browser E2E desktop/mobile + mock no-dialog + zero `api.meta.ai` requests.
 - [x] Quick consent-gate verification (2026-11-01): targeted consent tests, typecheck/build and focused browser check; no live call.
-- [ ] **Live SAM 3.1 validation - user approved on 2026-11-01; execution is the next step.** No live request has been made; detection quality, live stream behaviour, Files API expiry encoding and live cleanup remain unverified. Needs a cost estimate and ledger slot.
+- [x] **Live SAM 3.1 validation (2026-11-01) - SUCCESS on attempt 1.** One real inference (HTTP 200, request id `a6b54e67-61d4-4779-9fcc-80563b7166c9`) detected 2 subjects (IDs `0`, `1`), 177/177 frames each; real masks, manifests and previews; person A, person B and both rendered with original audio preserved. Ledger segmentation 1/2; no retry. See `docs/SAM_31_LIVE_TEST_REPORT.md`.
 - [ ] Muse Image background generation - planned, not implemented.
 - [ ] Authentication/ownership and stale-claim recovery - not implemented.
 
-## Milestone 6 - Live Integration Gate (SAM implemented, live validation pending)
+## Milestone 6 - Live Integration Gate (SAM live-validated 2026-11-01)
 - [x] Verify official Meta documentation for Muse Voice Transcribe and Muse Spark; implement live adapters with budget tracking and no automatic billable retries (ADR-008, ADR-014, ADR-017).
-- [x] Verify official SAM 3.1 documentation and implement the adapter + parser + mask conversion (ADR-019); offline validation complete, live inference not validated.
+- [x] Verify official SAM 3.1 documentation and implement the adapter + parser + mask conversion (ADR-019); offline validation complete and one live inference validated on 2026-11-01.
 - [ ] Verify official Muse Image documentation; keep local/mock assets until then.
 - [ ] Propose one controlled SAM integration test and obtain explicit user approval before any live call.
