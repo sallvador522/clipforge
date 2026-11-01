@@ -115,6 +115,15 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - Cost: billable; local usage lost pre-fix. Bounded ≤ ≈ $0.00026, realistic ≈ $0.0002 at Contributor rates.
 - Next (blocked): same lite payload with `max_completion_tokens: 1500` (or 1200) — one approved retry. Plain-JSON control no longer necessary.
 
+## Repository / Hackathon Delivery
+- [x] Local Git repository clean; GitHub remote `sallvador522/clipforge`, branch `main`, public.
+- [x] Hackathon README (architecture, real-vs-mock table, setup, live modes, limits, screenshot).
+- [x] MIT `LICENSE` and third-party notices preserved.
+- [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
+- [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
+- [x] Local verification script `scripts/check.ps1` (194 backend tests + frontend typecheck + production build; exit code 0).
+- [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
+
 ## Milestone 6 — Live Integration Gate (blocked)
 - [ ] Verify official Meta documentation (schemas, media inputs, mask encoding, sync/async, polling, rate limits, pricing).
 - [ ] Implement live adapters behind existing interfaces; request logging, idempotency, budget tracking; no automatic billable retries.

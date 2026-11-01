@@ -186,6 +186,21 @@ Safety rails:
 
 ## Tests and checks
 
+From the repository root:
+
+```powershell
+.\scripts\check.ps1
+```
+
+The script runs the backend suite, the frontend typecheck and a production build. If
+PowerShell blocks local scripts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check.ps1
+```
+
+Manual equivalent:
+
 ```powershell
 pytest -q
 cd apps/web
@@ -194,8 +209,7 @@ npm run build
 ```
 
 Current backend suite: **194 tests passing**. The frontend typecheck and production build
-also pass. GitHub Actions is configured in
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) for backend tests and frontend checks.
+also pass. No GitHub Actions or paid CI is required; checks run locally.
 
 ---
 
