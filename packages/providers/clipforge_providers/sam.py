@@ -154,6 +154,7 @@ class SamSegmentationProvider:
     """Official SAM 3.1 Responses/Files implementation (no hidden fallback)."""
 
     provider_name = "meta-sam"
+    execution_mode = "live"
 
     def __init__(
         self,

@@ -240,7 +240,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **272 tests passing**. The frontend typecheck and production build
+Current backend suite: **277 tests passing**. The frontend typecheck and production build
 also pass. Browser E2E for subject selection, approval, rejection, clarification, replacement
 and unsupported flows is available in `apps/web/scripts/qa-approval.mjs` (run with the mock
 stack on `:3000`/`:8001`). No GitHub Actions or paid CI is required; checks run locally.

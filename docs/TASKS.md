@@ -160,7 +160,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] MIT `LICENSE` and third-party notices preserved.
 - [x] Repository topics: `meta`, `ai`, `video-editing`, `ffmpeg`, `opencv`, `hackathon`, `nextjs`, `fastapi`.
 - [x] Reproducible editor screenshot via `apps/web/scripts/capture-readme.mjs`.
-- [x] Local verification script `scripts/check.ps1` (272 backend tests + frontend typecheck + production build; exit code 0).
+- [x] Local verification script `scripts/check.ps1` (277 backend tests + frontend typecheck + production build; exit code 0).
 - [ ] GitHub Actions CI — workflow removed because the GitHub account is billing-locked and jobs cannot start. CI is not required for the hackathon; revisit only if billing is resolved.
 
 ## Milestone 6C — Plan Review, Approval & Resume (complete, mock mode)
@@ -181,7 +181,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Browser E2E (`apps/web/scripts/qa-approval.mjs`): blur desktop/mobile, replacement, reject, clarification and unsupported; 4 real MP4 downloads; zero console errors.
 - [x] Frontend typecheck and production build.
 - [x] Docs: ADR-018, PRODUCT_AUDIT, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README.
-- [x] Real SAM 3.1 provider + official parser + subject selection implemented and offline-validated in 6D; live inference not yet validated.
+- [x] Real SAM 3.1 provider + official parser + subject selection implemented and offline-validated in 6D; live inference was validated later on 2026-11-01.
 - [ ] Muse Image background generation - planned, not implemented.
 - [ ] Authentication/ownership for multi-user deployment — not implemented.
 - [ ] Automatic stale-claim recovery after a hard crash mid-render — not implemented.
@@ -208,6 +208,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Regression tests: missing/false consent, no ready/worker, valid persistence, changed source, another-job reuse, approval-without-consent, worker refusal, provider refusal before upload, mock no-consent. Browser E2E desktop/mobile + mock no-dialog + zero `api.meta.ai` requests.
 - [x] Quick consent-gate verification (2026-11-01): targeted consent tests, typecheck/build and focused browser check; no live call.
 - [x] **Live SAM 3.1 validation (2026-11-01) - SUCCESS on attempt 1.** One real inference (HTTP 200, request id `a6b54e67-61d4-4779-9fcc-80563b7166c9`) detected 2 subjects (IDs `0`, `1`), 177/177 frames each; real masks, manifests and previews; person A, person B and both rendered with original audio preserved. Ledger segmentation 1/2; no retry. See `docs/SAM_31_LIVE_TEST_REPORT.md`.
+- [x] **SAM demo stabilization (2026-11-01):** original upload is the canonical render source; the SAM provider still uploads only a temporary video-only copy. Worker verifies source hash, mask provenance, dimensions, frame count and FPS before rendering. New API→worker→render regression compares decoded PCM with the original. Capability badges derive from actual provider/result metadata (LIVE/MOCK/UNAVAILABLE). Overlaid-label mask holes documented; no dilation or artificial fill added. **277 tests**, typecheck and build pass.
 - [ ] Muse Image background generation - planned, not implemented.
 - [ ] Authentication/ownership and stale-claim recovery - not implemented.
 

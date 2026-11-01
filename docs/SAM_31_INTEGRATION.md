@@ -76,6 +76,10 @@ Request shape (asserted by tests):
 - The original upload is never modified. A SHA-256 of the original is stored in every
   mask manifest.
 
+The original upload is also the canonical render source. The temporary video-only file is
+used only for SAM inference. Before rendering, the worker verifies the original SHA-256,
+the persisted mask source hash, dimensions, frame count and FPS, and refuses a mismatch.
+
 Files API path:
 
 - `POST /v1/files` with `purpose=user_data`.

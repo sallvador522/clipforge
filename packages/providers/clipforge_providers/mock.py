@@ -156,6 +156,7 @@ class MockSegmentationProvider:
 
     provider_name = "mock-sam-segmentation"
     model = "mock-sam-3.1-fixture"
+    execution_mode = "mock"
 
     def segment(
         self,

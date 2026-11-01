@@ -10,6 +10,7 @@ recorded as a structured job error; the original upload is preserved.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from clipforge_contracts import (
     ApprovalStatus,
@@ -67,9 +68,62 @@ class JobProcessor:
         self.store.update(job_id, result=result)
         return result
 
+    def _canonical_source_path(self, record):
+        """The original upload is the only legal render source; never a SAM derivative."""
+        path = self.store.source_path(record)
+        if not path.is_file():
+            raise ValueError("Canonical original upload is missing; refusing to render.")
+        return path
+
+    def _validate_render_provenance(self, record, segmentation):
+        """Bind the persisted masks to the canonical original upload before rendering."""
+        source_path = self._canonical_source_path(record)
+        source_hash = sha256_file(source_path)
+        if record.source_sha256 and record.source_sha256 != source_hash:
+            raise ValueError(
+                "The original upload changed after ingestion; refusing to render stale masks."
+            )
+        if segmentation.source_sha256 and segmentation.source_sha256 != source_hash:
+            raise ValueError(
+                "Segmentation masks do not belong to the original upload; refusing to render."
+            )
+        info = record.source_info
+        if (segmentation.width, segmentation.height) != (info.width, info.height):
+            raise ValueError(
+                "Segmentation dimensions do not match the original upload; refusing to render."
+            )
+        if segmentation.frame_count != info.frame_count:
+            raise ValueError(
+                "Segmentation frame count does not match the original upload; refusing to render."
+            )
+        if abs(segmentation.fps - info.fps) > 0.01:
+            raise ValueError(
+                "Segmentation FPS does not match the original upload; refusing to render."
+            )
+        for subject in segmentation.subjects:
+            _, manifest = MaskLoader().load_manifest(Path(subject.mask_manifest_path).parent)
+            if manifest.source_sha256 and manifest.source_sha256 != source_hash:
+                raise ValueError(
+                    "A subject mask manifest does not belong to the original upload; "
+                    "refusing to render."
+                )
+            if (manifest.video_width, manifest.video_height) != (info.width, info.height):
+                raise ValueError(
+                    "A subject mask manifest has the wrong dimensions; refusing to render."
+                )
+            if manifest.frame_count != info.frame_count:
+                raise ValueError(
+                    "A subject mask manifest has the wrong frame count; refusing to render."
+                )
+            if abs(manifest.fps - info.fps) > 0.01:
+                raise ValueError(
+                    "A subject mask manifest has the wrong FPS; refusing to render."
+                )
+        return source_path
+
     def _run_segmentation(self, job_id: str, record):
         info = record.source_info
-        source_path = self.store.source_path(record)
+        source_path = self._canonical_source_path(record)
         authorization = None
         consent = None
         if self.providers.segmentation_mode == "live":
@@ -124,6 +178,8 @@ class JobProcessor:
             base = base.model_copy(update={"segmentation": segmentation})
             self.store.update(job_id, result=base)
 
+        source_path = self._validate_render_provenance(record, segmentation)
+
         masks_dir = job_masks_dir
         if segmentation.subjects:
             selected = list(record.selected_subject_ids)
@@ -166,7 +222,7 @@ class JobProcessor:
         self.store.update(job_id, stage="rendering")
         rendered = render_video(
             RenderRequest(
-                source_path=self.store.source_path(record),
+                source_path=source_path,
                 masks_dir=masks_dir,
                 output_path=self.store.job_dir(job_id) / "output.mp4",
                 output_relative_path=f"jobs/{job_id}/output.mp4",

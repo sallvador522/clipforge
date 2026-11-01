@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from clipforge_contracts import (
     SUBJECT_DETECTION_DISCLOSURE_VERSION,
+    CapabilityStatus,
     SubjectDetectionConsent,
     get_capability,
     sha256_file,
@@ -107,6 +108,43 @@ def _to_response(record: JobRecord) -> JobResponse:
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
+
+
+def _capability_payload(
+    capability,
+    segmentation_provider,
+    segmentation_result=None,
+) -> dict:
+    """Report the capability status from the provider that actually runs it.
+
+    The static registry marks subject isolation as a mock-capable executable; the
+    runtime label must follow the segmentation provider (or its persisted result)
+    so a real SAM run is never shown as MOCK/SIMULATED.
+    """
+    status = capability.status
+    simulated = capability.simulated
+    if capability.capability_id == "subject.isolate":
+        if segmentation_result is not None:
+            execution_mode = "mock" if segmentation_result.is_mock else "live"
+        else:
+            execution_mode = getattr(segmentation_provider, "execution_mode", None)
+        if execution_mode == "live":
+            status = CapabilityStatus.AVAILABLE_LIVE
+            simulated = False
+        elif execution_mode == "mock":
+            status = CapabilityStatus.AVAILABLE_MOCK
+            simulated = True
+        else:
+            status = CapabilityStatus.DISABLED
+            simulated = True
+    return {
+        "capability_id": capability.capability_id,
+        "name": capability.name,
+        "status": status.value,
+        "simulated": simulated,
+        "requires_approval": capability.requires_approval,
+        "provider": capability.required_provider,
+    }
 
 
 def _subject_review(record: JobRecord) -> dict:
@@ -362,14 +400,11 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             capability = get_capability(operation.capability_id)
             if capability is not None:
                 capabilities.append(
-                    {
-                        "capability_id": capability.capability_id,
-                        "name": capability.name,
-                        "status": capability.status.value,
-                        "simulated": capability.simulated,
-                        "requires_approval": capability.requires_approval,
-                        "provider": capability.required_provider,
-                    }
+                    _capability_payload(
+                        capability,
+                        bundle.segmentation,
+                        result.segmentation,
+                    )
                 )
         return JSONResponse(
             content={

@@ -84,6 +84,7 @@ class FakeLiveSegmentation(MockSegmentationProvider):
 
     provider_name = "meta-sam"
     model = "sam-3.1"
+    execution_mode = "live"
 
     def __init__(self) -> None:
         self.calls = 0

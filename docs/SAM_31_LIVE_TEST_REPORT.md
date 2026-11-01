@@ -121,6 +121,10 @@ All renders used the existing `combine_subject_masks` + `render_video` pipeline.
 
 **Audio preservation:** the decoded PCM MD5 is identical for the original and all three audio-bearing renders: `50fa3de785f99c13de94fc3f2650e58a`.
 
+**Frame mapping to the original:** the prepared video-only derivative is decoded-frame-identical to the original (177/177 frame MD5s match), so the persisted real masks remain valid for the original frames. A new application-path regression uploads an audio-bearing source, confirms that the SAM upload has no audio, and compares decoded PCM from the rendered output with the original.
+
+**Post-live stabilization:** the worker now verifies the canonical source hash plus mask provenance, dimensions, frame count and FPS before rendering. Capability status is derived from the actual provider/result (`LIVE`/`MOCK`/`UNAVAILABLE`). The overlaid-label holes were documented and left untouched; no dilation or artificial filling was added.
+
 **Selection isolation (Laplacian variance, higher = sharper):**
 
 | Render | Selected subject | Unselected subject |
