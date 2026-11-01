@@ -206,7 +206,8 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Docs: ADR-019, `docs/SAM_31_INTEGRATION.md`, ARCHITECTURE, API_CONTRACTS, STATUS, TASKS, README, PRODUCT_AUDIT.
 - [x] ADR-020 + explicit live-SAM consent gate: Portuguese pre-send dialog, unchecked consent, decline without request; API 422 before ready/worker; source-bound consent record (job, SHA-256, timestamp, disclosure version, provider, model, live mode); worker/provider revalidation before upload; mock mode unaffected.
 - [x] Regression tests: missing/false consent, no ready/worker, valid persistence, changed source, another-job reuse, approval-without-consent, worker refusal, provider refusal before upload, mock no-consent. Browser E2E desktop/mobile + mock no-dialog + zero `api.meta.ai` requests.
-- [ ] **Live SAM 3.1 validation - blocked on explicit approval and a cost estimate.** No live request has been made; detection quality, live stream behaviour, Files API expiry encoding and live cleanup remain unverified.
+- [x] Quick consent-gate verification (2026-11-01): targeted consent tests, typecheck/build and focused browser check; no live call.
+- [ ] **Live SAM 3.1 validation - user approved on 2026-11-01; execution is the next step.** No live request has been made; detection quality, live stream behaviour, Files API expiry encoding and live cleanup remain unverified. Needs a cost estimate and ledger slot.
 - [ ] Muse Image background generation - planned, not implemented.
 - [ ] Authentication/ownership and stale-claim recovery - not implemented.
 
