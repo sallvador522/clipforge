@@ -235,8 +235,9 @@ class ProfessionalEditingPlan(BaseModel):
                 raise ValueError("A clarification plan must not contain operations.")
             if not self.clarification_questions:
                 raise ValueError("A clarification plan needs at least one question.")
-            if not self.subject.is_ambiguous:
-                raise ValueError("A clarification plan requires an ambiguous subject.")
+            # The ambiguity may be in the intent (broad or conflicting request)
+            # rather than in the subject. The playbook allows both; the subject
+            # flag stays truthful instead of being forced to true.
         else:  # UNSUPPORTED
             if self.operations:
                 raise ValueError("An unsupported plan must not contain operations.")

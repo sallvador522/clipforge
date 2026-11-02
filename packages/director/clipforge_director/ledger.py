@@ -1,11 +1,17 @@
-"""Live-call budget ledger and one-shot execution authorization.
+"""Live-call ledger and one-shot execution authorization.
 
-The ledger is the last line of defence before a billable HTTP request. It fails
-closed: an unreadable or structurally invalid ledger refuses reservations rather
-than silently resetting counters. A reservation is atomic, happens immediately
-before the network call, and is never released automatically after an uncertain
-outcome. A lock left by a crashed process is reported explicitly and must be
-recovered manually after verifying that no call is in flight.
+The ledger records how many billable calls each function has made. It is a
+cost meter first: by default it never refuses a call, so live mode keeps
+working without operational caps. Enforcement is opt-in and only applies when
+a caller passes explicit `limits=` (or `enforce=True`); environment limits are
+reported for visibility but do not block.
+
+When enforcement is on it still fails closed: an unreadable or structurally
+invalid ledger refuses reservations rather than silently resetting counters. A
+reservation is atomic, happens immediately before the network call, and is
+never released automatically after an uncertain outcome. A lock left by a
+crashed process is reported explicitly and must be recovered manually after
+verifying that no call is in flight.
 """
 
 from __future__ import annotations
@@ -80,7 +86,7 @@ class LiveBudgetExceeded(RuntimeError):
             else " A new phase needs fresh approval."
         )
         super().__init__(
-            f"Live-call budget exhausted for {function!r}: limit {limit} reached. "
+            f"Live-call budget exhausted for {function!r}: enforced limit {limit} reached. "
             f"No request was attempted.{hint}"
         )
         self.function = function
@@ -88,7 +94,21 @@ class LiveBudgetExceeded(RuntimeError):
 
 
 class LiveCallBudget:
-    def __init__(self, storage_root: str | Path, *, limits: dict[str, int] | None = None) -> None:
+    """Usage counter for billable calls, with opt-in enforcement.
+
+    `limits` are always reported. They only block when `enforce=True` or when
+    the caller passes explicit `limits=` (an intentional in-code cap for tests
+    and callers that need a hard ceiling). Environment limits and the defaults
+    are advisory so a live session is never interrupted by a counter.
+    """
+
+    def __init__(
+        self,
+        storage_root: str | Path,
+        *,
+        limits: dict[str, int] | None = None,
+        enforce: bool | None = None,
+    ) -> None:
         self._path = Path(storage_root) / "live-call-ledger.json"
         self._lock = self._path.with_suffix(".lock")
         self._limits = dict(DEFAULT_LIMITS)
@@ -98,11 +118,17 @@ class LiveCallBudget:
                 self._limits[function] = override
         if limits:
             self._limits.update(limits)
+        self._enforce = bool(limits) if enforce is None else bool(enforce)
 
     @property
     def limits(self) -> dict[str, int]:
         """Configured caps (defaults + environment overrides + explicit limits)."""
         return dict(self._limits)
+
+    @property
+    def enforced(self) -> bool:
+        """True when reaching a limit refuses the next reservation."""
+        return self._enforce
 
     def _read(self) -> dict[str, int]:
         # A missing ledger is a valid empty ledger (new phase).
@@ -143,7 +169,7 @@ class LiveCallBudget:
         try:
             counts = self._read()
             used = counts.get(function, 0)
-            if used >= limit:
+            if self._enforce and used >= limit:
                 raise LiveBudgetExceeded(function, limit)
             counts[function] = used + 1
             tmp = self._path.with_suffix(".tmp")

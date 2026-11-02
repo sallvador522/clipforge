@@ -37,13 +37,30 @@ def _clear_live_limit_env(monkeypatch):
     monkeypatch.delenv("CLIPFORGE_LIVE_DIRECTOR_LIMIT", raising=False)
 
 
-def test_live_budget_allows_two_then_refuses(tmp_path):
-    budget = LiveCallBudget(tmp_path / "storage")
+def test_live_budget_allows_two_then_refuses_when_explicitly_enforced(tmp_path):
+    budget = LiveCallBudget(tmp_path / "storage", limits={"director": 2})
+    assert budget.enforced is True
     assert budget.reserve("director") == 1
     assert budget.reserve("director") == 2
     with pytest.raises(LiveBudgetExceeded):
         budget.reserve("director")
     assert budget.used("director") == 2
+
+
+def test_default_budget_counts_without_blocking(tmp_path):
+    """Live mode must never stop because a counter reached its default."""
+    budget = LiveCallBudget(tmp_path / "storage")
+    assert budget.enforced is False
+    assert [budget.reserve("segmentation") for _ in range(5)] == [1, 2, 3, 4, 5]
+    assert budget.used("segmentation") == 5
+
+
+def test_enforce_flag_blocks_at_the_reported_limit(tmp_path):
+    budget = LiveCallBudget(tmp_path / "storage", enforce=True)
+    for _ in range(budget.limits["image"]):
+        budget.reserve("image")
+    with pytest.raises(LiveBudgetExceeded):
+        budget.reserve("image")
 
 
 def test_live_budget_is_per_function(tmp_path):
@@ -53,14 +70,13 @@ def test_live_budget_is_per_function(tmp_path):
     assert budget.reserve("director") == 1
 
 
-def test_live_budget_env_limit_is_applied(monkeypatch, tmp_path):
+def test_live_budget_env_limit_is_reported_but_not_enforced(monkeypatch, tmp_path):
     monkeypatch.setenv("CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT", "3")
     budget = LiveCallBudget(tmp_path / "storage")
     assert budget.limits == {"transcription": 3, "director": 2, "segmentation": 2, "image": 2}
-    assert [budget.reserve("transcription") for _ in range(3)] == [1, 2, 3]
-    with pytest.raises(LiveBudgetExceeded):
-        budget.reserve("transcription")
-    assert budget.reserve("director") == 1  # other function keeps its default
+    assert budget.enforced is False
+    assert [budget.reserve("transcription") for _ in range(4)] == [1, 2, 3, 4]
+    assert budget.reserve("director") == 1  # other function keeps its own counter
 
 
 def test_explicit_limits_override_env(monkeypatch, tmp_path):

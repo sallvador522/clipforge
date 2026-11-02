@@ -143,6 +143,25 @@ def test_ambiguous_plan_needs_question():
         ProfessionalEditingPlan.model_validate(clarification)
 
 
+def test_clarification_plan_may_target_ambiguous_intent():
+    """A broad or conflicting request can need clarification with a clear subject.
+
+    The live lite model followed the playbook ("ambiguous subject or intent")
+    but the v2 contract required an ambiguous subject, so a paid plan was
+    rejected. The subject flag must stay truthful; only the question is required.
+    """
+    clarification = MockProfessionalEditingDirector().create_plan(
+        transcript("Make my video more professional.")
+    ).model_dump(mode="json")
+    clarification["subject"]["is_ambiguous"] = False
+    clarification["subject"]["clarification_question"] = None
+
+    plan = ProfessionalEditingPlan.model_validate(clarification)
+    assert plan.outcome is PlanOutcome.NEEDS_CLARIFICATION
+    assert plan.subject.is_ambiguous is False
+    assert plan.clarification_questions
+
+
 def test_approval_required_for_background_replacement():
     plan = replace_plan()
     with pytest.raises(ValidationError):

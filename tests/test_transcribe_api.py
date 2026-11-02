@@ -198,12 +198,17 @@ def test_live_bundle_uses_mocked_transport_and_converts_audio(spoken_webm, tmp_p
     assert json.loads((tmp_path / "storage" / "live-call-ledger.json").read_text())["transcription"] == 1
 
 
-def test_live_transcription_refuses_when_budget_is_exhausted(spoken_webm, tmp_path):
+def test_live_transcription_keeps_working_past_the_advisory_limit(spoken_webm, tmp_path):
+    """The ledger is a cost meter in live mode: it counts but never blocks.
+
+    A ledger already at the advisory limit must not refuse the request; only an
+    explicit in-code `limits=`/`enforce=True` cap can do that.
+    """
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        return httpx.Response(200, json={"transcript": "should never be called", "turns": []})
+        return httpx.Response(200, json={"transcript": "still allowed", "turns": []})
 
     storage = tmp_path / "storage"
     storage.mkdir(parents=True)
@@ -218,10 +223,15 @@ def test_live_transcription_refuses_when_budget_is_exhausted(spoken_webm, tmp_pa
         mode="mock",
         transcription_mode="live",
     )
-    resp = post_audio(make_app(tmp_path, bundle), spoken_webm, fixture=None)
-    assert resp.status_code == 429
-    assert resp.json()["error"]["code"] == "live_budget_exhausted"
-    assert calls["n"] == 0
+    client = make_app(tmp_path, bundle)
+    resp = post_audio(client, spoken_webm, fixture=None)
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "still allowed"
+    assert calls["n"] == 1
+    assert json.loads((storage / "live-call-ledger.json").read_text())["transcription"] == 3
+
+    health = client.get("/health").json()
+    assert health["live_call_budget_enforced"] is False
 
 
 def test_live_errors_map_to_http_and_are_not_retried(spoken_webm, tmp_path):

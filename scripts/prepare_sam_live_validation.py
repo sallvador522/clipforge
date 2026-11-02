@@ -337,6 +337,7 @@ def main() -> int:
         "exists": ledger_path.is_file(),
         "lock_exists": lock_path.exists(),
         "limits": budget.limits,
+        "limits_enforced": budget.enforced,
         "used": ledger_used,
         "segmentation_remaining": budget.limits["segmentation"]
         - ledger_used.get("segmentation", 0),
@@ -345,8 +346,8 @@ def main() -> int:
         raise PreparationError(
             f"Ledger lock exists at {lock_path}; do not run until it is manually verified and removed."
         )
-    if ledger["segmentation_remaining"] < 1:
-        raise PreparationError("No segmentation ledger slot remains; a new approved phase is required.")
+    # Since ADR-022 the ledger is a cost meter: being at or over the advisory
+    # limit is reported below as a warning, not a blocker.
 
     authorization = LiveCallAuthorization(budget, "segmentation")
     if authorization.reserved:
@@ -364,6 +365,11 @@ def main() -> int:
         "MODEL_API_KEY_value_printed": False,
     }
     warnings: list[str] = []
+    if ledger["segmentation_remaining"] < 1:
+        warnings.append(
+            "The segmentation counter is at or above its advisory limit; it does not block "
+            "the call (ADR-022). Review cost in /health and the Meta billing panel."
+        )
     if width < 1280 or height < 720:
         warnings.append(
             f"Source is {width}x{height}; this is below the 720p product target. "

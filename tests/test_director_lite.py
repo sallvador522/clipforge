@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from clipforge_contracts import (
     DirectorOperation,
+    EditingIntent,
     PlanOutcome,
     TranscriptResult,
     capability_summary_for_prompt,
@@ -196,6 +197,39 @@ def test_lite_to_full_conversion_matches_mock_plan():
     assert converted.outcome == PlanOutcome.PLAN_READY
     assert [op.capability_id for op in converted.operations] == [op.capability_id for op in full.operations]
     assert converted.to_execution_plan().intent == full.to_execution_plan().intent
+
+
+def test_lite_clarification_with_clear_subject_is_accepted():
+    """Regression for the live job that asked about the background intent.
+
+    The model returned needs_clarification with subject_is_ambiguous=false;
+    the lite plan is valid and the v1 adapter still marks the clarification.
+    """
+    question = "Que fundo devo usar no lugar do original?"
+    payload = {
+        "request_id": "req_clarify0001",
+        "raw_instruction": "Muda todo o fundo e mantém só o senhor de blazer preto.",
+        "interpreted_intention": "Replace the background and keep the man in the black blazer sharp.",
+        "outcome": "needs_clarification",
+        "subject_description": "the man in the black blazer",
+        "subject_is_ambiguous": False,
+        "clarification_question": "",
+        "preserve_audio": True,
+        "operations": [],
+        "summary_explanation": "The background change is broad; confirm the intended look.",
+        "clarification_questions": [question],
+        "unsupported_capabilities": [],
+        "approval_status": "not_required",
+    }
+    plan = lite_to_full_plan(LitePlan.model_validate(payload))
+    assert plan.outcome is PlanOutcome.NEEDS_CLARIFICATION
+    assert plan.subject.is_ambiguous is False
+    assert plan.clarification_questions == [question]
+
+    v1 = plan.to_execution_plan()
+    assert v1.intent is EditingIntent.CLARIFICATION_NEEDED
+    assert v1.subject.is_ambiguous is True
+    assert v1.subject.clarification_question == question
 
 
 def test_lite_provider_roundtrip_single_post_contributor_cost():
