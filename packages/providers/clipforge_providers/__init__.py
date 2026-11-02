@@ -33,6 +33,7 @@ from clipforge_providers.sam import (
     SamNotAuthorizedError,
     SamRateLimitedError,
     SamSegmentationProvider,
+    SamStreamInterruptedError,
     SamTimeoutError,
     SamValidationError,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "SamNotAuthorizedError",
     "SamRateLimitedError",
     "SamSegmentationProvider",
+    "SamStreamInterruptedError",
     "SamTimeoutError",
     "SamValidationError",
     "SegmentationProvider",

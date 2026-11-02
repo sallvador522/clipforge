@@ -103,8 +103,43 @@ class SamIncompleteStreamError(SamError):
     pass
 
 
+class SamStreamInterruptedError(SamError):
+    """The Responses stream dropped before a terminal event arrived.
+
+    Carries a stable `code` so a job record distinguishes a transport
+    interruption from a provider rejection or a mask-validation failure.
+    """
+
+    code = "sam_stream_interrupted"
+
+
 class SamValidationError(SamError):
     pass
+
+
+def _stream_failure(exc: BaseException) -> tuple[str, str] | None:
+    """Classify a dropped Responses stream, or return None for other errors.
+
+    The SAM parser wraps the transport error, so the httpx cause is found by
+    walking the exception chain. Anything without a transport cause is left
+    untouched: this must never mask validation or HTTP status failures.
+    """
+    timeout = False
+    transport = False
+    cause: BaseException | None = exc
+    while cause is not None:
+        if isinstance(cause, httpx.TimeoutException):
+            timeout = True
+            transport = True
+        elif isinstance(cause, httpx.TransportError):
+            transport = True
+        cause = cause.__cause__
+    if not transport:
+        return None
+    root: BaseException = exc
+    while root.__cause__ is not None:
+        root = root.__cause__
+    return ("timeout" if timeout else "dropped", type(root).__name__)
 
 
 def _probe(path: Path, *, count_frames: bool = False) -> dict[str, Any]:
@@ -379,8 +414,41 @@ class SamSegmentationProvider:
 
     async def _collect(self, payload: dict[str, Any]):
         source = self._event_source(payload)
-        parsed = parse_responses_stream(self._as_async(source), video_segmentation_format())
-        return await parsed.final_result()
+        received = 0
+
+        async def counted():
+            nonlocal received
+            async for event in self._as_async(source):
+                received += 1
+                yield event
+
+        parsed = parse_responses_stream(counted(), video_segmentation_format())
+        started = time.perf_counter()
+        try:
+            return await parsed.final_result()
+        except Exception as exc:
+            failure = _stream_failure(exc)
+            if failure is None:
+                raise
+            kind, root_cause = failure
+            elapsed = time.perf_counter() - started
+            logger.warning(
+                "sam_stream_interrupted request_id=%s kind=%s events=%d elapsed=%.1fs cause=%s",
+                self.last_request_id,
+                kind,
+                received,
+                elapsed,
+                root_cause,
+            )
+            plural = "" if received == 1 else "s"
+            if kind == "timeout":
+                reason = f"The SAM stream timed out after {elapsed:.0f}s"
+            else:
+                reason = f"The connection to SAM dropped after {elapsed:.0f}s"
+            raise SamStreamInterruptedError(
+                f"{reason} while receiving masks ({received} stream event{plural} received). "
+                "No masks were written and no retry was attempted."
+            ) from exc
 
     @staticmethod
     async def _as_async(source):

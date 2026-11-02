@@ -29,6 +29,7 @@ from clipforge_providers import (
     SamIncompleteStreamError,
     SamNotAuthorizedError,
     SamSegmentationProvider,
+    SamStreamInterruptedError,
     SamValidationError,
 )
 from clipforge_worker.masks import MaskLoader
@@ -307,6 +308,54 @@ def test_sam_rejects_incomplete_or_malformed_output(tmp_path, fixture, error):
             consent=_consent(video, "job-bad"),
         )
     assert not (out / "manifest.json").exists()
+
+
+def test_sam_stream_drop_reports_event_count_and_stable_code(tmp_path):
+    """A dropped SSE stream must say so, with how far it got.
+
+    The 2026-11-02 live job surfaced the parser's generic `source_error`
+    ("The Responses event source failed during next.") with no hint that the
+    transport had died mid-transfer. This pins the actionable message.
+    """
+    video = _source_video(tmp_path)
+    events = _fixture("one_person")["events"]
+    deleted: list[str] = []
+
+    def stream(payload: dict):
+        def generator():
+            for event in events[:2]:
+                yield event
+            raise httpx.ReadError("connection reset by peer")
+
+        return generator()
+
+    provider = SamSegmentationProvider(
+        "test-key",
+        event_stream=stream,
+        file_uploader=lambda path: "file-drop",
+        file_deleter=lambda file_id: deleted.append(file_id),
+    )
+    with pytest.raises(SamStreamInterruptedError) as excinfo:
+        provider.segment(
+            job_id="job-drop",
+            source_video_id="src-drop",
+            output_dir=tmp_path / "masks",
+            width=64,
+            height=36,
+            frame_count=5,
+            fps=10.0,
+            source_path=video,
+            authorization=_auth(tmp_path),
+            consent=_consent(video, "job-drop"),
+        )
+
+    message = str(excinfo.value)
+    assert "connection to SAM dropped" in message
+    assert "2 stream events received" in message
+    assert "no retry was attempted" in message
+    assert excinfo.value.code == "sam_stream_interrupted"
+    assert deleted == ["file-drop"]
+    assert not (tmp_path / "masks" / "manifest.json").exists()
 
 
 def test_sam_file_upload_uses_user_data_and_minimum_expiration(monkeypatch, tmp_path):

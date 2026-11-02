@@ -219,3 +219,4 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Verify official Muse Image 1.0 documentation and implement the adapter, PNG/Base64 validation, provenance persistence, idempotent one-per-job generation and `image` budget slot (ADR-021); no live request made.
 - [ ] Propose one controlled SAM integration test and obtain explicit user approval before any live call.
 - [x] Fix live director rejection `strategy='mock_segmentation'`: pin capability param enums in the lite wire schema, reword the playbook away from "mock segmentation", add a regression test (301 tests) and validate with one live call (`largest_subject`, plan accepted).
+- [x] Make SAM transport failures actionable: `SamStreamInterruptedError` (`sam_stream_interrupted`) reports elapsed time and received event count instead of the parser's generic `source_error`; no retry added (302 tests).
