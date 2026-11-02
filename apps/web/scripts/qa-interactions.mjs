@@ -73,12 +73,11 @@ page.on("request", (r) => {
   if (r.url().match(/\/api\/jobs\/[a-f0-9]+$/) && r.method() === "GET") pollRequests.push(Date.now());
 });
 
-await page.getByRole("button", { name: "Upload & create job" }).click();
-await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
+await page.waitForSelector("text=JOB PROGRESS", { timeout: 30_000 });
 await page.locator("#typed-instruction").fill("blur the background");
 await page.getByRole("button", { name: "Use", exact: true }).click();
-await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
-await page.waitForSelector("text=Status: completed", { timeout: 90_000 });
+await page.getByRole("button", { name: /Send to ClipForge/ }).click();
+await page.waitForSelector("text=Status: Done", { timeout: 90_000 });
 const requestsAtCompletion = pollRequests.length;
 await page.waitForTimeout(5000);
 report.polling = { atCompletion: requestsAtCompletion, after5s: pollRequests.length, stopped: pollRequests.length === requestsAtCompletion };

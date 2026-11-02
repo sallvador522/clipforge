@@ -1,10 +1,12 @@
 """Job processor: plan review, approval, clarification and real rendering.
 
 Pipeline: confirmed transcript -> v2 Director (mock or live) -> persisted plan ->
-explicit user approval -> segmentation -> optional local/mock background -> real
+explicit user consent when live segmentation is required -> segmentation ->
+explicit user approval -> optional local/mock background -> real
 FFmpeg/OpenCV render -> verified output. A plan never renders before approval.
-Clarification and unsupported plans never render. Every exception is logged and
-recorded as a structured job error; the original upload is preserved.
+SAM never runs before explicit consent. Clarification and unsupported plans
+never render. Every exception is logged and recorded as a structured job error;
+the original upload is preserved.
 """
 
 from __future__ import annotations
@@ -215,6 +217,32 @@ class JobProcessor:
         self.store.update(job_id, result=base)
         return background, base
 
+    @staticmethod
+    def _plan_requires_segmentation(plan) -> bool:
+        """Segmentation runs only for plans that isolate a subject."""
+        return any(operation.type == "keep_subject_sharp" for operation in plan.operations)
+
+    def _live_consent_is_valid(self, record) -> bool:
+        """Check the persisted consent without reserving, uploading or inferring."""
+        if self.providers.segmentation_mode != "live":
+            return True
+        try:
+            source_hash = sha256_file(self.store.source_path(record))
+            provider_name = getattr(self.providers.segmentation, "provider_name", None)
+            model = getattr(self.providers.segmentation, "model", None)
+            if not provider_name or not model:
+                return False
+            validate_subject_detection_consent(
+                record.subject_detection_consent,
+                job_id=record.job_id,
+                source_video_hash=source_hash,
+                provider=provider_name,
+                model=model,
+            )
+        except (OSError, ConsentValidationError, ValueError, AttributeError):
+            return False
+        return True
+
     def _run_segmentation(self, job_id: str, record):
         info = record.source_info
         source_path = self._canonical_source_path(record)
@@ -346,6 +374,79 @@ class JobProcessor:
         )
         return JobStatus.COMPLETED.value
 
+    def _await_approval_after_detection(
+        self,
+        job_id: str,
+        record,
+        transcript: TranscriptResult,
+        plan,
+        director_plan,
+        director_usage,
+        director_request_id,
+        director_audit,
+    ) -> str:
+        """Run segmentation when the plan needs it, then wait for user review.
+
+        Detection happens before review so the user can choose who stays
+        sharp. Rendering still cannot start before explicit approval.
+        """
+        segmentation = None
+        if self._plan_requires_segmentation(plan):
+            self.store.update(job_id, stage="segmenting")
+            segmentation = self._run_segmentation(job_id, record)
+            if not segmentation.subjects:
+                result = self._persist_plan_result(
+                    job_id,
+                    transcript=transcript,
+                    director_plan=director_plan,
+                    director_usage=director_usage,
+                    director_request_id=director_request_id,
+                    director_audit=director_audit,
+                    plan=plan,
+                    segmentation=segmentation,
+                    requires_approval=False,
+                    render_status="no_subjects",
+                )
+                self.store.update(
+                    job_id,
+                    status=JobStatus.UNSUPPORTED,
+                    stage="no_subjects",
+                    result=result,
+                    error=JobError(
+                        code="NoSubjectsDetected",
+                        message=(
+                            "No people were detected in this clip. Use a clip with a visible "
+                            "person or choose a different edit."
+                        ),
+                    ),
+                )
+                logger.info("job_no_subjects job_id=%s", job_id)
+                return JobStatus.UNSUPPORTED.value
+
+        # Every ready plan, including blur-only plans, requires explicit user review.
+        result = self._persist_plan_result(
+            job_id,
+            transcript=transcript,
+            director_plan=director_plan,
+            director_usage=director_usage,
+            director_request_id=director_request_id,
+            director_audit=director_audit,
+            plan=plan,
+            segmentation=segmentation,
+            requires_approval=True,
+            render_status="awaiting_approval",
+        )
+        self.store.update(
+            job_id, status=JobStatus.AWAITING_APPROVAL, stage="awaiting_approval", result=result
+        )
+        logger.info(
+            "job_awaiting_approval job_id=%s ops=%d subjects=%d",
+            job_id,
+            len(plan.operations),
+            len(segmentation.subjects) if segmentation else 0,
+        )
+        return JobStatus.AWAITING_APPROVAL.value
+
     def process(self, job_id: str) -> str:
         """Process one claimed job. Returns the resulting status value."""
         record = self.store.get(job_id)
@@ -374,6 +475,46 @@ class JobProcessor:
             # call the director again; render exactly the approved plan.
             if record.approval_granted:
                 return self._execute_approved_plan(job_id, record, transcript)
+
+            # Post-consent resumption: the persisted plan is fresh (consent can
+            # only be granted after the plan that triggered the deferral), so
+            # never call transcription or the director again — the tail below
+            # validates consent once more before any SAM upload.
+            existing = record.result
+            if (
+                existing is not None
+                and existing.director_plan is not None
+                and existing.plan is not None
+                and existing.segmentation is None
+                and self._plan_requires_segmentation(existing.plan)
+            ):
+                if self.providers.segmentation_mode == "live" and not self._live_consent_is_valid(record):
+                    resumed = self._persist_plan_result(
+                        job_id,
+                        transcript=transcript,
+                        director_plan=existing.director_plan,
+                        director_usage=existing.director_usage,
+                        director_request_id=existing.director_request_id,
+                        director_audit=existing.director_audit,
+                        plan=existing.plan,
+                        requires_approval=True,
+                        render_status="awaiting_consent",
+                    )
+                    self.store.update(
+                        job_id, status=JobStatus.AWAITING_CONSENT, stage="awaiting_consent", result=resumed
+                    )
+                    logger.info("job_awaiting_consent job_id=%s", job_id)
+                    return JobStatus.AWAITING_CONSENT.value
+                return self._await_approval_after_detection(
+                    job_id,
+                    record,
+                    transcript,
+                    existing.plan,
+                    existing.director_plan,
+                    existing.director_usage,
+                    existing.director_request_id,
+                    existing.director_audit,
+                )
 
             self.store.update(job_id, stage="planning")
             director = self.providers.director
@@ -504,14 +645,11 @@ class JobProcessor:
                 )
                 return JobStatus.REJECTED.value
 
-            # Detection happens before review so the user can choose who stays
-            # sharp. Rendering still cannot start before explicit approval.
-            segmentation = None
-            if any(operation.type == "keep_subject_sharp" for operation in plan.operations):
-                self.store.update(job_id, stage="segmenting")
-                segmentation = self._run_segmentation(job_id, record)
-                if not segmentation.subjects:
-                    result = self._persist_plan_result(
+            # Director planned first. SAM runs only for plans that isolate a
+            # subject, and in live mode only after explicit user consent.
+            if self._plan_requires_segmentation(plan):
+                if not self._live_consent_is_valid(record):
+                    deferred = self._persist_plan_result(
                         job_id,
                         transcript=transcript,
                         director_plan=director_plan,
@@ -519,49 +657,24 @@ class JobProcessor:
                         director_request_id=director_request_id,
                         director_audit=director_audit,
                         plan=plan,
-                        segmentation=segmentation,
-                        requires_approval=False,
-                        render_status="no_subjects",
+                        requires_approval=True,
+                        render_status="awaiting_consent",
                     )
                     self.store.update(
-                        job_id,
-                        status=JobStatus.UNSUPPORTED,
-                        stage="no_subjects",
-                        result=result,
-                        error=JobError(
-                            code="NoSubjectsDetected",
-                            message=(
-                                "No people were detected in this clip. Use a clip with a visible "
-                                "person or choose a different edit."
-                            ),
-                        ),
+                        job_id, status=JobStatus.AWAITING_CONSENT, stage="awaiting_consent", result=deferred
                     )
-                    logger.info("job_no_subjects job_id=%s", job_id)
-                    return JobStatus.UNSUPPORTED.value
-
-            # Every ready plan, including blur-only plans, requires explicit user review.
-            result = self._persist_plan_result(
+                    logger.info("job_awaiting_consent job_id=%s", job_id)
+                    return JobStatus.AWAITING_CONSENT.value
+            return self._await_approval_after_detection(
                 job_id,
-                transcript=transcript,
-                director_plan=director_plan,
-                director_usage=director_usage,
-                director_request_id=director_request_id,
-                director_audit=director_audit,
-                plan=plan,
-                segmentation=segmentation,
-                requires_approval=True,
-                render_status="awaiting_approval",
+                record,
+                transcript,
+                plan,
+                director_plan,
+                director_usage,
+                director_request_id,
+                director_audit,
             )
-            self.store.update(
-                job_id, status=JobStatus.AWAITING_APPROVAL, stage="awaiting_approval", result=result
-            )
-            logger.info(
-                "job_awaiting_approval job_id=%s ops=%d subjects=%d",
-                job_id,
-                len(plan.operations),
-                len(segmentation.subjects) if segmentation else 0,
-            )
-            return JobStatus.AWAITING_APPROVAL.value
 
         except Exception as exc:  # recorded + logged, never swallowed; original preserved
             logger.exception("job_failed job_id=%s error=%s", job_id, exc)

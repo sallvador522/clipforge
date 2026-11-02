@@ -23,6 +23,7 @@ from clipforge_jobs.models import JobRecord, JobStateEntry, JobStatus, utc_now
 ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.AWAITING_APPROVAL: {JobStatus.QUEUED, JobStatus.REJECTED},
     JobStatus.AWAITING_CLARIFICATION: {JobStatus.QUEUED, JobStatus.REJECTED},
+    JobStatus.AWAITING_CONSENT: {JobStatus.QUEUED},
 }
 
 

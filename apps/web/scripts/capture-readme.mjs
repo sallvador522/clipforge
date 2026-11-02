@@ -30,9 +30,7 @@ page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
 
 await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
 await page.setInputFiles('input[type="file"]', CLIP);
-await page.getByRole("button", { name: "Upload & create job" }).waitFor({ timeout: 15_000 });
-await page.getByRole("button", { name: "Upload & create job" }).click();
-await page.waitForSelector("text=QUEUED", { timeout: 15_000 }).catch(() => null);
+await page.waitForSelector("text=JOB PROGRESS", { timeout: 15_000 });
 await page.fill("#typed-instruction", "Blur the background");
 await page.locator("#typed-instruction").press("Home");
 await page.waitForTimeout(400);

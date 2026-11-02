@@ -6,6 +6,12 @@ import { formatTime } from "./MediaPanel";
 
 export type ViewMode = "before" | "compare" | "after";
 
+interface SubjectChip {
+  object_id: string;
+  previewUrl: string;
+  selected: boolean;
+}
+
 interface Props {
   originalUrl: string | null;
   editedUrl: string | null;
@@ -19,11 +25,15 @@ interface Props {
   onTimeUpdate: (time: number, duration: number) => void;
   onPlayState: (playing: boolean) => void;
   onFileDrop: (file: File) => void;
+  subjects: SubjectChip[] | null;
+  selectionVisible: boolean;
+  onToggleSubject: (objectId: string) => void;
 }
 
 export function Viewer({
   originalUrl, editedUrl, resultReady, primaryRef, currentTime, duration, playing,
   onTogglePlay, onSeek, onTimeUpdate, onPlayState, onFileDrop,
+  subjects, selectionVisible, onToggleSubject,
 }: Props) {
   const [mode, setMode] = useState<ViewMode>("compare");
   const [split, setSplit] = useState(50);
@@ -106,6 +116,34 @@ export function Viewer({
             )}
             {mode === "compare" && resultReady && (
               <span className="pointer-events-none absolute right-3 top-3 rounded bg-black/70 px-2 py-0.5 font-mono text-[11px] text-accent">EDITED</span>
+            )}
+            {selectionVisible && subjects && subjects.length > 0 && (
+              <div className="absolute bottom-3 left-3 flex max-w-[70%] flex-wrap gap-1.5" role="group" aria-label="Select subjects on the preview">
+                {subjects.map((subject) => (
+                  <button
+                    key={subject.object_id}
+                    type="button"
+                    data-testid={`preview-subject-${subject.object_id}`}
+                    aria-pressed={subject.selected}
+                    aria-label={`Select subject ${subject.object_id} on preview`}
+                    onClick={() => onToggleSubject(subject.object_id)}
+                    className={`flex items-center gap-1.5 rounded-md border bg-black/75 py-1 pl-1 pr-2 backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                      subject.selected ? "border-accent" : "border-border hover:border-muted"
+                    }`}
+                  >
+                    <img
+                      src={subject.previewUrl}
+                      alt=""
+                      aria-hidden
+                      className="h-8 w-8 rounded object-cover"
+                      loading="lazy"
+                    />
+                    <span className={`font-mono text-[10px] ${subject.selected ? "font-semibold text-accent" : "text-muted"}`}>
+                      {subject.selected ? "✓ " : ""}Subject {subject.object_id}
+                    </span>
+                  </button>
+                ))}
+              </div>
             )}
             <AnimatePresence mode="wait">
               <motion.span

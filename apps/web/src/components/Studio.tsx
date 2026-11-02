@@ -11,6 +11,8 @@ import {
   getPlan,
   getResult,
   rejectPlan,
+  submitConsent,
+  subjectPreviewUrl,
   submitTranscript,
   transcribeRecording,
   uploadVideo,
@@ -32,7 +34,6 @@ export function Studio() {
   const [liveAvailable, setLiveAvailable] = useState(false);
   const [liveBilling, setLiveBilling] = useState(false);
   const [billingDismissed, setBillingDismissed] = useState(false);
-  const [segmentationMode, setSegmentationMode] = useState<"mock" | "live" | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -52,6 +53,13 @@ export function Studio() {
   const [decisionError, setDecisionError] = useState<string | null>(null);
   const [consentOpen, setConsentOpen] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
+  const [consentReason, setConsentReason] = useState<string | null>(null);
+  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
+  const planAutoOpenedForRef = useRef<string | null>(null);
+  const consentAutoOpenedForRef = useRef<string | null>(null);
+  const selectionKeyRef = useRef<string | null>(null);
+  const uploadingRef = useRef(false);
+  const handleTranscribeRef = useRef<() => void>(() => {});
 
   const [recording, setRecording] = useState<{ blob: Blob; filename: string } | null>(null);
   const [transcribeStatus, setTranscribeStatus] = useState<TranscribeStatus>("idle");
@@ -75,7 +83,6 @@ export function Studio() {
       .then((h) => {
         setApiMode(h.ai_mode);
         setLiveAvailable(h.live_transcription_available);
-        setSegmentationMode(h.segmentation_mode ?? "mock");
         setLiveBilling(
           h.live_transcription_available ||
             h.director_mode === "live" ||
@@ -117,11 +124,33 @@ export function Studio() {
             } catch {
               setPlanReview(null);
             }
+          } else if (latest.status === "awaiting_consent") {
+            // The director planned first; SAM needs explicit consent before it
+            // may see the video. Fetch the plan for context and ask once per
+            // job — polling continues so authorization resumes the job.
+            try {
+              const review = await getPlan(jobId);
+              setPlanReview((current) => (current?.job_id === jobId ? current : review));
+              const intent = review.plan?.interpreted_intention ?? review.legacy_plan?.raw_transcript ?? null;
+              setConsentReason(intent);
+            } catch {
+              // Plan may not be persisted yet; the next poll retries.
+            }
+            if (consentAutoOpenedForRef.current !== jobId) {
+              consentAutoOpenedForRef.current = jobId;
+              setConsentOpen(true);
+            }
           } else if (REVIEW_WAIT.has(latest.status)) {
             stopPolling();
             const review = await getPlan(jobId);
+            const planKey = `${review.job_id}:${review.plan?.request_id ?? ""}`;
             setPlanReview(review);
-            setPlanDialogOpen(true);
+            // Auto-open once per plan; closing it to inspect the preview must
+            // not pop it back open on the next tick.
+            if (planAutoOpenedForRef.current !== planKey) {
+              planAutoOpenedForRef.current = planKey;
+              setPlanDialogOpen(true);
+            }
           }
         } catch (e) {
           stopPolling();
@@ -132,12 +161,17 @@ export function Studio() {
     [stopPolling],
   );
 
-  function handleFile(selected: File) {
-    setFile(selected);
+  async function uploadFileObject(f: File) {
+    // Idempotent: exactly one job per selection. Extra selects while an
+    // upload is in flight — or after a job exists — are ignored, so no AI
+    // request can ever be triggered by uploading alone.
+    if (uploadingRef.current || job) return;
+    uploadingRef.current = true;
+    setFile(f);
     setError(null);
     setLocalMeta(null);
     if (originalUrl) URL.revokeObjectURL(originalUrl);
-    const url = URL.createObjectURL(selected);
+    const url = URL.createObjectURL(f);
     setOriginalUrl(url);
     setCurrentTime(0);
     setPlaying(false);
@@ -158,36 +192,32 @@ export function Studio() {
       URL.revokeObjectURL(probeSrc);
     };
     probe.src = url;
-  }
-
-  async function handleUpload() {
-    if (!file) return;
     setUploading(true);
     setUploadProgress(0);
-    setError(null);
     try {
-      const created = await uploadVideo(file, setUploadProgress);
+      const created = await uploadVideo(f, setUploadProgress);
       setJob(created);
       setApiError(null);
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : "Upload failed.");
     } finally {
       setUploading(false);
+      uploadingRef.current = false;
     }
   }
 
-  function requestConfirmTranscript() {
-    if (!job || !draft.trim() || segmentationMode === null) return;
+  function handleFile(selected: File) {
     setError(null);
-    if (segmentationMode === "live") {
-      setConsentError(null);
-      setConsentOpen(true);
-      return;
-    }
-    void submitConfirmedTranscript(undefined);
+    void uploadFileObject(selected);
   }
 
-  async function submitConfirmedTranscript(subjectDetectionConsent?: boolean) {
+  function sendInstruction() {
+    if (!job || !draft.trim()) return;
+    setError(null);
+    void submitInstruction();
+  }
+
+  async function submitInstruction() {
     if (!job || !draft.trim()) return;
     setSubmitting(true);
     setError(null);
@@ -197,16 +227,12 @@ export function Studio() {
         job.job_id,
         draft.trim(),
         transcript?.session_id ?? null,
-        subjectDetectionConsent,
       );
       setJob(updated);
       setVoiceSubmitted(true);
-      setConsentOpen(false);
       pollJob(job.job_id);
     } catch (e) {
-      const message = e instanceof ApiClientError ? e.message : "Could not submit the confirmed transcript.";
-      if (subjectDetectionConsent === true) setConsentError(message);
-      else setError(message);
+      setError(e instanceof ApiClientError ? e.message : "Could not send the instruction.");
     } finally {
       setSubmitting(false);
     }
@@ -214,16 +240,48 @@ export function Studio() {
 
   function declineConsent() {
     if (submitting) return;
+    // "Not now" pauses consent; the job stays in awaiting_consent — no SAM
+    // call was or will be made until the user explicitly authorizes.
     setConsentOpen(false);
     setConsentError(null);
   }
 
-  async function handleApprovePlan(subjectIds: string[]) {
+  function reopenConsent() {
+    setConsentError(null);
+    setConsentOpen(true);
+  }
+
+  async function handleAuthorizeConsent() {
+    if (!job) return;
+    setSubmitting(true);
+    setConsentError(null);
+    try {
+      // Exactly one consent grant: the backend persists the source-bound
+      // record and re-queues the job; the worker resumes the stored plan.
+      const updated = await submitConsent(job.job_id);
+      setJob(updated);
+      setConsentOpen(false);
+      pollJob(job.job_id);
+    } catch (e) {
+      setConsentError(e instanceof ApiClientError ? e.message : "Could not record consent.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function toggleSubject(objectId: string) {
+    setSelectedSubjects((current) =>
+      current.includes(objectId) ? current.filter((id) => id !== objectId) : [...current, objectId],
+    );
+  }
+
+  async function handleApprovePlan() {
     if (!job || !planReview) return;
+    if (planReview.subjects.length > 0 && selectedSubjects.length === 0) return;
     setDecisionSubmitting("approve");
     setDecisionError(null);
     try {
-      const updated = await approvePlan(job.job_id, undefined, subjectIds);
+      const updated = await approvePlan(job.job_id, undefined, selectedSubjects);
       setJob(updated);
       // Keep the detection metadata visible to the truthful step tracker while
       // rendering; the dialog is closed and the plan is cleared on completion.
@@ -331,7 +389,41 @@ export function Studio() {
     setTranscript(null);
     setTranscriptSource(null);
     setDraft("");
+    setSelectedSubjects([]);
+    selectionKeyRef.current = null;
+    planAutoOpenedForRef.current = null;
+    consentAutoOpenedForRef.current = null;
+    setConsentOpen(false);
+    setConsentError(null);
+    setConsentReason(null);
+    uploadingRef.current = false;
   }
+
+  // Auto-transcription: stopping a recording sends the audio straight to the
+  // provider — transcription is a service, not a destination, so there is no
+  // Transcribe button. In mock mode recordings are never transcribed.
+  handleTranscribeRef.current = handleTranscribe;
+  useEffect(() => {
+    if (recording && liveAvailable && transcribeStatus === "idle") {
+      handleTranscribeRef.current();
+    }
+  }, [recording, liveAvailable, transcribeStatus]);
+
+  // Shared subject selection: initialized once per plan (auto-select a lone
+  // subject), then toggled from the preview chips or the review cards.
+  useEffect(() => {
+    if (!planReview) return;
+    const planKey = `${planReview.job_id}:${planReview.plan?.request_id ?? ""}`;
+    if (selectionKeyRef.current === planKey) return;
+    selectionKeyRef.current = planKey;
+    setSelectedSubjects(
+      planReview.selected_subject_ids.length > 0
+        ? [...planReview.selected_subject_ids]
+        : planReview.subjects.length === 1
+          ? [planReview.subjects[0].object_id]
+          : [],
+    );
+  }, [planReview]);
 
   const handleSeek = useCallback((time: number) => {
     const video = primaryRef.current;
@@ -439,9 +531,7 @@ export function Studio() {
             jobId={job?.job_id ?? null}
             uploading={uploading}
             uploadProgress={uploadProgress}
-            jobCreated={Boolean(job)}
             onFile={handleFile}
-            onUpload={handleUpload}
             onReplace={reset}
           />
         </div>
@@ -463,6 +553,17 @@ export function Studio() {
             }}
             onPlayState={setPlaying}
             onFileDrop={handleFile}
+            subjects={
+              planReview && job
+                ? planReview.subjects.map((subject) => ({
+                    object_id: subject.object_id,
+                    previewUrl: subjectPreviewUrl(job.job_id, subject.object_id),
+                    selected: selectedSubjects.includes(subject.object_id),
+                  }))
+                : null
+            }
+            selectionVisible={job?.status === "awaiting_approval"}
+            onToggleSubject={toggleSubject}
           />
           <Timeline
             file={file}
@@ -504,11 +605,14 @@ export function Studio() {
             onDraftChange={setDraft}
             onTranscribe={handleTranscribe}
             onTypedInstruction={handleTypedInstruction}
-            canConfirm={Boolean(job && job.status === "queued" && !job.ready && segmentationMode !== null)}
+            canConfirm={Boolean(job && job.status === "queued" && !job.ready)}
             confirming={submitting}
             submitted={voiceSubmitted}
-            onConfirmTranscript={requestConfirmTranscript}
+            onConfirmTranscript={sendInstruction}
             onRetry={reset}
+            reviewOpen={planDialogOpen}
+            consentWaiting={job?.status === "awaiting_consent" && !consentOpen}
+            onConsentContinue={reopenConsent}
           />
         </div>
       </div>
@@ -517,7 +621,8 @@ export function Studio() {
         <ConsentDialog
           submitting={submitting}
           error={consentError}
-          onAuthorize={() => void submitConfirmedTranscript(true)}
+          reason={consentReason}
+          onAuthorize={() => void handleAuthorizeConsent()}
           onDecline={declineConsent}
         />
       )}
@@ -528,6 +633,8 @@ export function Studio() {
           review={planReview}
           submitting={decisionSubmitting}
           error={decisionError}
+          selectedSubjects={selectedSubjects}
+          onToggleSubject={toggleSubject}
           onApprove={handleApprovePlan}
           onReject={handleRejectPlan}
           onClarify={handleClarifyPlan}

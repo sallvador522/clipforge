@@ -38,6 +38,7 @@ def utc_now() -> datetime:
 class JobStatus(str, Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
+    AWAITING_CONSENT = "awaiting_consent"
     AWAITING_APPROVAL = "awaiting_approval"
     AWAITING_CLARIFICATION = "awaiting_clarification"
     REJECTED = "rejected"

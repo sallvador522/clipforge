@@ -25,7 +25,7 @@ from clipforge_contracts import (
     sha256_file,
     validate_subject_detection_consent,
 )
-from clipforge_director import LiveCallAuthorization, LiveCallBudget
+from clipforge_director import LiveCallAuthorization, LiveCallBudget, MockProfessionalEditingDirector
 from clipforge_jobs import JobRecord, JobResult, JobStatus, JobStore
 from clipforge_jobs.models import SourceInfo
 from clipforge_providers import (
@@ -209,7 +209,8 @@ def test_consent_binding_rejects_mismatches(tmp_path, field, value, code):
     assert exc.value.code == code
 
 
-def test_live_without_consent_is_rejected_before_ready_or_worker(tmp_path, tiny_video):
+def test_voice_without_consent_is_accepted_and_defers_to_consent(tmp_path, tiny_video):
+    """Live voice no longer rejects: the worker plans first, then waits for consent."""
     bundle, fake = _live_bundle()
     store = JobStore(tmp_path / "storage")
     client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
@@ -217,25 +218,35 @@ def test_live_without_consent_is_rejected_before_ready_or_worker(tmp_path, tiny_
     job_id = _upload(client, tiny_video)
 
     response = _voice(client, job_id)
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "subject_detection_consent_required"
+    assert response.status_code == 200, response.text
     record = store.get(job_id)
-    assert record.ready is False and record.stage == "awaiting_voice"
+    assert record.ready is True and record.stage == "queued"
     assert record.subject_detection_consent is None
-    assert worker.run_once() is False
+
+    assert worker.run_once() is True
+    deferred = store.get(job_id)
+    assert deferred.status is JobStatus.AWAITING_CONSENT
+    assert deferred.stage == "awaiting_consent"
+    # The director ran (a persisted plan exists) but SAM never did.
+    assert deferred.result is not None
+    assert deferred.result.segmentation is None
+    assert deferred.result.director_plan is not None
     assert fake.calls == 0
+    assert LiveCallBudget(tmp_path / "storage").used("segmentation") == 0
 
 
-def test_explicitly_false_consent_is_rejected(tmp_path, tiny_video):
+def test_explicitly_false_consent_is_accepted_without_a_record(tmp_path, tiny_video):
+    """An explicit decline at voice time is treated as absent, not an error."""
     bundle, fake = _live_bundle()
     store = JobStore(tmp_path / "storage")
     client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
     job_id = _upload(client, tiny_video)
 
     response = _voice(client, job_id, consent=False)
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "subject_detection_consent_required"
-    assert store.get(job_id).ready is False
+    assert response.status_code == 200, response.text
+    record = store.get(job_id)
+    assert record.ready is True
+    assert record.subject_detection_consent is None
     assert fake.calls == 0
 
 
@@ -267,7 +278,7 @@ def test_valid_consent_is_persisted_and_allows_worker_detection(tmp_path, tiny_v
     assert store.get(job_id).status is JobStatus.AWAITING_APPROVAL
 
 
-def test_changing_source_video_invalidates_consent_before_provider_call(tmp_path, tiny_video):
+def test_changing_source_video_defers_then_consent_rejects_mismatch(tmp_path, tiny_video):
     bundle, fake = _live_bundle()
     store = JobStore(tmp_path / "storage")
     client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
@@ -278,41 +289,48 @@ def test_changing_source_video_invalidates_consent_before_provider_call(tmp_path
     with store.source_path(record).open("ab") as handle:
         handle.write(b"changed")
 
+    # The persisted consent no longer matches: the worker must not call SAM.
     assert worker.run_once() is True
-    failed = store.get(job_id)
-    assert failed.status is JobStatus.FAILED
-    assert failed.error is not None
-    assert failed.error.code == "subject_detection_consent_source_mismatch"
+    deferred = store.get(job_id)
+    assert deferred.status is JobStatus.AWAITING_CONSENT
+    assert fake.calls == 0
+
+    # Re-consenting against the changed file is refused with the mismatch code.
+    response = client.post(f"/api/jobs/{job_id}/consent", json={"subject_detection_consent": True})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "subject_detection_consent_source_mismatch"
     assert fake.calls == 0
 
 
-def test_consent_from_another_job_is_rejected(tmp_path, tiny_video):
+def test_consent_endpoint_binds_to_the_calling_job_only(tmp_path, tiny_video):
     bundle, fake = _live_bundle()
     store = JobStore(tmp_path / "storage")
     client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
     worker = PersistentWorker(store, bundle, poll_seconds=0.05)
     first_id = _upload(client, tiny_video, "first.mp4")
-    assert _voice(client, first_id, consent=True).status_code == 200
-    first_consent = store.get(first_id).subject_detection_consent
-    assert first_consent is not None
-
+    assert _voice(client, first_id).status_code == 200
     second_id = _upload(client, tiny_video, "second.mp4")
-    store.update(
-        second_id,
-        ready=True,
-        stage="queued",
-        confirmed_transcript="Desfoca o fundo e mantém-me nítido.",
-        transcript_is_mock=True,
-        subject_detection_consent=first_consent,
-    )
-    store.update(first_id, status=JobStatus.FAILED, stage="failed")
-
+    assert _voice(client, second_id).status_code == 200
     assert worker.run_once() is True
-    failed = store.get(second_id)
-    assert failed.status is JobStatus.FAILED
-    assert failed.error is not None
-    assert failed.error.code == "subject_detection_consent_job_mismatch"
-    assert fake.calls == 0
+    assert worker.run_once() is True
+    assert store.get(first_id).status is JobStatus.AWAITING_CONSENT
+    assert store.get(second_id).status is JobStatus.AWAITING_CONSENT
+
+    # Each job consents independently; records are bound to their own job.
+    assert client.post(f"/api/jobs/{first_id}/consent", json={"subject_detection_consent": True}).status_code == 200
+    first_consent = store.get(first_id).subject_detection_consent
+    assert first_consent is not None and first_consent.job_id == first_id
+    assert store.get(second_id).subject_detection_consent is None
+
+    # A stale record copied from another job can never satisfy validation:
+    # the worker defers instead of calling SAM.
+    store.update(second_id, subject_detection_consent=first_consent)
+    for _ in range(4):
+        if not worker.run_once():
+            break
+    assert store.get(first_id).status is JobStatus.AWAITING_APPROVAL
+    assert store.get(second_id).status is JobStatus.AWAITING_CONSENT
+    assert fake.calls == 1
 
 
 def test_plan_approval_does_not_substitute_for_sam_consent(tmp_path, tiny_video):
@@ -329,16 +347,19 @@ def test_plan_approval_does_not_substitute_for_sam_consent(tmp_path, tiny_video)
     assert fake.calls == 0
 
 
-def test_worker_refuses_live_detection_without_persisted_consent(tmp_path, tiny_video):
+def test_worker_defers_to_consent_without_persisted_record(tmp_path, tiny_video):
     bundle, fake = _live_bundle()
     store, record = _job_record(tmp_path, tiny_video, job_id="worker-no-consent")
     processor = JobProcessor(store, bundle)
 
-    assert processor.process(record.job_id) == JobStatus.FAILED.value
-    failed = store.get(record.job_id)
-    assert failed.error is not None
-    assert failed.error.code == "subject_detection_consent_required"
+    assert processor.process(record.job_id) == JobStatus.AWAITING_CONSENT.value
+    deferred = store.get(record.job_id)
+    assert deferred.status is JobStatus.AWAITING_CONSENT
+    assert deferred.stage == "awaiting_consent"
+    assert deferred.result is not None
+    assert deferred.result.segmentation is None
     assert fake.calls == 0
+    assert LiveCallBudget(store.root).used("segmentation") == 0
 
 
 def test_provider_refuses_consentless_call_before_upload(tmp_path, tiny_video):
@@ -388,3 +409,139 @@ def test_mock_segmentation_still_works_without_consent_or_key(tmp_path, tiny_vid
     assert record.subject_detection_consent is None
     assert worker.run_once() is True
     assert store.get(job_id).status is JobStatus.AWAITING_APPROVAL
+
+
+class _CountingDirector(MockProfessionalEditingDirector):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create_plan(self, transcript, video=None, *, authorization=None, clarification_answer=None):
+        self.calls += 1
+        return super().create_plan(
+            transcript, video, authorization=authorization, clarification_answer=clarification_answer
+        )
+
+
+def _live_bundle_with_counting_director():
+    fake = FakeLiveSegmentation()
+    director = _CountingDirector()
+    bundle = dataclasses.replace(
+        get_providers("mock"),
+        segmentation=fake,
+        segmentation_mode="live",
+        director=director,
+    )
+    return bundle, fake, director
+
+
+def _drain(worker, timeout_seconds: float = 10.0) -> None:
+    import time
+
+    deadline = time.time() + timeout_seconds
+    while worker.run_once():
+        if time.time() > deadline:
+            raise AssertionError("worker did not drain the queue in time")
+
+
+def _post_consent(client, job_id: str, given: bool | None = True):
+    payload = {} if given is None else {"subject_detection_consent": given}
+    return client.post(f"/api/jobs/{job_id}/consent", json=payload)
+
+
+def test_consent_endpoint_grants_and_worker_resumes_without_new_director_call(tmp_path, tiny_video):
+    """Full loop: voice -> consent gate -> consent -> SAM -> approve -> render.
+
+    The director runs exactly once (before the gate); resumption never calls
+    it — or transcription — again, and SAM runs exactly once.
+    """
+    bundle, fake, director = _live_bundle_with_counting_director()
+    store = JobStore(tmp_path / "storage")
+    client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
+    worker = PersistentWorker(store, bundle, poll_seconds=0.05)
+    job_id = _upload(client, tiny_video)
+
+    assert _voice(client, job_id).status_code == 200
+    assert worker.run_once() is True
+    assert store.get(job_id).status is JobStatus.AWAITING_CONSENT
+    assert director.calls == 1
+    assert fake.calls == 0
+
+    # Missing/false consent never authorizes and never touches SAM.
+    assert _post_consent(client, job_id, None).status_code == 422
+    declined = _post_consent(client, job_id, False)
+    assert declined.status_code == 422
+    assert declined.json()["error"]["code"] == "subject_detection_consent_required"
+    assert store.get(job_id).status is JobStatus.AWAITING_CONSENT
+    assert fake.calls == 0
+
+    # One explicit grant re-queues; the worker resumes the persisted plan.
+    granted = _post_consent(client, job_id, True)
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["status"] == "queued"
+    record = store.get(job_id)
+    assert record.subject_detection_consent is not None
+    assert record.subject_detection_consent.job_id == job_id
+
+    # A second grant is a no-op conflict, not a second SAM call.
+    assert _post_consent(client, job_id, True).status_code == 409
+
+    _drain(worker)
+    assert store.get(job_id).status is JobStatus.AWAITING_APPROVAL
+    assert fake.calls == 1
+    assert fake.consents[0] == store.get(job_id).subject_detection_consent
+    assert director.calls == 1
+
+    # Approve both mock subjects and render to verify the whole downstream path.
+    review = client.get(f"/api/jobs/{job_id}/plan").json()
+    subject_ids = [subject["object_id"] for subject in review["subjects"]]
+    assert subject_ids == ["0", "1"]
+    approved = client.post(f"/api/jobs/{job_id}/approve", json={"subject_ids": subject_ids})
+    assert approved.status_code == 200, approved.text
+    _drain(worker)
+    assert store.get(job_id).status is JobStatus.COMPLETED
+    assert store.get(job_id).result.rendered is not None
+    assert fake.calls == 1
+    assert director.calls == 1
+
+
+def test_consent_endpoint_rejects_jobs_not_awaiting_consent(tmp_path, tiny_video):
+    bundle, _ = _live_bundle()
+    store = JobStore(tmp_path / "storage")
+    client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
+    job_id = _upload(client, tiny_video)
+
+    # No plan yet: there is nothing to consent to.
+    response = _post_consent(client, job_id, True)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "consent_not_applicable"
+    assert store.get(job_id).subject_detection_consent is None
+
+
+def test_clarification_never_requests_sam_consent(tmp_path, tiny_video):
+    bundle, fake = _live_bundle()
+    store = JobStore(tmp_path / "storage")
+    client = TestClient(create_app(storage_root=tmp_path / "storage", providers=bundle))
+    worker = PersistentWorker(store, bundle, poll_seconds=0.05)
+    job_id = _upload(client, tiny_video)
+    payload = {"transcript": "Desfoca ele, por favor."}
+    assert client.post(f"/api/jobs/{job_id}/voice", json=payload).status_code == 200
+
+    assert worker.run_once() is True
+    assert store.get(job_id).status is JobStatus.AWAITING_CLARIFICATION
+    assert fake.calls == 0
+    # Consent has no meaning while clarification is pending.
+    assert _post_consent(client, job_id, True).status_code == 409
+
+
+def test_plan_without_subject_isolation_skips_consent(tmp_path):
+    from types import SimpleNamespace
+
+    from clipforge_worker.processor import JobProcessor
+
+    assert JobProcessor._plan_requires_segmentation(
+        SimpleNamespace(operations=[SimpleNamespace(type="keep_subject_sharp")])
+    ) is True
+    assert JobProcessor._plan_requires_segmentation(
+        SimpleNamespace(operations=[SimpleNamespace(type="blur_background")])
+    ) is False
+    assert JobProcessor._plan_requires_segmentation(SimpleNamespace(operations=[])) is False

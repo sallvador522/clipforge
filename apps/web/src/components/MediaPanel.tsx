@@ -18,9 +18,7 @@ interface Props {
   jobId: string | null;
   uploading: boolean;
   uploadProgress: number | null;
-  jobCreated: boolean;
   onFile: (file: File) => void;
-  onUpload: () => void;
   onReplace: () => void;
 }
 
@@ -37,7 +35,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function MediaPanel({
-  file, originalUrl, localMeta, jobMeta, jobId, uploading, uploadProgress, jobCreated, onFile, onUpload, onReplace,
+  file, originalUrl, localMeta, jobMeta, jobId, uploading, uploadProgress, onFile, onReplace,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -111,7 +109,7 @@ export function MediaPanel({
               ["Frames / FPS", jobMeta ? `${jobMeta.frame_count} @ ${jobMeta.fps.toFixed(0)}` : "after upload"],
               ["Audio", hasAudio === null || hasAudio === undefined ? "reading…" : hasAudio ? "present" : "none"],
               ["Size", formatBytes(file.size)],
-              ["Job", jobId ? `${jobId.slice(0, 12)}…` : "not created"],
+              ["Job", jobId ? `${jobId.slice(0, 12)}…` : uploading ? "creating…" : "not created"],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between gap-2">
                 <dt className="text-muted">{k}</dt>
@@ -120,19 +118,16 @@ export function MediaPanel({
             ))}
           </dl>
 
-          {uploading && uploadProgress !== null && (
-            <div className="mt-3">
+          {uploading && (
+            <div className="mt-3" role="status">
               <div className="h-1 overflow-hidden rounded bg-border">
-                <div className="h-full bg-accent transition-[width]" style={{ width: `${uploadProgress}%` }} />
+                <div className="h-full bg-accent transition-[width]" style={{ width: `${uploadProgress ?? 0}%` }} />
               </div>
-              <p className="mt-1 font-mono text-[11px] text-muted">Uploading… {uploadProgress}%</p>
+              <p className="mt-1 font-mono text-[11px] text-muted">Preparing your video… {uploadProgress ?? 0}%</p>
             </div>
           )}
 
           <div className="mt-4 flex flex-col gap-2">
-            <Button onClick={onUpload} disabled={uploading || jobCreated} className="w-full">
-              {jobCreated ? "Uploaded — job created" : uploading ? "Uploading…" : "Upload & create job"}
-            </Button>
             <Button variant="ghost" onClick={onReplace} disabled={uploading} className="w-full">
               Replace media (new session)
             </Button>

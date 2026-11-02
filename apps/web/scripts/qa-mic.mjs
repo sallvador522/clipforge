@@ -87,15 +87,13 @@ if (state === "recording") {
   });
   result.steps.push({ step: "playback", playback });
 
-  // Mock mode: recorded audio exists locally but is intentionally not transcribed.
-  // The transcribe control must be disabled and explain why; no paid request is made.
+  // Mock mode: stopping the recording must NOT transcribe — the service is
+  // unavailable, so the transcript step stays empty and typed input remains
+  // the path. No Transcribe button may exist; no paid request is made.
   result.steps.push({
-    step: "mock_transcription_guard",
+    step: "mock_no_auto_transcribe",
     liveBadge: await page.evaluate(() => (document.body.innerText.match(/LIVE TRANSCRIPTION|MOCK TRANSCRIPTION/) || [])[0] ?? null),
-    transcribeControl: await page.evaluate(() => {
-      const button = Array.from(document.querySelectorAll("button")).find((b) => /Live transcription not enabled|Transcribe recording/.test(b.textContent || ""));
-      return button ? { text: button.textContent?.trim(), disabled: button.disabled } : null;
-    }),
+    transcribeButtons: await page.getByRole("button", { name: /transcribe/i }).count(),
     explanation: await page.evaluate(() => document.body.innerText.includes("recorded audio is not transcribed")),
   });
   await page.screenshot({ path: join(outDir, "microphone-recorded-mock-mode.png") });

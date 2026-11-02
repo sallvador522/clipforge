@@ -69,13 +69,11 @@ async function runFlow(page, { instruction, label, screenshotBase, expectBackgro
 
   await page.setInputFiles('input[type="file"]', CLIP);
   await page.waitForSelector("text=SOURCE — selected", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Upload & create job" }).click();
-  await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
 
   await page.locator("#typed-instruction").fill(instruction);
   await page.getByRole("button", { name: "Use", exact: true }).click();
-  await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
-  await page.waitForSelector("text=Status: completed", { timeout: 90_000 });
+  await page.getByRole("button", { name: /Send to ClipForge/ }).click();
+  await page.waitForSelector("text=Status: Done", { timeout: 90_000 });
   await page.waitForTimeout(800);
 
   const facts = await page.evaluate(() => ({

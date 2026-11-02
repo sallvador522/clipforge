@@ -39,11 +39,10 @@ async function waitForExportEnabled(page, timeout = 60_000) {
 async function uploadAndConfirm(page, instruction) {
   await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
   await page.setInputFiles('input[type="file"]', CLIP);
-  await page.getByRole("button", { name: /Upload & create job/ }).click();
-  await page.waitForFunction(() => document.body.innerText.includes("Uploaded — job created"));
+  await page.waitForFunction(() => document.body.innerText.includes("JOB PROGRESS"), { timeout: 30_000 });
   await page.fill("#typed-instruction", instruction);
   await page.getByRole("button", { name: "Use" }).click();
-  await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
+  await page.getByRole("button", { name: /Send to ClipForge/ }).click();
 }
 
 async function exportVideo(page, filename) {

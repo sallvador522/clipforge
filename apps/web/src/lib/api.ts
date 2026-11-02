@@ -120,6 +120,13 @@ export function submitTranscript(
   });
 }
 
+export function submitConsent(jobId: string): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/consent`, {
+    method: "POST",
+    body: JSON.stringify({ subject_detection_consent: true }),
+  });
+}
+
 export function getJob(jobId: string): Promise<JobResponse> {
   return requestJson<JobResponse>(`/api/jobs/${jobId}`);
 }

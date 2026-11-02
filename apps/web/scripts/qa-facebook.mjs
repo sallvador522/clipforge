@@ -28,13 +28,12 @@ async function run(label, instruction, fileBase) {
   await page.waitForTimeout(600);
   await page.screenshot({ path: join(outDir, `${fileBase}-source.png`) });
 
-  await page.getByRole("button", { name: "Upload & create job" }).click();
-  await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
+  await page.waitForSelector("text=JOB PROGRESS", { timeout: 30_000 });
   await page.locator("#typed-instruction").fill(instruction);
   await page.getByRole("button", { name: "Use", exact: true }).click();
-  await page.getByRole("button", { name: /Confirm transcript & start editing/ }).click();
+  await page.getByRole("button", { name: /Send to ClipForge/ }).click();
 
-  await page.waitForSelector("text=Status: completed", { timeout: 240_000 });
+  await page.waitForSelector("text=Status: Done", { timeout: 240_000 });
   await page.waitForTimeout(1500);
   await page.screenshot({ path: join(outDir, `${fileBase}-result.png`) });
 

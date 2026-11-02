@@ -11,7 +11,9 @@ interface Props {
   review: PlanReviewData;
   submitting: Decision;
   error: string | null;
-  onApprove: (subjectIds: string[]) => void;
+  selectedSubjects: string[];
+  onToggleSubject: (objectId: string) => void;
+  onApprove: () => void;
   onReject: () => void;
   onClarify: (answer: string) => void;
   onClose: () => void;
@@ -37,19 +39,14 @@ export function PlanReviewDialog({
   review,
   submitting,
   error,
+  selectedSubjects,
+  onToggleSubject,
   onApprove,
   onReject,
   onClarify,
   onClose,
 }: Props) {
   const [answer, setAnswer] = useState("");
-  const initialSelection =
-    review.selected_subject_ids.length > 0
-      ? review.selected_subject_ids
-      : review.subjects.length === 1
-        ? [review.subjects[0].object_id]
-        : [];
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>(initialSelection);
   const plan = review.plan;
   const capabilityById = new Map(review.capabilities.map((c) => [c.capability_id, c]));
   const awaitingApproval = review.status === "awaiting_approval";
@@ -62,11 +59,7 @@ export function PlanReviewDialog({
   const canApprove = awaitingApproval && !noSubjects && !needsSelection;
 
   function toggleSubject(objectId: string) {
-    setSelectedSubjects((current) =>
-      current.includes(objectId)
-        ? current.filter((id) => id !== objectId)
-        : [...current, objectId],
-    );
+    onToggleSubject(objectId);
   }
 
   useEffect(() => {
@@ -336,7 +329,7 @@ export function PlanReviewDialog({
                 <Button variant="ghost" onClick={onReject} disabled={submitting !== null}>
                   {submitting === "reject" ? "Rejecting…" : "Reject plan"}
                 </Button>
-                <Button onClick={() => onApprove(selectedSubjects)} disabled={submitting !== null || !canApprove}>
+                <Button onClick={onApprove} disabled={submitting !== null || !canApprove}>
                   {submitting === "approve" ? "Approving…" : hasDetection ? "Approve selected & render" : "Approve & render"}
                 </Button>
               </>

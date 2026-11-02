@@ -6,11 +6,12 @@ import { Button } from "./ui/button";
 interface Props {
   submitting: boolean;
   error: string | null;
+  reason: string | null;
   onAuthorize: () => void;
   onDecline: () => void;
 }
 
-export function ConsentDialog({ submitting, error, onAuthorize, onDecline }: Props) {
+export function ConsentDialog({ submitting, error, reason, onAuthorize, onDecline }: Props) {
   const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
@@ -40,6 +41,11 @@ export function ConsentDialog({ submitting, error, onAuthorize, onDecline }: Pro
         </header>
 
         <div id="sam-consent-copy" className="space-y-4 px-4 py-4">
+          {reason && (
+            <p className="rounded-md border border-accent/40 bg-accent/10 p-3 text-[14px] leading-relaxed">
+              {reason} To do that, ClipForge needs to identify the people in your video first.
+            </p>
+          )}
           <p className="text-[14px] leading-relaxed">
             Para identificar as pessoas no teu vídeo, o ClipForge precisa de enviar uma
             cópia temporária, sem áudio, para a Meta através do SAM 3.1.
@@ -87,7 +93,7 @@ export function ConsentDialog({ submitting, error, onAuthorize, onDecline }: Pro
 
         <footer className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3">
           <Button variant="ghost" onClick={onDecline} disabled={submitting}>
-            Cancelar
+            Not now
           </Button>
           <Button onClick={onAuthorize} disabled={!authorized || submitting}>
             {submitting ? "A autorizar…" : "Autorizar e continuar"}

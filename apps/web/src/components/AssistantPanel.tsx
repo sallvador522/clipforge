@@ -10,20 +10,31 @@ export type TranscribeStatus = "idle" | "uploading" | "transcribing" | "done" | 
 type TranscriptSource = "live" | "mock-audio" | "mock-fixture" | "typed" | null;
 
 const STEPS = [
-  { key: "transcribing", label: "Transcribe voice" },
-  { key: "planning", label: "Build editing plan" },
-  { key: "detecting", label: "Detect subjects — SAM / mock" },
-  { key: "review", label: "Review plan and subjects" },
-  { key: "rendering", label: "Render — FFmpeg + OpenCV" },
-  { key: "verifying", label: "Verify output file" },
+  { key: "instruction", label: "Listening to your instruction" },
+  { key: "planning", label: "Understanding what you want" },
+  { key: "detecting", label: "Detecting people in your video" },
+  { key: "review", label: "Reviewing your plan" },
+  { key: "rendering", label: "Bringing your video to life" },
+  { key: "verifying", label: "Verifying your video" },
   { key: "completed", label: "Done — verified MP4" },
 ];
 const STAGE_INDEX: Record<string, number> = {
   transcribing: 0, planning: 1, replanning: 1,
-  segmenting: 2,
+  segmenting: 2, awaiting_consent: 2,
   awaiting_approval: 3, awaiting_clarification: 3,
   approved: 4, preparing_masks: 4, preparing_background: 4, rendering: 4,
   verifying: 5, completed: 6, pipeline_completed: 6,
+};
+const STATUS_LABEL: Record<string, string> = {
+  queued: "Getting ready",
+  processing: "Working on it",
+  awaiting_consent: "Waiting for your consent",
+  awaiting_approval: "Ready for your review",
+  awaiting_clarification: "Needs your answer",
+  completed: "Done",
+  failed: "Failed",
+  rejected: "Rejected",
+  unsupported: "Not supported",
 };
 
 interface Props {
@@ -50,6 +61,9 @@ interface Props {
   submitted: boolean;
   onConfirmTranscript: () => void;
   onRetry: () => void;
+  reviewOpen: boolean;
+  consentWaiting: boolean;
+  onConsentContinue: () => void;
 }
 
 export function AssistantPanel({
@@ -57,6 +71,7 @@ export function AssistantPanel({
   onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress, transcriptionError,
   transcript, transcriptSource, draft, onDraftChange, onTranscribe,
   onTypedInstruction, canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
+  reviewOpen, consentWaiting, onConsentContinue,
 }: Props) {
   const [recState, setRecState] = useState<RecorderState>("idle");
   const [seconds, setSeconds] = useState(0);
@@ -160,8 +175,8 @@ export function AssistantPanel({
         <div>
           <p className="text-[15px] font-semibold leading-snug">Tell ClipForge what to change.</p>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            Record your instruction, review the transcript, then confirm. Only the confirmed sentence reaches the editing
-            planner.
+            Record or type your instruction, then send it. Only the confirmed sentence reaches the
+            editing planner.
           </p>
         </div>
 
@@ -219,15 +234,13 @@ export function AssistantPanel({
         {recState === "recorded" && (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={onTranscribe} disabled={busy || submitted || !liveAvailable}>
-                {!liveAvailable
-                  ? "Live transcription not enabled"
-                  : transcribeStatus === "uploading"
-                    ? `Uploading audio… ${transcribeProgress ?? 0}%`
-                    : transcribeStatus === "transcribing"
-                      ? "Transcribing…"
-                      : "Transcribe recording"}
-              </Button>
+              <span className="font-mono text-[11px] text-muted">
+                {liveAvailable
+                  ? transcribeStatus === "done"
+                    ? "Transcript ready below — review and send it."
+                    : "Sending your recording for transcription…"
+                  : "Recording kept locally — mock mode never transcribes audio."}
+              </span>
               <Button
                 variant="ghost"
                 onClick={() => {
@@ -296,7 +309,7 @@ export function AssistantPanel({
               {transcript?.confidence != null ? ` · confidence ${transcript.confidence.toFixed(2)}` : ""}
             </p>
             <Button onClick={onConfirmTranscript} disabled={!canConfirm || confirming || submitted || !draft.trim()} className="w-full">
-              {submitted ? "Editing in progress…" : confirming ? "Confirming…" : "Confirm transcript & start editing"}
+              {submitted ? "Editing in progress…" : confirming ? "Sending…" : "Send to ClipForge"}
             </Button>
             {!job && <p className="font-mono text-[11px] text-muted">Upload a clip first — the job is created in the Media panel.</p>}
           </div>
@@ -340,26 +353,34 @@ export function AssistantPanel({
                 <p className="font-mono text-[11px] text-muted">JOB PROGRESS</p>
                 <p className="font-mono text-[11px] text-muted">{job.job_id.slice(0, 8)}… · try {job.attempts}</p>
               </div>
-              <p className="mt-1.5 text-sm">
-                Status:{" "}
+              <p className="mt-1.5 text-sm font-medium">Status:{" "}
                 <span className={job.status === "failed" || job.status === "rejected" || job.status === "unsupported" ? "text-danger" : verified ? "text-success" : "text-accent"}>
-                  {job.status}
+                  {STATUS_LABEL[job.status] ?? job.status}
                 </span>{" "}
                 <span className="font-mono text-[11px] text-muted">({job.stage})</span>
               </p>
-
+              {planReview && !reviewOpen && (job.status === "awaiting_approval" || job.status === "awaiting_clarification") && (
+                <button type="button" onClick={onOpenPlanReview} className="mt-1 font-mono text-[11px] text-accent underline underline-offset-2 hover:text-foreground">
+                  Review plan
+                </button>
+              )}
+              {consentWaiting && (
+                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
+                  <p className="text-[13px] font-medium">Your plan needs people detection first.</p>
+                  <p className="mt-1 text-[12px] text-muted">Consent to the external SAM check to continue — nothing has been sent yet.</p>
+                  <Button className="mt-2" onClick={onConsentContinue}>Continue with subject detection</Button>
+                </div>
+              )}
               {job.status === "awaiting_approval" && (
                 <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
                   <p className="text-[13px] font-medium">Plan ready for your review.</p>
                   <p className="mt-1 text-[12px] text-muted">No video changes have been made. Approve the plan to render.</p>
-                  <Button className="mt-2" onClick={onOpenPlanReview}>Open plan review</Button>
                 </div>
               )}
               {job.status === "awaiting_clarification" && (
                 <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
                   <p className="text-[13px] font-medium">ClipForge needs one clarification.</p>
                   <p className="mt-1 text-[12px] text-muted">Answer the question to rebuild the plan; no rendering has started.</p>
-                  <Button className="mt-2" onClick={onOpenPlanReview}>Answer clarification</Button>
                 </div>
               )}
               {job.status === "rejected" && (
@@ -379,7 +400,6 @@ export function AssistantPanel({
                       ? job.error.message
                       : planReview?.plan?.summary_explanation ?? "This build cannot perform the requested edit."}
                   </p>
-                  {planReview && <Button className="mt-2" onClick={onOpenPlanReview}>View details</Button>}
                 </div>
               )}
 

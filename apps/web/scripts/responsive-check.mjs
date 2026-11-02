@@ -50,14 +50,12 @@ for (const vp of viewports) {
   // Seed the real flow: upload the local clip, attach voice, render, verify.
   await page.setInputFiles('input[type="file"]', "C:\\Users\\New User\\AppData\\Local\\Temp\\opencode\\studio-clip.mp4");
   await page.waitForSelector("text=SOURCE — selected", { timeout: 15_000 });
-  await page.getByRole("button", { name: "Upload & create job" }).click();
-  await page.waitForSelector("text=Uploaded — job created", { timeout: 30_000 });
-  await page.getByRole("radio", { name: /Keep me sharp, blur/ }).click({ timeout: 15_000 });
+  await page.waitForSelector("text=JOB PROGRESS", { timeout: 30_000 });
   // Typed-instruction path: deterministic, microphone-independent, and exercises the accessible alternative.
   await page.locator("#typed-instruction").fill("keep me sharp and blur the rest");
   await page.getByRole("button", { name: "Use", exact: true }).click();
-  await page.getByRole("button", { name: /Confirm & start editing/ }).click();
-  await page.waitForSelector("text=Status: completed", { timeout: 60_000 });
+  await page.getByRole("button", { name: /Send to ClipForge/ }).click();
+  await page.waitForSelector("text=Status: Done", { timeout: 60_000 });
   await page.waitForTimeout(1200);
   const after = await page.evaluate(() => {
     const rect = (sel) => {

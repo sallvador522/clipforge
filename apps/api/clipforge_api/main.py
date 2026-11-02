@@ -73,6 +73,11 @@ class ClarificationRequest(BaseModel):
     answer: str = Field(min_length=1, max_length=300)
 
 
+class ConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject_detection_consent: bool | None = None
+
+
 class JobResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str
@@ -108,6 +113,57 @@ def _to_response(record: JobRecord) -> JobResponse:
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
+
+
+class _ConsentBindingError(Exception):
+    """Binding a consent record failed; carries the HTTP error to return."""
+
+    def __init__(self, status_code: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def _bind_consent_record(record: JobRecord, store: JobStore, bundle: ProviderBundle) -> SubjectDetectionConsent:
+    """Build the source-bound consent record for a live job.
+
+    Raises _ConsentBindingError (no state changed) when the source cannot be
+    read, changed since upload, or the provider identity is missing. Only the
+    explicit caller persists the returned record.
+    """
+    source_path = store.source_path(record)
+    try:
+        source_hash = sha256_file(source_path)
+    except OSError:
+        raise _ConsentBindingError(
+            409,
+            "source_video_unreadable",
+            "The source video could not be read for consent binding.",
+        )
+    if record.source_sha256 and source_hash != record.source_sha256:
+        raise _ConsentBindingError(
+            409,
+            "subject_detection_consent_source_mismatch",
+            "The source video changed after upload; upload it again and provide consent.",
+        )
+    provider_name = getattr(bundle.segmentation, "provider_name", None)
+    model = getattr(bundle.segmentation, "model", None)
+    if not provider_name or not model:
+        raise _ConsentBindingError(
+            500,
+            "segmentation_provider_misconfigured",
+            "Live segmentation provider is missing provider/model identity.",
+        )
+    return SubjectDetectionConsent(
+        job_id=record.job_id,
+        source_video_hash=source_hash,
+        consent_given=True,
+        consent_timestamp=datetime.now(timezone.utc),
+        disclosure_version=SUBJECT_DETECTION_DISCLOSURE_VERSION,
+        provider=provider_name,
+        model=model,
+        segmentation_mode="live",
+    )
 
 
 def _capability_payload(
@@ -317,48 +373,16 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
 
         consent_record = None
         source_hash = None
-        if bundle.segmentation_mode == "live":
-            if body.subject_detection_consent is not True:
-                return _error(
-                    422,
-                    "subject_detection_consent_required",
-                    "Live SAM subject detection requires explicit consent before a "
-                    "video-only copy is sent to Meta. Set subject_detection_consent=true "
-                    "only after showing the disclosure.",
-                )
-            source_path = store.source_path(record)
+        if bundle.segmentation_mode == "live" and body.subject_detection_consent is True:
+            # Pre-granted consent is bound immediately; otherwise the worker
+            # defers the job to awaiting_consent after the director plans, and
+            # the dedicated /consent endpoint collects it then. Absent or false
+            # consent never rejects the voice instruction itself.
             try:
-                source_hash = sha256_file(source_path)
-            except OSError:
-                return _error(
-                    409,
-                    "source_video_unreadable",
-                    "The source video could not be read for consent binding.",
-                )
-            if record.source_sha256 and source_hash != record.source_sha256:
-                return _error(
-                    409,
-                    "subject_detection_consent_source_mismatch",
-                    "The source video changed after upload; upload it again and provide consent.",
-                )
-            provider_name = getattr(bundle.segmentation, "provider_name", None)
-            model = getattr(bundle.segmentation, "model", None)
-            if not provider_name or not model:
-                return _error(
-                    500,
-                    "segmentation_provider_misconfigured",
-                    "Live segmentation provider is missing provider/model identity.",
-                )
-            consent_record = SubjectDetectionConsent(
-                job_id=job_id,
-                source_video_hash=source_hash,
-                consent_given=True,
-                consent_timestamp=datetime.now(timezone.utc),
-                disclosure_version=SUBJECT_DETECTION_DISCLOSURE_VERSION,
-                provider=provider_name,
-                model=model,
-                segmentation_mode="live",
-            )
+                consent_record = _bind_consent_record(record, store, bundle)
+            except _ConsentBindingError as exc:
+                return _error(exc.status_code, exc.code, str(exc))
+            source_hash = consent_record.source_video_hash
 
         changes: dict[str, object] = {"ready": True, "stage": "queued"}
         if consent_record is not None:
@@ -376,6 +400,45 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
             logger.info("voice_attached job_id=%s fixture=%s", job_id, body.audio_fixture_id)
         record = store.update(job_id, **changes)
         return _to_response(record)
+
+    @app.post("/api/jobs/{job_id}/consent", response_model=None)
+    async def submit_consent(job_id: str, body: ConsentRequest) -> JobResponse | JSONResponse:
+        """Grant explicit SAM consent for a job waiting in awaiting_consent.
+
+        Binds the consent to this job and the current source-video hash, then
+        re-queues the job so the worker resumes from the persisted plan —
+        never re-running transcription or the director. No SAM upload happens
+        here; the worker validates the record again before any upload.
+        """
+        record = store.get(job_id)
+        if record.status is not JobStatus.AWAITING_CONSENT:
+            return _error(
+                409,
+                "consent_not_applicable",
+                f"Job {job_id} is {record.status.value}; consent is only collected while awaiting_consent.",
+            )
+        if body.subject_detection_consent is not True:
+            return _error(
+                422,
+                "subject_detection_consent_required",
+                "Live SAM subject detection requires explicit consent. Check the disclosure "
+                "and authorize, or leave the job waiting.",
+            )
+        try:
+            consent_record = _bind_consent_record(record, store, bundle)
+        except _ConsentBindingError as exc:
+            return _error(exc.status_code, exc.code, str(exc))
+        updated = store.transition(
+            job_id,
+            expected=JobStatus.AWAITING_CONSENT,
+            status=JobStatus.QUEUED,
+            stage="queued",
+            actor="user",
+            note="subject detection consent granted",
+            subject_detection_consent=consent_record,
+        )
+        logger.info("subject_detection_consent_granted job_id=%s", job_id)
+        return _to_response(updated)
 
     @app.post("/api/transcribe", response_model=None)
     async def transcribe(file: UploadFile = File(...), mock_fixture_id: str | None = Form(default=None)):
