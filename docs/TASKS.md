@@ -218,3 +218,4 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Verify official SAM 3.1 documentation and implement the adapter + parser + mask conversion (ADR-019); offline validation complete and one live inference validated on 2026-11-01.
 - [x] Verify official Muse Image 1.0 documentation and implement the adapter, PNG/Base64 validation, provenance persistence, idempotent one-per-job generation and `image` budget slot (ADR-021); no live request made.
 - [ ] Propose one controlled SAM integration test and obtain explicit user approval before any live call.
+- [x] Fix live director rejection `strategy='mock_segmentation'`: pin capability param enums in the lite wire schema, reword the playbook away from "mock segmentation", add a regression test (301 tests) and validate with one live call (`largest_subject`, plan accepted).

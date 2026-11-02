@@ -150,8 +150,8 @@ function Stop-JudgeStack {
     foreach ($port in @($apiPort, $webPort)) {
         $owner = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique
-        foreach ($pid in $owner) {
-            try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {}
+        foreach ($ownerPid in $owner) {
+            try { Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue } catch {}
         }
     }
 }

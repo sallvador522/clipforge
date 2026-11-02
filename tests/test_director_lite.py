@@ -114,6 +114,23 @@ def test_lite_wire_schema_size_shape_and_refs():
         assert capability_id in serialized
 
 
+def test_lite_wire_schema_pins_capability_param_enums():
+    """The wire schema must advertise the same enums the strict models accept.
+
+    A free-form `strategy` string let the model copy prompt wording
+    ("mock segmentation") straight into params.strategy, which then failed
+    strict validation after the paid call.
+    """
+    params = LITE_WIRE_SCHEMA["properties"]["operations"]["items"]["properties"]["params"]
+    assert params["properties"]["strategy"]["enum"] == [
+        "largest_subject",
+        "named_subject",
+        "foreground",
+    ]
+    assert params["properties"]["asset_source"]["enum"] == ["local_asset", "mock_generated"]
+    assert params["properties"]["composition"]["enum"] == ["centered", "rule_of_thirds"]
+
+
 def test_lite_payload_budget_developer_under_8k_total_under_9k():
     transcript_text = "Keep me sharp, blur the people behind me and replace the background with a cinematic Luanda sunset."
     calls: dict = {}

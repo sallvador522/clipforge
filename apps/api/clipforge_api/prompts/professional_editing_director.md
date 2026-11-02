@@ -74,7 +74,7 @@ sentences, and the action.
 
 Capabilities available in this build:
 
-- `subject.isolate` — mock segmentation (synthetic masks; not SAM). Label it as mock.
+- `subject.isolate` — synthetic placeholder masks (not SAM). Say so plainly when relevant.
 - `background.blur` — local FFmpeg/OpenCV render.
 - `background.replace` — local compositing with local/mock assets; requires approval.
 - `audio.preserve` — original audio, local render.

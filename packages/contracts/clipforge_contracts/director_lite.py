@@ -72,13 +72,25 @@ LITE_WIRE_SCHEMA: dict = {
                     "params": {
                         "type": "object",
                         "properties": {
-                            "strategy": {"type": "string"},
+                            # Enums mirror the strict capability params models.
+                            # Without them the model copied prompt wording such as
+                            # "mock segmentation" into params.strategy.
+                            "strategy": {
+                                "type": "string",
+                                "enum": ["largest_subject", "named_subject", "foreground"],
+                            },
                             "subject_description": {"type": "string"},
-                            "strength": {"type": "number"},
-                            "feather_px": {"type": "integer"},
+                            "strength": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                            "feather_px": {"type": "integer", "minimum": 0, "maximum": 21},
                             "prompt": {"type": "string"},
-                            "asset_source": {"type": "string"},
-                            "composition": {"type": "string"},
+                            "asset_source": {
+                                "type": "string",
+                                "enum": ["local_asset", "mock_generated"],
+                            },
+                            "composition": {
+                                "type": "string",
+                                "enum": ["centered", "rule_of_thirds"],
+                            },
                         },
                         "additionalProperties": False,
                     },
@@ -119,12 +131,13 @@ LITE_WIRE_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-LITE_BRIEF = """You are ClipForge's professional video editing director. Turn the confirmed instruction into one executable editing plan. Reason with professional editing knowledge, but plan ONLY these available capabilities: subject.isolate (mock masks, not SAM), background.blur (local render), background.replace (local compositing over a generated background: Muse Image when live or local mock; requires approval), audio.preserve, video.render_mp4, output.verify (ffprobe checks). Everything else is unavailable — name it if asked, never plan it.
+LITE_BRIEF = """You are ClipForge's professional video editing director. Turn the confirmed instruction into one executable editing plan. Reason with professional editing knowledge, but plan ONLY these available capabilities: subject.isolate (synthetic placeholder masks, not SAM; params.strategy must be exactly one of largest_subject, named_subject, foreground), background.blur (local render), background.replace (local compositing over a generated background: Muse Image when live or local mock; requires approval), audio.preserve, video.render_mp4, output.verify (ffprobe checks). Everything else is unavailable — name it if asked, never plan it.
 RULES: smallest plan that fulfils the intent; order isolate, background, audio, render, verify; end every executable plan with output.verify; ambiguous subject or intent means needs_clarification with one focused question and zero operations; unsupported request means unsupported naming the capability with zero operations; explain each operation in one sentence, no chain-of-thought; never emit shell commands, paths, URLs, flags, credentials or arbitrary parameters.
 OUTPUT: exactly one JSON object matching the schema, nothing else. Copy request_id and raw_instruction verbatim. Set approval_status to "required" when background.replace is included, else "not_required"."""
 
 _LITE_REGISTRY_LINES = (
-    "subject.isolate [mock masks, not SAM]; background.blur [local]; "
+    "subject.isolate [synthetic placeholder masks, not SAM; "
+    "params.strategy: largest_subject | named_subject | foreground]; background.blur [local]; "
     "background.replace [generated background: Muse Image when live or local mock, REQUIRES APPROVAL]; "
     "audio.preserve [local]; video.render_mp4 [local]; output.verify [local]. "
     "Unavailable (explain, never plan): background.generate (internal step of background.replace; "
