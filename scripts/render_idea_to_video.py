@@ -34,6 +34,54 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+LAYOUT_PROBE_JS = """() => {
+  const stage = document.querySelector('#idea-stage').getBoundingClientRect();
+  // Only typography must never clip. Effect elements (motion entries,
+  // shockwave rings, flashes, dividers) bleed past the frame by design.
+  const TEXT_ELS = ['title', 'conclusion', 'counter'];
+  const bad = [];
+  document.querySelectorAll('#idea-stage section').forEach((sec) => {
+    if (getComputedStyle(sec).opacity === '0') return;
+    sec.querySelectorAll('[data-el]').forEach((el) => {
+      const id = el.dataset.el || '';
+      const isText = TEXT_ELS.includes(id) || id.startsWith('line');
+      if (!isText) return;
+      if (getComputedStyle(el).opacity === '0') return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return;
+      const margin = 8;
+      if (r.left < stage.left - margin || r.top < stage.top - margin ||
+          r.right > stage.right + margin || r.bottom > stage.bottom + margin) {
+        bad.push({
+          scene: sec.dataset.scene, el: id,
+          rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+        });
+      }
+    });
+  });
+  return bad;
+}"""
+
+
+def layout_qa(page, board: Storyboard) -> list[dict]:
+    """Fail fast on text/graphics escaping the 720x1280 stage.
+
+    Seeks to the start/middle/end of every scene and reports visible
+    [data-el] boxes outside the stage bounds. Runs before capture so a
+    layout regression never costs a full render.
+    """
+    violations: list[dict] = []
+    offset = 0
+    for scene in board.scenes:
+        for t in (offset + 1, offset + scene.duration_ms // 2, offset + scene.duration_ms - 1):
+            page.evaluate(f"window.__idea.seek({t})")
+            page.wait_for_timeout(250)
+            for bad in page.evaluate(LAYOUT_PROBE_JS):
+                violations.append({"t_ms": t, **bad})
+        offset += scene.duration_ms
+    return violations
+
+
 def capture(board: Storyboard, args: argparse.Namespace, frames_dir: Path) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -63,7 +111,18 @@ def capture(board: Storyboard, args: argparse.Namespace, frames_dir: Path) -> in
                 f"Scene engine did not respond to seek (scene_1 opacity={opacity}, "
                 f"timeline={debug}); refusing to capture identical frames."
             )
-        for i in range(count):
+        violations = layout_qa(page, board)
+        if violations:
+            browser.close()
+            raise RuntimeError(
+                f"Layout QA failed: {len(violations)} element(s) outside the stage: "
+                f"{json.dumps(violations[:5])}"
+            )
+        have = {p.name for p in frames_dir.glob("frame_*.png")}
+        missing = [i for i in range(count) if f"frame_{i:05d}.png" not in have]
+        if have and missing:
+            print(f"Resuming capture: {len(missing)}/{count} frames missing; reusing the rest.")
+        for i in missing:
             t = min(int(i * 1000 / args.fps), total_ms - 1)
             page.evaluate(f"window.__idea.seek({t})")
             page.locator("#idea-stage").screenshot(path=str(frames_dir / f"frame_{i:05d}.png"))
