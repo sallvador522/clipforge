@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createTimeline, stagger } from "animejs";
+import { createTimeline } from "animejs";
 
 type Step = {
   primitive: string;
@@ -89,8 +89,23 @@ export default function IdeaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board]);
 
+  const syncCounters = (ms: number) => {
+    // onUpdate callbacks are muted during seek, so counters are set
+    // deterministically from the storyboard timing instead.
+    stageRef.current?.querySelectorAll<HTMLElement>("[data-cfrom]").forEach((n) => {
+      const from = Number(n.dataset.cfrom ?? 0);
+      const to = Number(n.dataset.cto ?? 0);
+      const start = Number(n.dataset.cstart ?? 0);
+      const dur = Number(n.dataset.cdur ?? 1);
+      const unit = n.dataset.cunit ?? "";
+      const p = Math.min(1, Math.max(0, (ms - start) / dur));
+      n.textContent = `${Math.round(from + (to - from) * p)}${unit ? ` ${unit}` : ""}`;
+    });
+  };
+
   const seekTo = (ms: number) => {
     tlRef.current?.seek(ms, true);
+    syncCounters(ms);
     setTime(ms);
   };
 
@@ -99,6 +114,21 @@ export default function IdeaPage() {
     if (!root) return;
     tlRef.current?.revert();
     const tl = createTimeline({ autoplay: false, defaults: { ease: "outQuad" } });
+    // Hold helper: completed tweens don't stick on a never-played timeline
+    // under seek-only rendering, so pin each tween's end values with a set.
+    type TweenProps = { [k: string]: number | string | boolean | number[] };
+    const hold = (target: object, props: TweenProps, at: number, d: number) => {
+      const end: TweenProps = {};
+      for (const [k, v] of Object.entries(props)) {
+        if (["duration", "ease", "delay", "onUpdate", "onBegin", "onComplete"].includes(k)) continue;
+        end[k] = Array.isArray(v) ? (v[v.length - 1] as number) : v;
+      }
+      tl.set(target, end, at + d);
+    };
+    const addHold = (target: object, props: TweenProps, at: number, d: number) => {
+      tl.add(target, props, at);
+      hold(target, props, at, d);
+    };
     let offset = 0;
     const easeOf = (s: Step) =>
       s.ease === "inQuad" ? "inQuad" : s.ease === "linear" ? "linear" : "outQuad";
@@ -121,7 +151,7 @@ export default function IdeaPage() {
             const n = el(step.target);
             if (n) {
               tl.set(n, { opacity: 0 }, at);
-              tl.add(n, { opacity: [0, 1], duration: d, ease }, at);
+              addHold(n, { opacity: [0, 1], duration: d, ease }, at, d);
             }
             break;
           }
@@ -129,13 +159,16 @@ export default function IdeaPage() {
             const n = el(step.target);
             if (n) {
               tl.set(n, { y: 80, opacity: 0 }, at);
-              tl.add(n, { y: [80, 0], opacity: [0, 1], duration: d, ease }, at);
+              addHold(n, { y: [80, 0], opacity: [0, 1], duration: d, ease }, at, d);
             }
             break;
           }
           case "text_reveal": {
             const n = el(step.target);
-            if (n) tl.add(n, { opacity: [0, 1], y: [40, 0], duration: d, ease }, at);
+            if (n) {
+              tl.set(n, { opacity: 0, y: 40 }, at);
+              addHold(n, { opacity: [0, 1], y: [40, 0], duration: d, ease }, at, d);
+            }
             break;
           }
           case "kinetic_typography": {
@@ -144,7 +177,9 @@ export default function IdeaPage() {
               const chars = Array.from(n.querySelectorAll<HTMLElement>(".kch"));
               const each = Math.max(120, d / Math.max(1, chars.length));
               chars.forEach((ch, i) => {
-                tl.add(ch, { opacity: [0, 1], y: [30, 0], duration: each, ease }, at + i * 40);
+                const t = at + i * 40;
+                tl.set(ch, { opacity: 0, y: 30 }, t);
+                addHold(ch, { opacity: [0, 1], y: [30, 0], duration: each, ease }, t, each);
               });
             }
             break;
@@ -153,7 +188,7 @@ export default function IdeaPage() {
             const from = Number(step.params?.from_scale ?? 1);
             const to = Number(step.params?.to_scale ?? 1.1);
             tl.set(sec, { scale: from }, offset);
-            tl.add(sec, { scale: [from, to], duration: d, ease: "linear" }, at);
+            addHold(sec, { scale: [from, to], duration: d, ease: "linear" }, at, d);
             break;
           }
           case "camera_pan": {
@@ -162,13 +197,13 @@ export default function IdeaPage() {
             const tx = Number(step.params?.to_x ?? 0.5) * W;
             const ty = Number(step.params?.to_y ?? 0.5) * H;
             tl.set(sec, { x: W / 2 - fx, y: H / 2 - fy }, offset);
-            tl.add(sec, { x: [W / 2 - fx, W / 2 - tx], y: [H / 2 - fy, H / 2 - ty], duration: d, ease: "linear" }, at);
+            addHold(sec, { x: [W / 2 - fx, W / 2 - tx], y: [H / 2 - fy, H / 2 - ty], duration: d, ease: "linear" }, at, d);
             break;
           }
           case "parallax": {
             const layers = sec.querySelectorAll<HTMLElement>("[data-layer]");
             layers.forEach((layer, i) => {
-              tl.add(layer, { y: [0, -30 * (i + 1)], duration: d, ease: "linear" }, at);
+              addHold(layer, { y: [0, -30 * (i + 1)], duration: d, ease: "linear" }, at, d);
             });
             break;
           }
@@ -180,7 +215,7 @@ export default function IdeaPage() {
               const tx = Number(step.params?.to_x ?? 1) * W;
               const ty = Number(step.params?.to_y ?? 1) * H;
               tl.set(n, { x: fx, y: fy }, offset);
-              tl.add(n, { x: [fx, tx], y: [fy, ty], duration: d, ease }, at);
+              addHold(n, { x: [fx, tx], y: [fy, ty], duration: d, ease }, at, d);
             }
             break;
           }
@@ -212,7 +247,7 @@ export default function IdeaPage() {
               const to = Number(step.params?.to_r ?? 0.9) * W;
               tl.set(n, { width: 0, height: 0, opacity: 0 }, offset);
               tl.set(n, { width: from * 2, height: from * 2, opacity: 0.9 }, at);
-              tl.add(n, { width: to * 2, height: to * 2, opacity: [0.9, 0], duration: d, ease: "outQuad" }, at);
+              addHold(n, { width: to * 2, height: to * 2, opacity: [0.9, 0], duration: d, ease: "outQuad" }, at, d);
             }
             break;
           }
@@ -230,6 +265,11 @@ export default function IdeaPage() {
               const from = Number(step.params?.from ?? 0);
               const to = Number(step.params?.to ?? 100);
               const unit = String(step.params?.unit ?? "");
+              n.dataset.cfrom = String(from);
+              n.dataset.cto = String(to);
+              n.dataset.cstart = String(at);
+              n.dataset.cdur = String(d);
+              n.dataset.cunit = unit;
               const obj = { v: from };
               tl.add(obj, { v: to, duration: d, ease: "linear", onUpdate: () => {
                 if (n) n.textContent = `${Math.round(obj.v)}${unit ? ` ${unit}` : ""}`;
@@ -243,7 +283,7 @@ export default function IdeaPage() {
               const heights = [0.5, 0.8, 1];
               const target = heights[i % 3] ?? 1;
               tl.set(bar, { scaleY: 0.05 }, at);
-              tl.add(bar, { scaleY: [0.05, target], duration: d, ease }, at + i * 150);
+              addHold(bar, { scaleY: [0.05, target], duration: d, ease }, at + i * 150, d);
             });
             break;
           }
@@ -252,7 +292,7 @@ export default function IdeaPage() {
             if (path) {
               const len = 600;
               tl.set(path, { strokeDasharray: len, strokeDashoffset: len }, at);
-              tl.add(path, { strokeDashoffset: [len, 0], duration: d, ease: "linear" }, at);
+              addHold(path, { strokeDashoffset: [len, 0], duration: d, ease: "linear" }, at, d);
             }
             break;
           }
@@ -272,15 +312,18 @@ export default function IdeaPage() {
     else tl.pause();
   }, []);
 
-  const kinetic = (text: string) => (
-    <>
-      {text.split("").map((ch, i) => (
-        <span key={i} className="kch" style={{ display: "inline-block", opacity: 0 }}>
-          {ch === " " ? " " : ch}
-        </span>
-      ))}
-    </>
-  );
+  const kinetic = (text: string, animated: boolean) => {
+    if (!animated) return <>{text}</>;
+    return (
+      <>
+        {text.split("").map((ch, i) => (
+          <span key={i} className="kch" style={{ display: "inline-block", opacity: 0 }}>
+            {ch === " " ? " " : ch}
+          </span>
+        ))}
+      </>
+    );
+  };
 
   return (
     <div style={{ background: "#000", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: 16 }}>
@@ -302,15 +345,21 @@ export default function IdeaPage() {
             </svg>
             )}
             <div style={{ position: "absolute", left: 40, right: 40, top: 120 }}>
-              {scene.on_screen_text.map((t, i) => (
-                <div key={i} data-el={i === 0 ? "title" : `line${i}`} style={{ color: "#fff", fontFamily: "Arial, sans-serif", fontWeight: 800, fontSize: i === 0 ? 54 : 34, textShadow: "0 2px 18px rgba(0,0,0,.8)", marginBottom: 12 }}>
-                  {kinetic(t)}
+              {scene.on_screen_text.map((t, i) => {
+                const elId = i === 0 ? "title" : `line${i}`;
+                const animated = scene.animation_sequence.some(
+                  (s) => s.primitive === "kinetic_typography" && s.target === elId
+                );
+                return (
+                <div key={i} data-el={elId} style={{ color: "#fff", fontFamily: "Arial, sans-serif", fontWeight: 800, fontSize: i === 0 ? 54 : 34, textShadow: "0 2px 18px rgba(0,0,0,.8)", marginBottom: 12 }}>
+                  {kinetic(t, animated)}
                 </div>
-              ))}
+                );
+              })}
             </div>
             {used.has("conclusion") && (
             <div data-el="conclusion" style={{ position: "absolute", left: 40, right: 40, bottom: 220, color: "#ffd9a8", fontFamily: "Arial, sans-serif", fontSize: 28, opacity: 0 }}>
-              {kinetic(scene.on_screen_text[scene.on_screen_text.length - 1] ?? "")}
+              {kinetic(scene.on_screen_text[scene.on_screen_text.length - 1] ?? "", scene.animation_sequence.some((s) => s.primitive === "kinetic_typography" && s.target === "conclusion"))}
             </div>
             )}
             {used.has("counter") && <div data-el="counter" style={{ position: "absolute", left: 40, top: 560, color: "#fff", fontFamily: "Arial, sans-serif", fontWeight: 800, fontSize: 72 }}>0 m</div>}

@@ -264,7 +264,7 @@ def asteroid_reels_storyboard() -> Storyboard:
                     "narration_segment": "",
                     "animation_sequence": [
                         {"primitive": "motion_path", "target": "asteroid", "start_ms": 0, "duration_ms": 4500, "params": {"from_x": 0.85, "from_y": -0.1, "to_x": 0.45, "to_y": 0.55}, "ease": "inQuad"},
-                        {"primitive": "text_reveal", "target": "title", "start_ms": 500, "duration_ms": 1500},
+                        {"primitive": "kinetic_typography", "target": "title", "start_ms": 500, "duration_ms": 1500},
                         {"primitive": "camera_zoom", "target": "camera", "start_ms": 0, "duration_ms": 5000, "params": {"from_scale": 1.0, "to_scale": 1.15}},
                     ],
                     "transition_in": "fade",
