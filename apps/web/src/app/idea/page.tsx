@@ -13,10 +13,14 @@ export default function IdeaPage() {
   const [board, setBoard] = useState<Board | null>(null);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [boardPath, setBoardPath] = useState("/idea-fixtures/asteroid.json");
   const rendererRef = useRef<SceneRendererHandle>(null);
 
   useEffect(() => {
-    fetch("/idea-fixtures/asteroid.json")
+    const params = new URLSearchParams(window.location.search);
+    const src = params.get("board") || "/idea-fixtures/asteroid.json";
+    setBoardPath(src);
+    fetch(src)
       .then((r) => r.json())
       .then((b: Board) => setBoard(b));
   }, []);
@@ -49,7 +53,7 @@ export default function IdeaPage() {
         <SceneRenderer
           ref={rendererRef}
           board={board}
-          assetBasePath="/idea-fixtures/assets"
+          assetBasePath={boardPath.split("/").slice(0, -1).join("/") + "/assets"}
           onReady={() => {
             document.title = "READY";
           }}

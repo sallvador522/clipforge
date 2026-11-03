@@ -266,4 +266,14 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
 - **Evidence:** **323 backend tests pass**; frontend typecheck clean (for the slice files); offline PoC rendered 480/480 frames, 0 black, 720×1280, 20.00 s verified MP4. Bugs fixed during the slice: React-commit race producing empty timelines (guard refuses to capture on failed seek), per-scene element scoping, initial-state sets, KineticTypography per-char adds (array-target adds silently no-op in this setup).
 - **Consequences:** the first real generation needs explicit approval within the $1 cap (storyboard ≈ $0.01–0.03 + N×$0.01 images + review TBD). SAM is not involved (no source subjects). The existing editor is unaffected.
 
+## ADR-027: First Real Idea-to-Video Generation (Storyboard + Muse Image Plates)
 
+- **Numbering note:** filed as 027 because the working tree already holds an uncommitted "ADR-026: Social exports" from the parallel session; this entry takes the next free number to avoid a duplicate.
+- **Status:** Delivered (2026-11-03). **Two explicit user approvals:** storyboard call (~$0.0009) and 4 image generations (~$0.04). Total ≈ $0.041 of the $1 cap.
+- **Context:** The post-MVP "Create from an Idea" mode (ADR-025) was offline-only. The user approved the first real generation of the asteroid documentary (20 s, 9:16).
+- **Decision:**
+  - **Storyboard (LIVE-CALL 010):** one `CreativeDirectorProvider` call (Contributor, medium reasoning, 16k cap). Returned a valid `Storyboard`: "IMPACTO: Asteroide Gigante", 4×5 s scenes, labelled assumptions (10 km rocky impactor at 20 km/s, Chicxulub-scale energy, no victim numbers), source refs (NASA CNEOS, Collins et al., DART), Portuguese narration script. Cost $0.000872 (1,461 in / 3,627 out). The model omitted `asset_plan`; derived deterministically 1:1 from per-scene image prompts instead of spending another paid call.
+  - **Assets (LIVE-CALL 011):** four `MuseImageBackgroundProvider` portrait generations (one POST each, one-shot authorizations, no retries), all 1280×1920 PNG, no embedded text, matching their scenes. 4 image ledger slots.
+  - **Assembly:** plates staged under a temporary public bundle, rendered through the shared `SceneRenderer` + deterministic capture + FFmpeg (480/480, layout QA clean), verified MP4 (720×1280, 20.00 s, 2.1 MB), then the public bundle removed — fixtures stay procedural in the repo.
+- **Evidence:** `storage/live-call-010-storyboard-result.json`, `storage/idea_assets_live/` (4 PNGs + sidecars + request ids), `storage/idea_live/idea.mp4` + `storage/IMPACTO_asteroide_gigante_20s.mp4`, copy in the user's `Videos\Video` folder. Ledger now `11/15/8/7`.
+- **Consequences:** the mode is proven end-to-end on real providers; narration mux (user-recorded) and the Studio UI remain the next steps. No further live call without approval.

@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--storyboard", default="apps/web/public/idea-fixtures/asteroid.json")
     parser.add_argument("--base-url", default="http://localhost:3000/idea")
+    parser.add_argument("--board", default=None)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--out", default="storage/idea_poc")
     return parser.parse_args()
@@ -90,7 +91,10 @@ def capture(board: Storyboard, args: argparse.Namespace, frames_dir: Path) -> in
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         page = browser.new_page(viewport={"width": 800, "height": 1400})
-        page.goto(args.base_url, wait_until="load")
+        url = args.base_url
+        if args.board:
+            url += ("&" if "?" in url else "?") + f"board={args.board}"
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
         page.wait_for_function("document.title === 'READY'", timeout=60000)
         # Guard against a stale dev-server build or a missed first paint:
         # retry the seek before refusing to capture identical frames.

@@ -223,6 +223,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Make the live ledger advisory (ADR-022): it counts and reports usage but never blocks by default; hard enforcement is opt-in via explicit `limits=`/`enforce=True`; `/health` reports `live_call_budget_enforced`. Integrity checks, atomic reservations and one-shot authorization are unchanged (304 tests).
 - [x] Accept clarification on ambiguous intent (ADR-023): a paid live plan was rejected because the model asked about the broad intent with a clear subject; v2 no longer forces `subject.is_ambiguous=true`, the v1 adapter and `awaiting_clarification` flow are unchanged (306 tests).
 - [x] Recover dropped SAM streams via response retrieval (ADR-024): capture response id + last frame marker; on a drop, poll non-billable `GET /v1/responses/{id}` and re-parse the stored completed output with no second POST and no new slot. LIVE-CALL 009 (approved ~$0.0354) proved it: drop at 153.3 s, single GET returned completed 177-frame output, real masks written (310 tests).
+- [x] Deliver the first real idea-to-video (ADR-027, approved ≈ $0.041 of the $1 cap): live storyboard `IMPACTO: Asteroide Gigante` ($0.000872, labelled assumptions, refs, narration), 4 Muse Image 9:16 plates (1280×1920, no text), shared SceneRenderer + deterministic capture (480/480, layout QA clean), verified MP4 720×1280 20.00 s 2.1 MB, copy in `Videos\Video`. Narration mux and Studio UI remain open.
 - [x] Deliver the Facebook video end-to-end (job `5ccd24d6`): typed instruction (no audio needed), director `plan_ready`, SAM auto-recovered in production, subject 0 (man in black blazer) approved, Muse Image background, verified render with audio (`Facebook_senhor_de_preto.mp4`, 177 frames, 156,316 bytes).
 
 ## Milestone 7 - Idea-to-Video Vertical Slice (post-MVP, offline-verified)
@@ -234,3 +235,4 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Docs: `docs/IDEA_TO_VIDEO.md`, ADR-025. First real generation needs explicit approval within the $1 cap.
 - [ ] Studio UI for the new mode (preview/demo page only in this slice).
 - [ ] Real Muse Image scene assets + narration mux for the first approved generation.
+
