@@ -241,4 +241,16 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
 - **Evidence:** **306 backend tests pass**. New coverage: a v2 clarification with a clear subject validates, and a lite `needs_clarification` payload with `subject_is_ambiguous=false` converts and adapts to a v1 clarification carrying the question.
 - **Consequences:** the next retry of the same instruction reaches `awaiting_clarification` in the Studio instead of failing. The model is still free to mark the subject ambiguous when the person is genuinely unclear; nothing forces either value.
 
+## ADR-024: SAM Stream Recovery via Response Retrieval
+
+- **Status:** Implemented and live-validated (2026-11-03). **One live SAM call was made with explicit user approval** (LIVE-CALL 009, ~$0.0354 for 177 frames at $0.20/1000).
+- **Context:** Five consecutive SAM streams on the same 177-frame clip dropped at ~150–190 s with ~176–177 events received and no terminal event, while one earlier identical call completed in 135.6 s. Instrumented logs (Fase 0: response id, per-type counts, last frame marker) showed every drop happens *after* all frame data arrived, during finalization silence. The Responses docs state that with `store=true` (the default, never disabled) the server keeps processing after a client disconnect and persists the final result — but the provider discarded the only access key (the `resp_...` id from `response.created`) and only kept the unrelated `x-request-id` header.
+- **Decision:**
+  - **Observe (Fase 0):** `_collect` records the response id, event-type histogram and last `<Nf>` frame marker; `SamStreamInterruptedError` and `last_response_id` carry the id; the warning log includes all three.
+  - **Recover (Fase 2):** on a drop with an observed id, the provider polls `GET /v1/responses/{id}` (bounded ~120 s, 404 treated as still-persisting) and, when the stored response reports `completed`, re-parses its `output_text` through the official parser as synthetic events (`delta` → `done` → `completed` on one lane) and converts exactly like a live stream, with a `"retrieval"` provenance diagnostic. Recovery uses GETs only: no second POST, no new ledger slot, never billed.
+  - **Failures stay explicit:** no observed id, a stored `failed/cancelled/incomplete` status, empty output text or retrieval timeout surface `SamIncompleteStreamError`; the original interruption propagates when recovery is impossible.
+  - **No partial masks:** the write path is unchanged — masks are written only from a fully validated completed parse.
+- **Evidence:** **310 backend tests pass**, including drop-without-id (original error, no network), drop-with-id attempting retrieval, stored-failure refusal, and full recovery writing real masks from fixture text with the provenance diagnostic. LIVE-CALL 009 dropped at 153.3 s (177 events, last frame 172) and its single follow-up GET returned HTTP 200 `completed` with the full 177-frame output (2 objects); the recovered masks were written locally with zero additional billed calls.
+- **Consequences:** a dropped SAM stream no longer wastes the paid call whenever the server persisted the result. Each attempt still bills one SAM slot on the POST; GETs never bill. If the server itself fails a response, the job still fails explicitly as before.
+
 

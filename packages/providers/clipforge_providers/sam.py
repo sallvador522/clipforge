@@ -108,13 +108,53 @@ class SamStreamInterruptedError(SamError):
 
     Carries a stable `code` so a job record distinguishes a transport
     interruption from a provider rejection or a mask-validation failure.
+    `response_id` is the stored Responses id (when the server sent
+    `response.created` before the drop) so a later retrieval can check
+    whether the server kept processing after our socket died.
     """
 
     code = "sam_stream_interrupted"
 
+    def __init__(self, message: str, *, response_id: str | None = None) -> None:
+        super().__init__(message)
+        self.response_id = response_id
+
 
 class SamValidationError(SamError):
     pass
+
+
+_FRAME_MARKER_PATTERN = re.compile(r"<(\d+)f>")
+
+
+def _output_text(body: dict[str, Any]) -> str:
+    """Collect the completed output_text from a retrieved Responses body."""
+    parts: list[str] = []
+    output = body.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        for block in item.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "output_text":
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+    return "".join(parts)
+
+
+def _frame_marker(delta: object) -> int | None:
+    """Extract the last `<Nf>` frame marker from an output-text delta, if any."""
+    if not isinstance(delta, str):
+        return None
+    matches = _FRAME_MARKER_PATTERN.findall(delta)
+    if not matches:
+        return None
+    try:
+        return int(matches[-1])
+    except ValueError:
+        return None
 
 
 def _stream_failure(exc: BaseException) -> tuple[str, str] | None:
@@ -202,6 +242,7 @@ class SamSegmentationProvider:
         event_stream: Callable[[dict[str, Any]], Iterable[dict[str, Any]] | AsyncIterable[dict[str, Any]]] | None = None,
         file_uploader: Callable[[Path], str] | None = None,
         file_deleter: Callable[[str], None] | None = None,
+        response_retriever: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         if not api_key.strip():
             raise SamMissingCredentialsError(
@@ -215,7 +256,9 @@ class SamSegmentationProvider:
         self._event_stream = event_stream
         self._file_uploader = file_uploader
         self._file_deleter = file_deleter
+        self._response_retriever = response_retriever
         self.last_request_id: str | None = None
+        self.last_response_id: str | None = None
         self.last_file_id: str | None = None
         self.last_file_cleanup: str = "not_applicable"
 
@@ -284,7 +327,21 @@ class SamSegmentationProvider:
                 authorization.reserve()  # immediately before the billable Responses POST
                 payload = self._request_payload(file_id, effective_prompt)
                 inference_start = time.perf_counter()
-                parsed = asyncio.run(self._collect(payload))
+                recovered = False
+                try:
+                    parsed = asyncio.run(self._collect(payload))
+                except SamStreamInterruptedError as exc:
+                    # The POST already billed; recovery re-reads the stored
+                    # result with GETs only — no second POST, no new slot.
+                    if not exc.response_id:
+                        raise
+                    parsed = self._recover_via_retrieval(exc.response_id)
+                    recovered = True
+                    logger.info(
+                        "sam_stream_recovered job_id=%s response_id=%s",
+                        job_id,
+                        exc.response_id,
+                    )
                 inference_seconds = time.perf_counter() - inference_start
                 result = self._convert(
                     parsed,
@@ -298,6 +355,17 @@ class SamSegmentationProvider:
                     source_sha256=source_sha256,
                     source_path=source,
                 )
+                if recovered:
+                    result = result.model_copy(
+                        update={
+                            "diagnostics": [
+                                *result.diagnostics,
+                                "Recovered the completed segmentation via response "
+                                "retrieval after the live stream dropped; no second "
+                                "billable request was made.",
+                            ]
+                        }
+                    )
             finally:
                 if file_id is not None:
                     try:
@@ -308,7 +376,7 @@ class SamSegmentationProvider:
                         logger.warning(
                             "sam_file_cleanup_failed file_id=%s error=%s", file_id, type(exc).__name__
                         )
-            self.last_file_cleanup = cleanup
+                    self.last_file_cleanup = cleanup
             logger.info(
                 "sam_segmentation_completed job_id=%s request_id=%s subjects=%d "
                 "inference_seconds=%.2f cleanup=%s",
@@ -393,6 +461,76 @@ class SamSegmentationProvider:
             return  # already expired/deleted
         self._raise_for_status(response, "SAM file deletion")
 
+    # -- recovery via response retrieval -------------------------------------
+    # When our socket dies mid-stream the server keeps processing (store=true
+    # is the default and we never disable it) and persists the final result.
+    # Recovery re-reads that stored result with GETs only: it never POSTs, is
+    # never billed, and never reserves another ledger slot.
+    _RETRIEVAL_DEADLINE_SECONDS = 120.0
+    _RETRIEVAL_POLL_SECONDS = 5.0
+
+    def _recover_via_retrieval(self, response_id: str):
+        """Poll the stored response and re-parse its completed output text."""
+        deadline = time.perf_counter() + self._RETRIEVAL_DEADLINE_SECONDS
+        while True:
+            body = self._retrieve_response(response_id)
+            status = body.get("status") if isinstance(body, dict) else None
+            if status == "completed":
+                text = _output_text(body)
+                if not text:
+                    raise SamIncompleteStreamError(
+                        "The stored SAM response completed with empty output text."
+                    )
+                return asyncio.run(self._parse_retrieved(text, response_id))
+            if status in ("failed", "cancelled", "incomplete"):
+                raise SamIncompleteStreamError(
+                    f"The stored SAM response ended with status {status!r}; no masks were written."
+                )
+            if time.perf_counter() >= deadline:
+                raise SamIncompleteStreamError(
+                    "The stored SAM response did not complete in time; no masks were written."
+                )
+            time.sleep(self._RETRIEVAL_POLL_SECONDS)
+
+    def _retrieve_response(self, response_id: str) -> dict[str, Any]:
+        if self._response_retriever is not None:
+            return self._response_retriever(response_id)
+        try:
+            response = httpx.get(
+                f"{self._base_url}/responses/{response_id}",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=30.0,
+            )
+        except httpx.TimeoutException as exc:
+            raise SamTimeoutError("SAM response retrieval timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise SamAPIError("SAM response retrieval failed before a response was received.") from exc
+        if response.status_code == 404:
+            return {"status": "in_progress"}
+        self._raise_for_status(response, "SAM response retrieval")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise SamAPIError("SAM response retrieval returned invalid JSON.") from exc
+        return body if isinstance(body, dict) else {}
+
+    @staticmethod
+    async def _parse_retrieved(text: str, response_id: str):
+        """Feed stored output text through the parser as synthetic events."""
+        lane = {"item_id": "retrieved", "output_index": 0, "content_index": 0}
+
+        async def synthetic():
+            yield {"type": "response.output_text.delta", "delta": text, **lane}
+            yield {"type": "response.output_text.done", "text": text, **lane}
+            yield {
+                "type": "response.completed",
+                "response": {"id": response_id, "status": "completed"},
+                **lane,
+            }
+
+        parsed = parse_responses_stream(synthetic(), video_segmentation_format())
+        return await parsed.final_result()
+
     # -- Responses stream ----------------------------------------------------
     def _require_authorization(self, authorization) -> None:
         from clipforge_director import LiveCallAuthorization
@@ -415,14 +553,36 @@ class SamSegmentationProvider:
     async def _collect(self, payload: dict[str, Any]):
         source = self._event_source(payload)
         received = 0
+        # Fase 0: observe the stream without mutating what the parser sees.
+        # response.created carries the stored Responses id; per-type counts and
+        # the last frame marker turn the next "dropped at NNNs" into an exact
+        # position (e.g. "after frame X of 177, resp id = ...").
+        observed_response_id: str | None = None
+        observed_types: dict[str, int] = {}
+        last_frame: int | None = None
 
         async def counted():
-            nonlocal received
+            nonlocal received, observed_response_id, last_frame
             async for event in self._as_async(source):
                 received += 1
+                if isinstance(event, dict):
+                    event_type = event.get("type")
+                    if isinstance(event_type, str):
+                        observed_types[event_type] = observed_types.get(event_type, 0) + 1
+                    if event_type == "response.created":
+                        response = event.get("response")
+                        if isinstance(response, dict):
+                            candidate = response.get("id")
+                            if isinstance(candidate, str) and candidate:
+                                observed_response_id = candidate
+                    elif event_type == "response.output_text.delta":
+                        marker = _frame_marker(event.get("delta"))
+                        if marker is not None:
+                            last_frame = marker
                 yield event
 
         parsed = parse_responses_stream(counted(), video_segmentation_format())
+        self.last_response_id = None
         started = time.perf_counter()
         try:
             return await parsed.final_result()
@@ -432,11 +592,16 @@ class SamSegmentationProvider:
                 raise
             kind, root_cause = failure
             elapsed = time.perf_counter() - started
+            self.last_response_id = observed_response_id
             logger.warning(
-                "sam_stream_interrupted request_id=%s kind=%s events=%d elapsed=%.1fs cause=%s",
+                "sam_stream_interrupted request_id=%s response_id=%s kind=%s events=%d "
+                "last_frame=%s types=%s elapsed=%.1fs cause=%s",
                 self.last_request_id,
+                observed_response_id,
                 kind,
                 received,
+                last_frame,
+                observed_types,
                 elapsed,
                 root_cause,
             )
@@ -447,7 +612,8 @@ class SamSegmentationProvider:
                 reason = f"The connection to SAM dropped after {elapsed:.0f}s"
             raise SamStreamInterruptedError(
                 f"{reason} while receiving masks ({received} stream event{plural} received). "
-                "No masks were written and no retry was attempted."
+                "No masks were written and no retry was attempted.",
+                response_id=observed_response_id,
             ) from exc
 
     @staticmethod

@@ -319,11 +319,15 @@ def test_sam_stream_drop_reports_event_count_and_stable_code(tmp_path):
     """
     video = _source_video(tmp_path)
     events = _fixture("one_person")["events"]
+    # Skip response.created: with no observed response id there is nothing to
+    # retrieve, so the original interruption must surface untouched (and no
+    # network retrieval may be attempted with the dummy key).
+    deltas = [e for e in events if e.get("type") == "response.output_text.delta"][:2]
     deleted: list[str] = []
 
     def stream(payload: dict):
         def generator():
-            for event in events[:2]:
+            for event in deltas:
                 yield event
             raise httpx.ReadError("connection reset by peer")
 
@@ -354,8 +358,159 @@ def test_sam_stream_drop_reports_event_count_and_stable_code(tmp_path):
     assert "2 stream events received" in message
     assert "no retry was attempted" in message
     assert excinfo.value.code == "sam_stream_interrupted"
+    # Fase 0: the stored Responses id survives the drop for later retrieval.
+    assert excinfo.value.response_id is None
+    assert provider.last_response_id is None
     assert deleted == ["file-drop"]
     assert not (tmp_path / "masks" / "manifest.json").exists()
+
+
+def test_drop_with_response_id_attempts_retrieval_before_failing(tmp_path):
+    """With an observed id, recovery must try the stored response first.
+
+    Here retrieval reports a terminal failure, so the interruption still
+    surfaces — but only after the no-cost GET was attempted.
+    """
+    video = _source_video(tmp_path)
+    events = _fixture("one_person")["events"]
+    attempted: list[str] = []
+
+    def stream(payload: dict):
+        def generator():
+            for event in events[:2]:
+                yield event
+            raise httpx.ReadError("connection reset by peer")
+
+        return generator()
+
+    def retriever(response_id: str) -> dict:
+        attempted.append(response_id)
+        return {"status": "failed"}
+
+    provider = SamSegmentationProvider(
+        "test-key",
+        event_stream=stream,
+        file_uploader=lambda path: "file-drop",
+        file_deleter=lambda file_id: None,
+        response_retriever=retriever,
+    )
+    with pytest.raises(SamIncompleteStreamError):
+        provider.segment(
+            job_id="job-drop-retrieve",
+            source_video_id="src-drop-retrieve",
+            output_dir=tmp_path / "masks",
+            width=64,
+            height=36,
+            frame_count=5,
+            fps=10.0,
+            source_path=video,
+            authorization=_auth(tmp_path),
+            consent=_consent(video, "job-drop-retrieve"),
+        )
+    assert attempted == ["resp_fixture"]
+    assert provider.last_response_id == "resp_fixture"
+
+
+def test_frame_marker_extraction_for_drop_diagnostics():
+    from clipforge_providers.sam import _frame_marker
+
+    assert _frame_marker("text<0f>0<|box;x") == 0
+    assert _frame_marker("text<176f>0<|box;x") == 176
+    assert _frame_marker("no marker here") is None
+    assert _frame_marker(None) is None
+    assert _frame_marker(123) is None
+
+
+def test_dropped_stream_recovers_via_response_retrieval(tmp_path):
+    """LIVE-CALL 009 proved the server keeps the result after our socket dies.
+
+    The stream drops with a response id; recovery GETs the stored completed
+    response (no second POST, no new ledger slot) and writes the real masks.
+    """
+    video = _source_video(tmp_path)
+    fixture = _fixture("one_person")
+    done_text = next(
+        e["text"] for e in fixture["events"] if e.get("type") == "response.output_text.done"
+    )
+    deleted: list[str] = []
+    retrieved: list[str] = []
+
+    def stream(payload: dict):
+        def generator():
+            for event in fixture["events"][:2]:
+                yield event
+            raise httpx.ReadError("connection reset by peer")
+
+        return generator()
+
+    def retriever(response_id: str) -> dict:
+        retrieved.append(response_id)
+        return {
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": done_text}]}
+            ],
+        }
+
+    provider = SamSegmentationProvider(
+        "test-key",
+        event_stream=stream,
+        file_uploader=lambda path: "file-recovered",
+        file_deleter=lambda file_id: deleted.append(file_id),
+        response_retriever=retriever,
+    )
+    result = provider.segment(
+        job_id="job-recovered",
+        source_video_id="src-recovered",
+        output_dir=tmp_path / "masks",
+        width=64,
+        height=36,
+        frame_count=5,
+        fps=10.0,
+        source_path=video,
+        authorization=_auth(tmp_path),
+        consent=_consent(video, "job-recovered"),
+    )
+
+    assert retrieved == ["resp_fixture"]
+    assert [s.object_id for s in result.subjects] == ["0"]
+    assert result.subjects[0].frames_detected == 5
+    assert (tmp_path / "masks" / "manifest.json").exists()
+    assert any("retrieval" in d for d in result.diagnostics)
+    assert deleted == ["file-recovered"]
+
+
+def test_recovery_refuses_when_stored_response_failed(tmp_path):
+    video = _source_video(tmp_path)
+    events = _fixture("one_person")["events"]
+
+    def stream(payload: dict):
+        def generator():
+            yield events[0]
+            raise httpx.ReadError("connection reset by peer")
+
+        return generator()
+
+    provider = SamSegmentationProvider(
+        "test-key",
+        event_stream=stream,
+        file_uploader=lambda path: "file-failed",
+        file_deleter=lambda file_id: None,
+        response_retriever=lambda response_id: {"status": "failed"},
+    )
+    with pytest.raises(SamIncompleteStreamError):
+        provider.segment(
+            job_id="job-stored-failed",
+            source_video_id="src-stored-failed",
+            output_dir=tmp_path / "masks",
+            width=64,
+            height=36,
+            frame_count=5,
+            fps=10.0,
+            source_path=video,
+            authorization=_auth(tmp_path),
+            consent=_consent(video, "job-stored-failed"),
+        )
 
 
 def test_sam_file_upload_uses_user_data_and_minimum_expiration(monkeypatch, tmp_path):
