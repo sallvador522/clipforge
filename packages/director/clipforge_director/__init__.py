@@ -1,5 +1,14 @@
 """Professional Editing Director package (Milestone 6B-PREP)."""
 
+from clipforge_director.creative import (
+    CREATIVE_BRIEF,
+    CreativeDirectorProvider,
+    MockCreativeDirector,
+    allowed_primitives,
+    apply_correction,
+    asteroid_reels_storyboard,
+    storyboard_request_id,
+)
 from clipforge_director.evaluation import (
     CorrectionAttempt,
     ObjectiveChecks,
@@ -35,7 +44,9 @@ from clipforge_director.spark import (
 )
 
 __all__ = [
+    "CREATIVE_BRIEF",
     "CorrectionAttempt",
+    "CreativeDirectorProvider",
     "DirectorAPIError",
     "DirectorRateLimitedError",
     "DirectorTimeoutError",
@@ -51,6 +62,7 @@ __all__ = [
     "LiveCallBudget",
     "LiveCallNotAuthorizedError",
     "MetaEditingDirectorProvider",
+    "MockCreativeDirector",
     "MockProfessionalEditingDirector",
     "ObjectiveChecks",
     "OutputEvaluationReport",
@@ -58,9 +70,13 @@ __all__ = [
     "SamplePoint",
     "SparkDirectorError",
     "SparkMissingCredentialsError",
+    "allowed_primitives",
+    "apply_correction",
+    "asteroid_reels_storyboard",
     "build_developer_prompt",
     "build_user_prompt",
     "calculate_cost_usd",
     "estimate_tokens",
     "evaluate_output",
+    "storyboard_request_id",
 ]

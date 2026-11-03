@@ -1,0 +1,310 @@
+{
+  "schema_version": "1.0",
+  "project_title": "E se um asteroide gigante atingisse a Terra?",
+  "user_request": "E se um asteroide gigante atingisse a Terra?",
+  "target_audience": "Curious general audience",
+  "tone": "Cinematic scientific documentary",
+  "duration_seconds": 20,
+  "aspect_ratio": "9:16",
+  "output_fps": 24,
+  "resolution": "720x1280",
+  "visual_style_bible": "Dark space blues, ember orange accents, volumetric light, film grain, bold condensed typography.",
+  "scientific_assumptions": [
+    "Impactor ~1 km stony asteroid at ~20 km/s, ocean-adjacent land strike; labelled as illustrative assumptions."
+  ],
+  "narration_script": "Narration recorded by the user; captions render on screen.",
+  "scenes": [
+    {
+      "scene_id": "scene_1",
+      "duration_ms": 5000,
+      "narrative_purpose": "Hook: a silent rock crossing the dark.",
+      "visual_description": "Starfield with Earth small below; asteroid enters on a motion path.",
+      "image_generation_prompt": "Deep space starfield, small blue Earth below, dark rocky asteroid, cinematic, vertical 9:16, no text",
+      "foreground_elements": [
+        "asteroid"
+      ],
+      "background_elements": [
+        "starfield",
+        "earth"
+      ],
+      "on_screen_text": [
+        "UM VISITANTE SILENCIOSO"
+      ],
+      "narration_segment": "",
+      "animation_sequence": [
+        {
+          "primitive": "motion_path",
+          "target": "asteroid",
+          "start_ms": 0,
+          "duration_ms": 4500,
+          "params": {
+            "from_x": 0.85,
+            "from_y": -0.1,
+            "to_x": 0.45,
+            "to_y": 0.55
+          },
+          "ease": "inQuad"
+        },
+        {
+          "primitive": "text_reveal",
+          "target": "title",
+          "start_ms": 500,
+          "duration_ms": 1500,
+          "params": {},
+          "ease": "outQuad"
+        },
+        {
+          "primitive": "camera_zoom",
+          "target": "camera",
+          "start_ms": 0,
+          "duration_ms": 5000,
+          "params": {
+            "from_scale": 1.0,
+            "to_scale": 1.15
+          },
+          "ease": "outQuad"
+        }
+      ],
+      "transition_in": "fade",
+      "transition_out": "dissolve",
+      "scientific_claims": [
+        "Most asteroids are rocky bodies orbiting the Sun."
+      ],
+      "source_references": [
+        "NASA CNEOS overview"
+      ]
+    },
+    {
+      "scene_id": "scene_2",
+      "duration_ms": 5000,
+      "narrative_purpose": "Atmospheric entry: compression heats the air.",
+      "visual_description": "Asteroid streaks over the limb of Earth, plasma trail and particles.",
+      "image_generation_prompt": "Asteroid entering Earth atmosphere with glowing plasma trail over ocean, cinematic vertical 9:16, no text",
+      "foreground_elements": [
+        "asteroid",
+        "plasma_trail"
+      ],
+      "background_elements": [
+        "earth_limb",
+        "clouds"
+      ],
+      "on_screen_text": [
+        "20 KM/S",
+        "O AR INCENDEIA-SE"
+      ],
+      "narration_segment": "",
+      "animation_sequence": [
+        {
+          "primitive": "motion_path",
+          "target": "asteroid",
+          "start_ms": 0,
+          "duration_ms": 3500,
+          "params": {
+            "from_x": 0.1,
+            "from_y": 0.1,
+            "to_x": 0.7,
+            "to_y": 0.6
+          },
+          "ease": "inQuad"
+        },
+        {
+          "primitive": "particle_burst",
+          "target": "plasma_trail",
+          "start_ms": 800,
+          "duration_ms": 2700,
+          "params": {
+            "count": 120
+          },
+          "ease": "outQuad"
+        },
+        {
+          "primitive": "flash",
+          "target": "flash",
+          "start_ms": 3300,
+          "duration_ms": 700,
+          "params": {},
+          "ease": "outQuad"
+        }
+      ],
+      "transition_in": "dissolve",
+      "transition_out": "cut",
+      "scientific_claims": [
+        "Entry speed converts kinetic energy into heat and light."
+      ],
+      "source_references": []
+    },
+    {
+      "scene_id": "scene_3",
+      "duration_ms": 5000,
+      "narrative_purpose": "Impact: flash and shockwave ring.",
+      "visual_description": "Blinding flash on the horizon, expanding shockwave ring over terrain.",
+      "image_generation_prompt": "Asteroid impact flash on horizon with expanding dust ring, dramatic vertical 9:16, no text",
+      "foreground_elements": [
+        "shockwave"
+      ],
+      "background_elements": [
+        "terrain",
+        "sky"
+      ],
+      "on_screen_text": [
+        "IMPACTO"
+      ],
+      "narration_segment": "",
+      "animation_sequence": [
+        {
+          "primitive": "flash",
+          "target": "flash",
+          "start_ms": 0,
+          "duration_ms": 1200,
+          "params": {},
+          "ease": "outQuad"
+        },
+        {
+          "primitive": "shockwave_ring",
+          "target": "shockwave",
+          "start_ms": 400,
+          "duration_ms": 3000,
+          "params": {
+            "from_r": 0.05,
+            "to_r": 0.9
+          },
+          "ease": "outQuad"
+        },
+        {
+          "primitive": "camera_pan",
+          "target": "camera",
+          "start_ms": 0,
+          "duration_ms": 5000,
+          "params": {
+            "from_x": 0.5,
+            "from_y": 0.5,
+            "to_x": 0.5,
+            "to_y": 0.42
+          },
+          "ease": "outQuad"
+        }
+      ],
+      "transition_in": "cut",
+      "transition_out": "dissolve",
+      "scientific_claims": [
+        "Effects depend on size, composition, velocity and location."
+      ],
+      "source_references": []
+    },
+    {
+      "scene_id": "scene_4",
+      "duration_ms": 5000,
+      "narrative_purpose": "Conclusion: scale infographic and sources.",
+      "visual_description": "Dark chart backdrop, animated counter and bars comparing impactors.",
+      "image_generation_prompt": "Dark scientific infographic backdrop with subtle grid, vertical 9:16, no text",
+      "foreground_elements": [
+        "chart",
+        "counter"
+      ],
+      "background_elements": [
+        "grid"
+      ],
+      "on_screen_text": [
+        "TAMANHO IMPORTA",
+        "Fontes na descricao"
+      ],
+      "narration_segment": "",
+      "animation_sequence": [
+        {
+          "primitive": "counter",
+          "target": "counter",
+          "start_ms": 300,
+          "duration_ms": 2500,
+          "params": {
+            "from": 0,
+            "to": 1000,
+            "unit": "m"
+          },
+          "ease": "outQuad"
+        },
+        {
+          "primitive": "chart_bar",
+          "target": "chart",
+          "start_ms": 800,
+          "duration_ms": 2500,
+          "params": {
+            "bars": 3
+          },
+          "ease": "outQuad"
+        },
+        {
+          "primitive": "text_reveal",
+          "target": "conclusion",
+          "start_ms": 2800,
+          "duration_ms": 1500,
+          "params": {},
+          "ease": "outQuad"
+        }
+      ],
+      "transition_in": "dissolve",
+      "transition_out": "fade",
+      "scientific_claims": [
+        "A 1 km impactor is a global-catastrophe class event (illustrative)."
+      ],
+      "source_references": [
+        "NASA CNEOS overview"
+      ]
+    }
+  ],
+  "asset_plan": [
+    {
+      "asset_id": "asset_space",
+      "scene_ids": [
+        "scene_1"
+      ],
+      "description": "Starfield with Earth",
+      "orientation": "portrait",
+      "style_tags": [
+        "space",
+        "dark"
+      ]
+    },
+    {
+      "asset_id": "asset_entry",
+      "scene_ids": [
+        "scene_2"
+      ],
+      "description": "Atmospheric entry",
+      "orientation": "portrait",
+      "style_tags": [
+        "plasma",
+        "ocean"
+      ]
+    },
+    {
+      "asset_id": "asset_impact",
+      "scene_ids": [
+        "scene_3"
+      ],
+      "description": "Impact flash terrain",
+      "orientation": "portrait",
+      "style_tags": [
+        "flash",
+        "dust"
+      ]
+    },
+    {
+      "asset_id": "asset_chart_bg",
+      "scene_ids": [
+        "scene_4"
+      ],
+      "description": "Dark grid backdrop",
+      "orientation": "portrait",
+      "style_tags": [
+        "infographic",
+        "dark"
+      ]
+    }
+  ],
+  "source_references": [
+    "NASA CNEOS overview"
+  ],
+  "music_and_sound_cues": [
+    "Low drone bed, impact hit at scene_3, user-recorded narration"
+  ]
+}

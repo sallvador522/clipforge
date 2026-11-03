@@ -224,3 +224,13 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Accept clarification on ambiguous intent (ADR-023): a paid live plan was rejected because the model asked about the broad intent with a clear subject; v2 no longer forces `subject.is_ambiguous=true`, the v1 adapter and `awaiting_clarification` flow are unchanged (306 tests).
 - [x] Recover dropped SAM streams via response retrieval (ADR-024): capture response id + last frame marker; on a drop, poll non-billable `GET /v1/responses/{id}` and re-parse the stored completed output with no second POST and no new slot. LIVE-CALL 009 (approved ~$0.0354) proved it: drop at 153.3 s, single GET returned completed 177-frame output, real masks written (310 tests).
 - [x] Deliver the Facebook video end-to-end (job `5ccd24d6`): typed instruction (no audio needed), director `plan_ready`, SAM auto-recovered in production, subject 0 (man in black blazer) approved, Muse Image background, verified render with audio (`Facebook_senhor_de_preto.mp4`, 177 frames, 156,316 bytes).
+
+## Milestone 7 - Idea-to-Video Vertical Slice (post-MVP, offline-verified)
+- [x] Storyboard + quality-review contracts: allowlisted animation primitives, duration/asset validation, correction gate; `DirectorAudit.wire_schema` gains `storyboard` (ADR-025).
+- [x] Creative directors: `MockCreativeDirector` fixture (asteroid, 20 s, 9:16, 4 scenes) + live `CreativeDirectorProvider` on the single-POST/no-retry Spark rails (mocked-transport tests only, never called live).
+- [x] Anime.js 4.5 scene engine (`/idea`): data-driven composition, fixed builders per primitive, `autoplay: false`, `?t=ms` + `window.__idea.seek()` deterministic capture; unknown primitives/targets ignored.
+- [x] Offline render pipeline: Playwright/Chromium frame-exact capture → FFmpeg → deterministic QA (480/480 frames, 0 black, 720×1280, 20.00 s verified MP4, silent). Procedural PIL fixtures, labelled as fixtures.
+- [x] Mock critic + one-revision correction loop tested; real Spark video review stays an unverified placeholder; no TTS (user records narration).
+- [x] Docs: `docs/IDEA_TO_VIDEO.md`, ADR-025. First real generation needs explicit approval within the $1 cap.
+- [ ] Studio UI for the new mode (preview/demo page only in this slice).
+- [ ] Real Muse Image scene assets + narration mux for the first approved generation.

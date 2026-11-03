@@ -58,6 +58,21 @@ from clipforge_contracts.director_stages import (
     require_transition,
     stage_from_job_stage,
 )
+from clipforge_contracts.quality import (
+    CorrectionType,
+    MockQualityCritic,
+    QualityReview,
+    SceneReview,
+    Verdict,
+)
+from clipforge_contracts.storyboard import (
+    AnimationPrimitive,
+    AnimationStep,
+    AssetSpec,
+    SceneSpec,
+    Storyboard,
+    Transition,
+)
 from clipforge_contracts.edl import (
     DecisionTransparency,
     EditDecision,
@@ -67,6 +82,13 @@ from clipforge_contracts.edl import (
     canonical_hash,
     compute_decision_hash,
     edl_from_professional_plan,
+)
+from clipforge_contracts.project import (
+    AssetKind,
+    AssetProvenance,
+    AssetRecord,
+    ProjectMode,
+    ProjectRecord,
 )
 from clipforge_contracts.editing_plan import (
     BlurBackgroundOperation,
@@ -88,6 +110,9 @@ from clipforge_contracts.responses import (
 
 __all__ = [
     "ApprovalStatus",
+    "AssetKind",
+    "AssetProvenance",
+    "AssetRecord",
     "BackgroundResult",
     "BlurBackgroundOperation",
     "CAPABILITIES",
@@ -122,11 +147,23 @@ __all__ = [
     "OutputTarget",
     "PlanOutcome",
     "ProfessionalEditingPlan",
+    "ProjectMode",
+    "ProjectRecord",
     "RenderResult",
     "ReplaceBackgroundOperation",
     "SegmentationResult",
     "SegmentationSubject",
     "SubjectSelection",
+    "Storyboard",
+    "AnimationPrimitive",
+    "AnimationStep",
+    "AssetSpec",
+    "MockQualityCritic",
+    "QualityReview",
+    "SceneSpec",
+    "SceneReview",
+    "Transition",
+    "Verdict",
     "SubjectSpec",
     "SubjectStrategy",
     "TranscriptResult",

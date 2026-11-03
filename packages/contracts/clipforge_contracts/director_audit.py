@@ -48,7 +48,7 @@ class DirectorAudit(BaseModel):
     model: str = Field(min_length=1, max_length=120)
     execution_mode: DirectorExecutionMode = DirectorExecutionMode.LIVE
     service_mode: DirectorServiceMode
-    wire_schema: Literal["lite", "full"] = "lite"
+    wire_schema: Literal["lite", "full", "storyboard"] = "lite"
 
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)

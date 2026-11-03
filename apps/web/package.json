@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "animejs": "^4.5.0",
     "motion": "^12.0.0",
     "next": "^15.3.0",
     "react": "^19.0.0",

@@ -253,4 +253,17 @@ Decisions are never silently changed. Superseding a decision requires a new ADR 
 - **Evidence:** **310 backend tests pass**, including drop-without-id (original error, no network), drop-with-id attempting retrieval, stored-failure refusal, and full recovery writing real masks from fixture text with the provenance diagnostic. LIVE-CALL 009 dropped at 153.3 s (177 events, last frame 172) and its single follow-up GET returned HTTP 200 `completed` with the full 177-frame output (2 objects); the recovered masks were written locally with zero additional billed calls.
 - **Consequences:** a dropped SAM stream no longer wastes the paid call whenever the server persisted the result. Each attempt still bills one SAM slot on the POST; GETs never bill. If the server itself fails a response, the job still fails explicitly as before.
 
+## ADR-025: Post-MVP Idea-to-Video Vertical Slice
+
+- **Status:** Implemented and verified offline (2026-11-03). **No paid API call was made.**
+- **Context:** The user explicitly moved beyond the MVP (10 s / 720p editing clips): new "Create from an Idea" mode for 20 s 9:16 reels, with a $1 cap for the first real generation. The existing editing flow, SAM and background replacement are untouched.
+- **Decision:**
+  - **Contracts:** `Storyboard` (project + 1–12 scenes + asset plan, durations must sum to project length) and `QualityReview` (verdict + per-scene reviews + auto-fixable gate) in `clipforge_contracts`. Animation is described only through 14 allowlisted primitives; `extra="forbid"` everywhere; `apply_correction()` validates patches the same way. `DirectorAudit.wire_schema` gains `"storyboard"`.
+  - **Directors:** `MockCreativeDirector` (deterministic asteroid fixture) for tests/dev; `CreativeDirectorProvider` reuses the single-POST/no-retry Spark rails with a storyboard brief, echo check and usage audit. Covered by mocked-transport tests; never called live.
+  - **Renderer:** Next.js `/idea` page, Anime.js 4.5 (`createTimeline`/`add`/`seek`), `autoplay: false`, `?t=ms` + `window.__idea.seek()` for deterministic capture, fixed builders per primitive (unknown primitives/targets ignored, no model JS executes).
+  - **Pipeline:** Playwright + headless Chromium (new `idea` pip extra) captures exact 720×1280 frames, FFmpeg encodes, deterministic QA (count/order/readability, black frames, frozen-run detector, ffprobe check). Fixture assets are procedural PIL gradients, labelled as fixtures.
+  - **Review loop:** deterministic QA first; mock critic proves the schema; at most one auto revision; asset regeneration always needs approval. Real Spark video-understanding review stays an unverified placeholder per rule 3. No TTS (user records narration, muxed with existing audio tooling).
+- **Evidence:** **323 backend tests pass**; frontend typecheck clean (for the slice files); offline PoC rendered 480/480 frames, 0 black, 720×1280, 20.00 s verified MP4. Bugs fixed during the slice: React-commit race producing empty timelines (guard refuses to capture on failed seek), per-scene element scoping, initial-state sets, KineticTypography per-char adds (array-target adds silently no-op in this setup).
+- **Consequences:** the first real generation needs explicit approval within the $1 cap (storyboard ≈ $0.01–0.03 + N×$0.01 images + review TBD). SAM is not involved (no source subjects). The existing editor is unaffected.
+
 
