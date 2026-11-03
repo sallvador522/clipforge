@@ -34,6 +34,17 @@ video {
   background: #000;
 }
 
+.particle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 9999px;
+  background: #ffc46b;
+  box-shadow: 0 0 8px rgba(255, 196, 107, 0.8);
+  pointer-events: none;
+}
+
 input[type="range"] {
   accent-color: #ff7659;
 }

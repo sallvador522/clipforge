@@ -163,3 +163,23 @@ For live runs, set `CLIPFORGE_TRANSCRIBE_MODE=live`, `CLIPFORGE_DIRECTOR_MODE=li
 Read AGENTS.md, this file, `docs/PRODUCT_AUDIT.md`, `docs/SAM_31_INTEGRATION.md`, `docs/SAM_31_LIVE_VALIDATION_PLAN.md`, TASKS.md, `docs/LIVE_E2E_AUDIO_BLUR_REPORT.md`, `docs/LIVE_E2E_006_USER_VIDEO_REPORT.md`, `docs/LIVE_DIRECTOR_HARDENING_REPORT.md`, `docs/LIVE_BUDGET_SAFETY_HARDENING.md` and `docs/LIVE_CALL_006_PROPOSAL.md`. The full mock loop is demonstrable: upload → instruction → v2 plan → detect subjects → review/select → approve/reject/clarify → real render → verification → before/after → download. The voice → Muse Spark → render path has been executed live twice; 6C/6D made no live calls. Defaults remain mock. Real SAM 3.1 is implemented, offline-validated, protected by an explicit consent gate and live-validated once on 2026-11-01 (1 request, 2 subjects, 177/177 frames, verified renders); the image provider was live-validated once. No further live call is authorized without explicit approval. The prepared LIVE-CALL 006 plan-only retest remains optional. The local `.env` has transcription and director live with advisory limits 100/25; the real-user launcher runs all four providers live. Meta budget available before E2E 006: **$31.78**; run cost **$0.001010**; no new credits were consumed by 6C/6D. The ledger is advisory (ADR-022) and no longer blocks; watch `/health` and the Meta panel for cost.
 
 **Budget safety (ADR-017 + ADR-022):** the ledger is fail-closed on integrity (corrupt/unreadable data refuses reservations) but advisory on limits: by default it counts usage and never blocks. Live providers require a one-shot `LiveCallAuthorization` that reserves before the POST; direct calls without it are rejected. `transcribe_upload(budget=None)` is rejected in live mode. Dev launchers force mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1`. Hard caps exist only when code passes explicit `limits=`/`enforce=True`. `/health` reports `live_call_budget_enforced`. The current `.env` may remain live for deliberate testing, but the dev launchers do not activate it implicitly.
+
+## Idea-to-Video product flow (2026-11-03)
+
+Product slice delivered and offline-verified: `/?mode=idea` workspace, two cost approvals, manifest + `/render/[ideaId]` capture of the shared scene engine, verified MP4 only. 26 idea tests pass (full suite 365), typecheck + build clean, isolated browser smoke done with no agent render and no paid calls (ledger `12/15/8/7`). Docs: `docs/IDEA_PRODUCT_FLOW.md`, ADR-028, TASKS 7.1. Live idea modes stay mock by default; the user runs the manual checklist before any live approval. The parallel P0 workspace work is untouched.
+
+## Single-route Studio (2026-11-03)
+
+The `?mode=idea` split is gone: `/` is the only route and the assistant routes the empty platform into an idea job (clip present → edit unchanged). `IdeaPreview`/`IdeaStatusPanel` reused inline; `IdeaStudio`/`IdeaBriefPanel` removed. Typecheck + build clean. Docs: ADR-029, TASKS 7.2, `IDEA_PRODUCT_FLOW.md` updated.
+
+## Static-board fail-fast + high effort (2026-11-03)
+
+Live `qa_failed` root-caused: descriptive targets left scene 1 fully static; boundary samples flashed; HEAD asset check 405d all plated renders. Fixed with target validation, mid-frame sampling clamped to the engine timeline, advancement checks, streaming-GET assets, and storyboard effort **high** (xhigh 504s; 300 s timeout). Live board delivered verified (480/480, 37 holds). Tests: 38 idea + full suite (377) pass. Docs: ADR-030, TASKS 7.3.
+
+## Motion-first director + fuller Anime.js (2026-11-03)
+
+Stage model no prompt, motion budget validado, 9 easings + 5 primitivas novas, tipografia auto-fit. Mock exercita o novo. Tests: 41 + 380. Docs: ADR-031, TASKS 7.4. Fase C (multi-plate) pendente de validação.
+
+## Multiplane foreground — Fase C pronta e provada (2026-11-03)
+
+Fundo + frente por cena (banda 62% inferior, parallax diferencial), validado e com prompt próprio. Smoke mock ponta-a-ponta: MP4 120/120 verificado, prova diferencial de camadas. Tests: 45 ideia + suite 384. Docs: ADR-032, TASKS 7.5. Agressão zero ao mock/edição existente.

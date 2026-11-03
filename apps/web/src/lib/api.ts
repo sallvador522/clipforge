@@ -1,4 +1,4 @@
-import type { JobResponse, JobResultData, PlanReviewData, TranscriptData } from "./types";
+import type { AssetData, JobResponse, JobResultData, PlanReviewData, ProjectData, TranscriptData } from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -75,10 +75,57 @@ function xhrUpload<T>(
   });
 }
 
-export function uploadVideo(file: File, onProgress: (percent: number) => void): Promise<JobResponse> {
+export function uploadVideo(file: File, onProgress: (percent: number) => void, projectId?: string | null): Promise<JobResponse> {
   const form = new FormData();
   form.append("file", file);
+  if (projectId) form.append("project_id", projectId);
   return xhrUpload<JobResponse>("/api/uploads", form, onProgress);
+}
+
+export function createProject(title?: string): Promise<ProjectData> {
+  return requestJson<ProjectData>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ title: title ?? "Untitled project" }),
+  });
+}
+
+export function listProjects(): Promise<{ projects: ProjectData[] }> {
+  return requestJson<{ projects: ProjectData[] }>("/api/projects");
+}
+
+export function getProject(projectId: string): Promise<ProjectData> {
+  return requestJson<ProjectData>(`/api/projects/${encodeURIComponent(projectId)}`);
+}
+
+export function renameProject(projectId: string, title: string): Promise<ProjectData> {
+  return requestJson<ProjectData>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function listAssets(projectId: string): Promise<{ assets: AssetData[] }> {
+  return requestJson<{ assets: AssetData[] }>(`/api/projects/${encodeURIComponent(projectId)}/assets`);
+}
+
+export function uploadAsset(
+  projectId: string,
+  file: File,
+  onProgress: (percent: number) => void,
+): Promise<AssetData> {
+  const form = new FormData();
+  form.append("file", file);
+  return xhrUpload<AssetData>(`/api/projects/${encodeURIComponent(projectId)}/assets`, form, onProgress);
+}
+
+export function deleteAsset(projectId: string, assetId: string): Promise<{ deleted: boolean }> {
+  return requestJson<{ deleted: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function assetFileUrl(projectId: string, assetId: string): string {
+  return `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/file`;
 }
 
 /**
@@ -171,8 +218,12 @@ export function answerClarification(jobId: string, answer: string): Promise<JobR
   });
 }
 
-export function downloadUrl(jobId: string): string {
-  return `${API_BASE}/api/jobs/${jobId}/download`;
+export type ExportFormat = "original" | "reels" | "youtube";
+
+export function downloadUrl(jobId: string, format: ExportFormat = "original"): string {
+  return format === "original"
+    ? `${API_BASE}/api/jobs/${jobId}/download`
+    : `${API_BASE}/api/jobs/${jobId}/download?format=${format}`;
 }
 
 export async function checkHealth(): Promise<TranscriptionConfig> {

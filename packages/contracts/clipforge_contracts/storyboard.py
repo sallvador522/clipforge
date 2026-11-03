@@ -32,6 +32,11 @@ class AnimationPrimitive(str, Enum):
     CHART_BAR = "chart_bar"
     FADE = "fade"
     SLIDE = "slide"
+    MASK_REVEAL = "mask_reveal"
+    ELASTIC_POP = "elastic_pop"
+    SHAKE = "shake"
+    GRADIENT_SHIFT = "gradient_shift"
+    TRACKING = "tracking"
 
 
 class Transition(str, Enum):
@@ -88,6 +93,9 @@ class AssetSpec(BaseModel):
     description: str = Field(min_length=1, max_length=300)
     orientation: Literal["portrait", "landscape"] = "portrait"
     style_tags: list[str] = Field(default_factory=list, max_length=6)
+    # Multiplane role: one "background" (full scene) plus at most one
+    # "foreground" (bottom-anchored band drifting against the backdrop).
+    role: Literal["background", "foreground"] = "background"
 
 
 class Storyboard(BaseModel):

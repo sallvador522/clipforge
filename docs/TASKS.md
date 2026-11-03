@@ -224,7 +224,7 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Accept clarification on ambiguous intent (ADR-023): a paid live plan was rejected because the model asked about the broad intent with a clear subject; v2 no longer forces `subject.is_ambiguous=true`, the v1 adapter and `awaiting_clarification` flow are unchanged (306 tests).
 - [x] Recover dropped SAM streams via response retrieval (ADR-024): capture response id + last frame marker; on a drop, poll non-billable `GET /v1/responses/{id}` and re-parse the stored completed output with no second POST and no new slot. LIVE-CALL 009 (approved ~$0.0354) proved it: drop at 153.3 s, single GET returned completed 177-frame output, real masks written (310 tests).
 - [x] Deliver the first real idea-to-video (ADR-027, approved ≈ $0.041 of the $1 cap): live storyboard `IMPACTO: Asteroide Gigante` ($0.000872, labelled assumptions, refs, narration), 4 Muse Image 9:16 plates (1280×1920, no text), shared SceneRenderer + deterministic capture (480/480, layout QA clean), verified MP4 720×1280 20.00 s 2.1 MB, copy in `Videos\Video`. Narration mux and Studio UI remain open.
-- [x] TEST A programmatic-only promo (zero image calls, $0.00): NEXUS 15 s 9:16 validated, first render refused by the new asset gate (missing `asset_hero`), corrected to gradient backdrop, re-render 360/360 verified MP4 with kinetic type, counter, bars and drawn divider. Review->correct->revalidate loop demonstrated on a real defect.
+- [x] TEST A programmatic-only promo (zero image calls, $0.00): NEXUS 15 s 9:16 validated, first render refused by the new asset gate (missing `asset_hero`), corrected to gradient backdrop, re-render 360/360 verified MP4 with kinetic type, counter, bars and drawn divider. Review→correct→revalidate loop demonstrated on a real defect.
 - [x] Deliver the Facebook video end-to-end (job `5ccd24d6`): typed instruction (no audio needed), director `plan_ready`, SAM auto-recovered in production, subject 0 (man in black blazer) approved, Muse Image background, verified render with audio (`Facebook_senhor_de_preto.mp4`, 177 frames, 156,316 bytes).
 
 ## Milestone 7 - Idea-to-Video Vertical Slice (post-MVP, offline-verified)
@@ -237,3 +237,55 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [ ] Studio UI for the new mode (preview/demo page only in this slice).
 - [ ] Real Muse Image scene assets + narration mux for the first approved generation.
 
+## Milestone 5.3 - Social exports & navbar cleanup (2026-11-04)
+- [x] Remove LIVE AI ENABLED billing banner and resolution/AI-mode metadata from the navbar (`TopBar.tsx`, `Studio.tsx`).
+- [x] Navbar Exportar dropdown with Reels 1080x1920 and YouTube 1920x1080 (`TopBar.tsx`, `Studio.tsx`, `lib/api.ts`) — superseded: formato virou seletor externo em pills (accent signal-orange, sem azul) e o preview muda de tamanho (frame 9:16 / 16:9, vídeo inteiro com contain, sem corte).
+- [x] Backend `GET /api/jobs/{id}/download?format=reels|youtube|original`: real FFmpeg cover-fit transcode, AAC audio, atomic cache under `jobs/<id>/exports/`, verified output, originals untouched (`apps/api/clipforge_api/exports.py`, `main.py`). Invalid format 422, unverified 409.
+- [x] Tests: `tests/test_exports.py` (invalid format, real Reels/YouTube resolutions with audio, cache hit, original untouched); `tests/test_renderer.py` still passing; frontend `tsc` + `next build` clean; browser check on production build (Exportar menu, no banner/metadata).
+- [x] Docs: ADR-026, STATUS, TASKS, API_CONTRACTS download row.
+
+## Milestone P0 - Project Workspace & Asset Library (persistent, mock-verified)
+
+- [x] Contracts: `ProjectRecord`/`AssetRecord` (`project.py`); `JobRecord.project_id` links jobs to projects.
+- [x] `ProjectStore`: atomic writes, server-generated `prj_/ast_` IDs, pattern-validated lookups, cross-project isolation.
+- [x] Asset validation (`apps/api/clipforge_api/assets.py`): ffprobe video (MVP limits)/audio, Pillow images, UTF-8 text + SRT/VTT cues, strict SVG sanitization (original + sanitized copy, malicious fixtures).
+- [x] API: project CRUD + asset import/list/get/file/delete; `POST /api/uploads` accepts optional `project_id`, otherwise creates one and registers the source as `session_source`; library imports never trigger AI.
+- [x] Studio: left column is the Asset Library (filters, search, multi-import, preview, two-step remove, rename); session-clip flow preserved; project id in `localStorage`, reload restores title + assets.
+- [x] Tests: `tests/test_project_workspace.py` (12 tests: CRUD, persistence, multi-video, audio/image/text/SVG, malicious rejection, ownership, cleanup, regression).
+- [x] Docs: `docs/PROJECT_WORKSPACE_PLAN.md`, STATUS, TASKS. No P1 features (timeline/scenes/director tools/animation/export/versioning).
+
+## Milestone 7.1 - Idea-to-Video Product Flow (2026-11-03, offline-verified)
+
+- [x] Studio workspace `/?mode=idea` (brief / SceneRenderer preview / approvals+QA+result), PT-PT, MOCK/LIVE badges, `idea_id` in URL + localStorage.
+- [x] Two cost approvals (storyboard, assets/programmatic), hash + mode re-checks in the worker, $0.10 cap, one attempt per plate, cancel/reject/rerender guards.
+- [x] Manifest + `/render/[ideaId]` capture surface (READY, seek probe, layout/frame QA, FFmpeg + ffprobe verified MP4).
+- [x] Tests: 26 idea tests; full suite 365 passed; typecheck + build clean; isolated browser smoke (manifest + READY + stage + seek, no agent render).
+- [x] Docs: `docs/IDEA_PRODUCT_FLOW.md`, ADR-028. No paid calls; user tests manually.
+- [ ] User manual test (restart API/Studio, create → approve → render → download); live modes only with explicit approval.
+
+## Milestone 7.2 - Single-route Studio (2026-11-03)
+
+- [x] Removed the `?mode=idea` split: `/` always renders `Studio`; assistant routes the empty platform into an idea job, clip present → edit unchanged.
+- [x] Reused `IdeaPreview` (centre) + `IdeaStatusPanel` (right column); removed `IdeaStudio`/`IdeaBriefPanel`; typecheck + build clean.
+- [x] Docs: `docs/IDEA_PRODUCT_FLOW.md` updated, ADR-029.
+
+## Milestone 7.3 - Static-board fail-fast + high storyboard effort (2026-11-03)
+
+- [x] Root-caused live `qa_failed` (122 frozen): descriptive targets animated nothing; boundary samples flashed; HEAD asset check 405d every plated job.
+- [x] `validate_board_targets` (engine vocabulary + per-scene motion) at plan/PATCH/render pre-check (`storyboard_static`); mid-frame sampling + per-seek advancement check; streaming-GET asset check.
+- [x] `CLIPFORGE_CREATIVE_DIRECTOR_EFFORT` for the storyboard call only (verified values, recorded in approvals, UI badge); xhigh 504d at the gateway → profile pins **high** with 300 s timeout ($0.01 uncalibrated ceiling); edit flow untouched.
+- [x] Recovered stranded `idea_30d803703d0a` (orphaned claim) via store transition; re-rendered verified (480/480, 0 frozen).
+- [x] Tests: 38 idea + full suite (377) pass; typecheck + build clean. Docs: ADR-030.
+
+## Milestone 7.4 - Motion-first director + fuller Anime.js (2026-11-03)
+
+- [x] STAGE MODEL no prompt (palco, elementos, dicionário de movimento, gramática de timing, easings); motion budget validado (≥2 passos/cena, abre ≤1s, fecha nos últimos 500ms, ≥3 primitivas).
+- [x] Easing passthrough (9 nomes verificados); 5 primitivas novas (mask_reveal, elastic_pop, shake, gradient_shift, tracking); tipografia auto-fit.
+- [x] Mock exercita mask_reveal + elastic_pop. Tests: 41 ideia + suite 380; typecheck + build limpos. Docs: ADR-031.
+- [ ] Fase C (parallax multi-plate) após validação do utilizador.
+
+## Milestone 7.5 - Multiplane foreground (Fase C, 2026-11-03)
+
+- [x] `role` no contrato (AssetSpec/IdeaAsset, default background); build_assets 1 fundo + 1 frente/cena (máx 6); validação (≤2/cena, papéis únicos, cenas conhecidas).
+- [x] Motor monta `data-layer="fg"` (banda 62% inferior) com parallax diferencial; prompts fg server-side; UI lista plates com tag FUNDO/FRENTE; estimativa conta plates reais.
+- [x] Smoke mock ponta-a-ponta: bg+fg geradas e servidas, MP4 120/120 verificado, prova diferencial (topo 6,47 vs banda 0,01). Docs: ADR-032.

@@ -20,11 +20,32 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from clipforge_contracts import (
     SUBJECT_DETECTION_DISCLOSURE_VERSION,
+    AssetKind,
+    AssetProvenance,
+    AssetRecord,
     CapabilityStatus,
+    ProjectMode,
+    ProjectRecord,
     SubjectDetectionConsent,
     get_capability,
     sha256_file,
 )
+from clipforge_api.assets import (
+    AUDIO_EXTENSIONS as ASSET_AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS as ASSET_IMAGE_EXTENSIONS,
+    MAX_ASSET_BYTES as ASSET_MAX_BYTES,
+    SVG_EXTENSIONS as ASSET_SVG_EXTENSIONS,
+    TEXT_EXTENSIONS as ASSET_TEXT_EXTENSIONS,
+    VIDEO_EXTENSIONS as ASSET_VIDEO_EXTENSIONS,
+    classify_suffix,
+    mime_for_suffix,
+    probe_audio_file,
+    probe_image,
+    probe_text,
+    sanitize_svg,
+)
+from clipforge_api.exports import EXPORT_FILENAMES, ExportError, export_video
+from clipforge_api.ideas import create_ideas_router
 from clipforge_api.media import UploadValidationError, probe_video
 from clipforge_api.transcribe import (
     AudioValidationError,
@@ -33,11 +54,15 @@ from clipforge_api.transcribe import (
 )
 from clipforge_jobs import (
     MAX_CLARIFICATIONS,
+    AssetNotFoundError,
     JobNotFoundError,
     JobRecord,
     JobStatus,
     JobStore,
     JobTransitionError,
+    ProjectNotFoundError,
+    ProjectStore,
+    SourceInfo,
 )
 from clipforge_director import LiveCallBudget
 from clipforge_providers import ProviderBundle, get_providers
@@ -81,6 +106,7 @@ class ConsentRequest(BaseModel):
 class JobResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str
+    project_id: str | None = None
     status: str
     stage: str
     ready: bool
@@ -94,9 +120,153 @@ class JobResponse(BaseModel):
     updated_at: str
 
 
+class ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = Field(default=None, max_length=80)
+    mode: str | None = Field(default=None, max_length=10)
+
+
+class ProjectRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=80)
+
+
+def _project_payload(record: ProjectRecord, asset_count: int = 0) -> dict:
+    return {
+        "project_id": record.project_id,
+        "title": record.title,
+        "mode": record.mode.value,
+        "asset_count": asset_count,
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
+    }
+
+
+def _register_session_asset(
+    store: ProjectStore,
+    *,
+    project_id: str,
+    original_name: str,
+    source_path: Path,
+    size: int,
+    info: SourceInfo,
+    source_sha256: str,
+) -> dict:
+    """Register the uploaded editing source as a project asset (no AI triggered)."""
+    import uuid as _uuid
+
+    asset_id = "ast_" + _uuid.uuid4().hex[:12]
+    suffix = Path(original_name).suffix.lower()
+    stored_filename = f"original{suffix}"
+    asset_dir = store.asset_dir(project_id, asset_id)
+    asset_dir.mkdir(parents=True, exist_ok=False)
+    # Copy (not move): the job source stays canonical; the asset is a stable copy.
+    (asset_dir / stored_filename).write_bytes(source_path.read_bytes())
+    record = AssetRecord(
+        asset_id=asset_id,
+        project_id=project_id,  # type: ignore[arg-type]
+        kind=AssetKind.VIDEO,
+        original_filename=Path(original_name).name[:255],
+        stored_filename=stored_filename,
+        mime=mime_for_suffix(suffix),
+        size_bytes=size,
+        sha256=source_sha256,
+        provenance=AssetProvenance.SESSION_SOURCE,
+        width=info.width,
+        height=info.height,
+        duration_seconds=info.duration_seconds,
+        fps=info.fps,
+        frame_count=info.frame_count,
+        has_audio=info.has_audio,
+    )
+    store.write_asset_record(project_id, asset_id, record.model_dump_json(indent=2))
+    return record.model_dump(mode="json")
+
+
+def _store_uploaded_asset(
+    store: ProjectStore,
+    *,
+    project_id: str,
+    upload_bytes: bytes,
+    original_name: str,
+) -> dict:
+    """Validate content, persist original (+ sanitized SVG) and sidecar atomically."""
+    import uuid as _uuid
+
+    clean_name = Path(original_name or "").name[:255] or "upload"
+    suffix = Path(clean_name).suffix.lower()
+    kind = classify_suffix(suffix)
+    if kind is None:
+        raise UploadValidationError(
+            "unsupported_extension",
+            f"Extension {suffix or '(none)'} is not a project asset; "
+            "use video, audio, image, text or SVG files.",
+        )
+    if not upload_bytes:
+        raise UploadValidationError("empty_file", "Uploaded file is empty.", 400)
+    if len(upload_bytes) > ASSET_MAX_BYTES:
+        raise UploadValidationError("file_too_large", "Upload exceeds the local size limit.", 413)
+
+    asset_id = "ast_" + _uuid.uuid4().hex[:12]
+    asset_dir = store.asset_dir(project_id, asset_id)
+    asset_dir.mkdir(parents=True, exist_ok=False)
+    stored_filename = f"original{suffix}"
+    target = asset_dir / stored_filename
+    metadata: dict = {}
+    sanitized_bytes: bytes | None = None
+    try:
+        # Atomic content write first; validation reads the bytes just written.
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(upload_bytes)
+        os.replace(tmp, target)
+        from clipforge_contracts.project import utc_now as _utc_now
+        import hashlib as _hashlib
+
+        digest = _hashlib.sha256(upload_bytes).hexdigest()
+        if kind == "video":
+            info = probe_video(target)
+            metadata = {
+                "width": info.width, "height": info.height,
+                "duration_seconds": info.duration_seconds, "fps": info.fps,
+                "frame_count": info.frame_count, "has_audio": info.has_audio,
+            }
+        elif kind == "audio":
+            metadata = probe_audio_file(target)
+        elif kind == "image":
+            metadata = probe_image(upload_bytes)
+        elif kind == "text":
+            metadata = probe_text(upload_bytes, suffix)
+        elif kind == "graphics":
+            sanitized_bytes = sanitize_svg(upload_bytes)
+            (asset_dir / "sanitized.svg").write_bytes(sanitized_bytes)
+            metadata = {"sanitized": True}
+        record = AssetRecord(
+            asset_id=asset_id,
+            project_id=project_id,  # type: ignore[arg-type]
+            kind=AssetKind(kind),  # type: ignore[arg-type]
+            original_filename=clean_name,
+            stored_filename=stored_filename,
+            mime=mime_for_suffix(suffix),
+            size_bytes=len(upload_bytes),
+            sha256=digest,
+            provenance=AssetProvenance.UPLOAD,
+            created_at=_utc_now(),
+            **metadata,
+        )
+        store.write_asset_record(project_id, asset_id, record.model_dump_json(indent=2))
+        return record.model_dump(mode="json")
+    except Exception:
+        # Failed uploads leave no orphaned asset directory behind.
+        import shutil as _shutil
+
+        _shutil.rmtree(asset_dir, ignore_errors=True)
+        raise
+
+
 def _to_response(record: JobRecord) -> JobResponse:
     return JobResponse(
         job_id=record.job_id,
+        project_id=record.project_id,
         status=record.status.value,
         stage=record.stage,
         ready=record.ready,
@@ -271,6 +441,7 @@ def _subject_review(record: JobRecord) -> dict:
 def create_app(storage_root: str | Path | None = None, providers: ProviderBundle | None = None) -> FastAPI:
     root = Path(storage_root) if storage_root else Path(os.environ.get("CLIPFORGE_STORAGE_ROOT", "storage"))
     store = JobStore(root)
+    projects = ProjectStore(root)
     bundle = providers if providers is not None else get_providers()  # mock by default; live raises explicitly
 
     app = FastAPI(title="ClipForge API", version="0.1.0")
@@ -278,16 +449,28 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
     app.state.store = store
+    app.state.projects = projects
     app.state.providers = bundle
     app.state.storage_root = root
+    app.include_router(
+        create_ideas_router(root, transcription_mode=bundle.transcription_mode)
+    )
 
     @app.exception_handler(JobNotFoundError)
     async def _not_found(_: Request, exc: JobNotFoundError) -> JSONResponse:
         return _error(404, "job_not_found", str(exc))
+
+    @app.exception_handler(ProjectNotFoundError)
+    async def _project_not_found(_: Request, exc: ProjectNotFoundError) -> JSONResponse:
+        return _error(404, "project_not_found", str(exc))
+
+    @app.exception_handler(AssetNotFoundError)
+    async def _asset_not_found(_: Request, exc: AssetNotFoundError) -> JSONResponse:
+        return _error(404, "asset_not_found", str(exc))
 
     @app.exception_handler(JobTransitionError)
     async def _invalid_transition(_: Request, exc: JobTransitionError) -> JSONResponse:
@@ -321,12 +504,30 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         }
 
     @app.post("/api/uploads", status_code=201, response_model=None)
-    async def upload(file: UploadFile = File(...)) -> JobResponse | JSONResponse:
+    async def upload(
+        file: UploadFile = File(...),
+        project_id: str | None = Form(default=None),
+    ) -> JobResponse | JSONResponse:
         original_name = Path(file.filename or "").name  # strip any client-side path components
         suffix = Path(original_name).suffix.lower()
         if suffix not in ALLOWED_EXTENSIONS:
             return _error(422, "unsupported_extension",
                           f"Extension {suffix or '(none)'} not allowed; use {sorted(ALLOWED_EXTENSIONS)}.")
+        # Resolve the project: reuse the caller's workspace or create one so the
+        # source clip is always a registered project asset (no AI triggered here).
+        try:
+            project: ProjectRecord | None = None
+            if project_id:
+                try:
+                    project = projects.get_project(project_id)
+                except ProjectNotFoundError:
+                    return _error(404, "project_not_found", f"Project not found: {project_id}")
+            else:
+                base = Path(original_name).stem.strip() or "Untitled project"
+                project = projects.create_project(base[:80])
+        except ValueError as exc:
+            return _error(422, "invalid_project", str(exc))
+        assert project is not None
         job_id = uuid.uuid4().hex
         upload_dir = store.uploads_dir / job_id
         upload_dir.mkdir(parents=True, exist_ok=False)
@@ -346,24 +547,198 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         except UploadValidationError:
             # Invalid uploads leave no orphaned files or job records behind.
             source_path.unlink(missing_ok=True)
-            upload_dir.rmdir()
+            try:
+                upload_dir.rmdir()
+            except OSError:
+                pass
             raise
         except OSError as exc:
             source_path.unlink(missing_ok=True)
-            upload_dir.rmdir()
+            try:
+                upload_dir.rmdir()
+            except OSError:
+                pass
             raise UploadValidationError(
                 "file_unreadable", "Uploaded file could not be read.", 422
             ) from exc
         record = JobRecord(
             job_id=job_id,
+            project_id=project.project_id,
             original_filename=original_name,
             source_relative_path=f"uploads/{job_id}/source{suffix}",
             source_info=info,
             source_sha256=source_sha256,
         )
         store.create(record)
-        logger.info("job_created job_id=%s file=%s size=%d", job_id, original_name, size)
+        try:
+            _register_session_asset(
+                projects,
+                project_id=project.project_id,
+                original_name=original_name,
+                source_path=source_path,
+                size=size,
+                info=info,
+                source_sha256=source_sha256,
+            )
+        except Exception:
+            logger.warning("session_asset_registration_failed job_id=%s", job_id)
+        logger.info("job_created job_id=%s project_id=%s file=%s size=%d", job_id, project.project_id, original_name, size)
         return _to_response(record)
+
+    # -- Project workspace (P0) -------------------------------------------------
+    @app.post("/api/projects", status_code=201, response_model=None)
+    async def create_project(body: ProjectCreateRequest | None = None) -> JSONResponse:
+        title = (body.title if body and body.title else "Untitled project").strip() or "Untitled project"
+        mode_raw = (body.mode if body and body.mode else "edit").strip().lower()
+        try:
+            mode = ProjectMode(mode_raw)
+        except ValueError:
+            return _error(422, "invalid_project_mode", "Project mode must be 'edit' or 'idea'.")
+        try:
+            record = projects.create_project(title[:80], mode)
+        except ValueError as exc:
+            return _error(422, "invalid_project", str(exc))
+        return JSONResponse(status_code=201, content=_project_payload(record, 0))
+
+    @app.get("/api/projects", response_model=None)
+    async def list_projects() -> JSONResponse:
+        items = []
+        for record in projects.list_projects():
+            try:
+                count = sum(1 for _ in projects.assets_dir(record.project_id).glob("*/asset.json"))
+            except Exception:
+                count = 0
+            items.append(_project_payload(record, count))
+        return JSONResponse(content={"projects": items})
+
+    @app.get("/api/projects/{project_id}", response_model=None)
+    async def get_project(project_id: str) -> JSONResponse:
+        try:
+            record = projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        try:
+            count = sum(1 for _ in projects.assets_dir(record.project_id).glob("*/asset.json"))
+        except Exception:
+            count = 0
+        return JSONResponse(content=_project_payload(record, count))
+
+    @app.patch("/api/projects/{project_id}", response_model=None)
+    async def rename_project(project_id: str, body: ProjectRenameRequest) -> JSONResponse:
+        try:
+            record = projects.rename_project(project_id, body.title)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        except ValueError as exc:
+            return _error(422, "invalid_project", str(exc))
+        try:
+            count = sum(1 for _ in projects.assets_dir(record.project_id).glob("*/asset.json"))
+        except Exception:
+            count = 0
+        return JSONResponse(content=_project_payload(record, count))
+
+    @app.post("/api/projects/{project_id}/assets", status_code=201, response_model=None)
+    async def upload_asset(project_id: str, file: UploadFile = File(...)) -> JSONResponse:
+        try:
+            projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        upload_bytes = await file.read()
+        try:
+            payload = _store_uploaded_asset(
+                projects,
+                project_id=project_id,
+                upload_bytes=upload_bytes,
+                original_name=file.filename or "upload",
+            )
+        except UploadValidationError as exc:
+            return _error(exc.status_code, exc.code, str(exc))
+        except OSError:
+            return _error(422, "file_unreadable", "Uploaded file could not be read.")
+        return JSONResponse(status_code=201, content=payload)
+
+    @app.get("/api/projects/{project_id}/assets", response_model=None)
+    async def list_assets(project_id: str) -> JSONResponse:
+        try:
+            projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        items = []
+        assets_root = projects.assets_dir(project_id)
+        if assets_root.is_dir():
+            for path in sorted(assets_root.glob("*/asset.json")):
+                try:
+                    items.append(AssetRecord.model_validate_json(path.read_text(encoding="utf-8")).model_dump(mode="json"))
+                except Exception:
+                    continue
+        return JSONResponse(content={"assets": items})
+
+    @app.get("/api/projects/{project_id}/assets/{asset_id}", response_model=None)
+    async def get_asset(project_id: str, asset_id: str) -> JSONResponse:
+        try:
+            projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        sidecar = projects.asset_dir(project_id, asset_id) / "asset.json"
+        if not sidecar.is_file():
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        try:
+            payload = AssetRecord.model_validate_json(sidecar.read_text(encoding="utf-8")).model_dump(mode="json")
+        except Exception:
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        # Cross-project isolation: the sidecar must belong to this project.
+        if payload.get("project_id") != project_id:
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        return JSONResponse(content=payload)
+
+    @app.get("/api/projects/{project_id}/assets/{asset_id}/file", response_model=None)
+    async def asset_file(project_id: str, asset_id: str) -> FileResponse | JSONResponse:
+        try:
+            projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        sidecar = projects.asset_dir(project_id, asset_id) / "asset.json"
+        if not sidecar.is_file():
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        try:
+            meta = AssetRecord.model_validate_json(sidecar.read_text(encoding="utf-8"))
+        except Exception:
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        if meta.project_id != project_id:
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        directory = projects.asset_dir(project_id, asset_id)
+        # SVG: serve ONLY the sanitized copy as an image, never inline HTML/JS.
+        if meta.kind == AssetKind.GRAPHICS:
+            clean = directory / "sanitized.svg"
+            if not clean.is_file():
+                return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+            return FileResponse(
+                clean, media_type="image/svg+xml", filename=meta.original_filename,
+                headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"},
+            )
+        path = directory / meta.stored_filename
+        # Contain the resolved file inside this asset directory (no traversal).
+        try:
+            path.resolve().relative_to(directory.resolve())
+        except ValueError:
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        if not path.is_file():
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        return FileResponse(path, media_type=meta.mime, filename=meta.original_filename)
+
+    @app.delete("/api/projects/{project_id}/assets/{asset_id}", response_model=None)
+    async def delete_asset(project_id: str, asset_id: str) -> JSONResponse:
+        try:
+            projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return _error(404, "project_not_found", f"Project not found: {project_id}")
+        try:
+            projects.delete_asset(project_id, asset_id)
+        except AssetNotFoundError:
+            return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        except OSError as exc:
+            return _error(409, "asset_delete_failed", f"Asset could not be deleted: {exc}")
+        return JSONResponse(content={"deleted": True})
 
     @app.post("/api/jobs/{job_id}/voice", response_model=None)
     async def submit_voice(job_id: str, body: VoiceRequest) -> JobResponse | JSONResponse:
@@ -665,7 +1040,11 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         return [_to_response(r) for r in store.list_jobs()]
 
     @app.get("/api/jobs/{job_id}/download", response_model=None)
-    async def download(job_id: str) -> FileResponse | JSONResponse:
+    async def download(job_id: str, format: str = "original") -> FileResponse | JSONResponse:
+        export_format = (format or "original").lower()
+        if export_format not in EXPORT_FILENAMES:
+            return _error(422, "invalid_export_format",
+                          f"Unknown export format {format!r}; use original, reels or youtube.")
         record = store.get(job_id)
         # Only a verified, on-disk rendered output may ever be downloaded.
         if (
@@ -679,8 +1058,16 @@ def create_app(storage_root: str | Path | None = None, providers: ProviderBundle
         output_path = root / record.result.rendered.output_relative_path
         if not output_path.is_file() or output_path.stat().st_size == 0:
             return _error(409, "download_not_ready", f"Rendered output for job {job_id} is missing on disk.")
+        if export_format != "original":
+            try:
+                output_path = export_video(store.job_dir(job_id), output_path, export_format)
+            except ExportError as exc:
+                code = exc.code if exc.code in ("invalid_export_format", "download_not_ready") else "export_failed"
+                status = 422 if code == "invalid_export_format" else 409 if code == "download_not_ready" else 502
+                return _error(status, code, str(exc))
+        filename = EXPORT_FILENAMES[export_format].format(job_id=job_id)
         return FileResponse(
-            output_path, media_type="video/mp4", filename=f"clipforge-{job_id}.mp4"
+            output_path, media_type="video/mp4", filename=filename
         )
 
     return app

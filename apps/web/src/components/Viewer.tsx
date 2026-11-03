@@ -28,12 +28,13 @@ interface Props {
   subjects: SubjectChip[] | null;
   selectionVisible: boolean;
   onToggleSubject: (objectId: string) => void;
+  displayFormat: "reels" | "youtube";
 }
 
 export function Viewer({
   originalUrl, editedUrl, resultReady, primaryRef, currentTime, duration, playing,
   onTogglePlay, onSeek, onTimeUpdate, onPlayState, onFileDrop,
-  subjects, selectionVisible, onToggleSubject,
+  subjects, selectionVisible, onToggleSubject, displayFormat,
 }: Props) {
   const [mode, setMode] = useState<ViewMode>("compare");
   const [split, setSplit] = useState(50);
@@ -80,12 +81,22 @@ export function Viewer({
             <p className="mt-3 font-mono text-[11px] text-muted">Up to 10 seconds · 720p · your original is always preserved</p>
           </div>
         ) : (
-          <>
+          // Social-format frame: the stage letterboxes to the selected export
+          // aspect (9:16 vertical, 16:9 horizontal) and the video is contained
+          // whole inside it — a normal, undistorted size simulation. The
+          // export itself cover-crops to the format on the backend.
+          <div
+            className="relative max-h-full max-w-full overflow-hidden bg-black"
+            style={
+              displayFormat === "reels"
+                ? { aspectRatio: "9 / 16", height: "100%" }
+                : { aspectRatio: "16 / 9", width: "100%", maxHeight: "100%" }
+            }
+          >
             <video
               ref={primaryRef}
               src={originalUrl ?? undefined}
-              className="max-h-full w-full object-contain"
-              style={{ aspectRatio: "auto" }}
+              className="absolute inset-0 h-full w-full object-contain"
               playsInline
               preload="auto"
               onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime, e.currentTarget.duration || 0)}
@@ -104,7 +115,7 @@ export function Viewer({
                 playsInline
                 preload="auto"
                 aria-label="Edited video"
-                className="pointer-events-none absolute inset-0 m-auto max-h-full w-full object-contain"
+                className="pointer-events-none absolute inset-0 h-full w-full object-contain"
                 style={{
                   clipPath: mode === "compare" ? `inset(0 0 0 ${split}%)` : undefined,
                   visibility: mode === "before" ? "hidden" : "visible",
@@ -157,7 +168,7 @@ export function Viewer({
                 {mode === "after" ? "Edited render (verified)" : mode === "compare" && resultReady ? "Before / after" : "Original source"}
               </motion.span>
             </AnimatePresence>
-          </>
+          </div>
         )}
       </div>
 

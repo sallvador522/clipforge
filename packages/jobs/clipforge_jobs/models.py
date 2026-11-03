@@ -98,6 +98,7 @@ class JobResult(BaseModel):
 class JobRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str
+    project_id: str | None = Field(default=None, pattern=r"^prj_[a-z0-9]{12}$")
     status: JobStatus = JobStatus.QUEUED
     stage: str = "awaiting_voice"
     ready: bool = False  # becomes True when a voice instruction is attached

@@ -11,8 +11,16 @@ from clipforge_jobs.models import (
 )
 from clipforge_contracts import SubjectDetectionConsent
 from clipforge_jobs.store import JobNotFoundError, JobStore, JobTransitionError
+from clipforge_jobs.project_store import (
+    AssetNotFoundError,
+    ProjectNotFoundError,
+    ProjectStore,
+)
 
 __all__ = [
+    "AssetNotFoundError",
+    "ProjectNotFoundError",
+    "ProjectStore",
     "JobError",
     "JobNotFoundError",
     "JobRecord",

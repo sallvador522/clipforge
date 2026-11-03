@@ -26,6 +26,7 @@ export type JobStatusValue =
 
 export interface JobResponse {
   job_id: string;
+  project_id: string | null;
   status: JobStatusValue;
   stage: string;
   ready: boolean;
@@ -37,6 +38,42 @@ export interface JobResponse {
   attempts: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProjectData {
+  project_id: string;
+  title: string;
+  mode: string;
+  asset_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AssetKind = "video" | "audio" | "image" | "text" | "graphics";
+
+export interface AssetData {
+  asset_id: string;
+  project_id: string;
+  kind: AssetKind | string;
+  original_filename: string;
+  stored_filename: string;
+  mime: string;
+  size_bytes: number;
+  sha256: string;
+  provenance: string;
+  created_at: string;
+  width?: number | null;
+  height?: number | null;
+  duration_seconds?: number | null;
+  fps?: number | null;
+  frame_count?: number | null;
+  has_audio?: boolean | null;
+  audio_codec?: string | null;
+  audio_channels?: number | null;
+  text_lines?: number | null;
+  cue_count?: number | null;
+  text_encoding?: string | null;
+  sanitized?: boolean | null;
 }
 
 export interface TranscriptData {

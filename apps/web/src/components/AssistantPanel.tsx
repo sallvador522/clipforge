@@ -64,6 +64,10 @@ interface Props {
   reviewOpen: boolean;
   consentWaiting: boolean;
   onConsentContinue: () => void;
+  /** Overrides the confirm button label when no edit job exists (idea flow). */
+  confirmLabel?: string;
+  /** True when the session has no clip and no edit job: confirming creates a new video. */
+  emptyPlatform?: boolean;
 }
 
 export function AssistantPanel({
@@ -71,7 +75,7 @@ export function AssistantPanel({
   onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress, transcriptionError,
   transcript, transcriptSource, draft, onDraftChange, onTranscribe,
   onTypedInstruction, canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
-  reviewOpen, consentWaiting, onConsentContinue,
+  reviewOpen, consentWaiting, onConsentContinue, confirmLabel, emptyPlatform,
 }: Props) {
   const [recState, setRecState] = useState<RecorderState>("idle");
   const [seconds, setSeconds] = useState(0);
@@ -173,10 +177,13 @@ export function AssistantPanel({
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
         <div>
-          <p className="text-[15px] font-semibold leading-snug">Tell ClipForge what to change.</p>
+          <p className="text-[15px] font-semibold leading-snug">
+            {emptyPlatform ? "No clip yet — describe the video you want." : "Tell ClipForge what to change."}
+          </p>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            Record or type your instruction, then send it. Only the confirmed sentence reaches the
-            editing planner.
+            {emptyPlatform
+              ? "Record or type your idea, then send it. ClipForge plans it, you approve each cost, and the Studio renders a verified MP4."
+              : "Record or type your instruction, then send it. Only the confirmed sentence reaches the editing planner."}
           </p>
         </div>
 
@@ -309,9 +316,15 @@ export function AssistantPanel({
               {transcript?.confidence != null ? ` · confidence ${transcript.confidence.toFixed(2)}` : ""}
             </p>
             <Button onClick={onConfirmTranscript} disabled={!canConfirm || confirming || submitted || !draft.trim()} className="w-full">
-              {submitted ? "Editing in progress…" : confirming ? "Sending…" : "Send to ClipForge"}
+              {submitted ? "Editing in progress…" : confirming ? "Sending…" : (confirmLabel ?? "Send to ClipForge")}
             </Button>
-            {!job && <p className="font-mono text-[11px] text-muted">Upload a clip first — the job is created in the Media panel.</p>}
+            {!job && (
+              <p className="font-mono text-[11px] text-muted">
+                {emptyPlatform
+                  ? "No clip in this session — sending creates a new video from your idea."
+                  : "Upload a clip first — the job is created in the Media panel."}
+              </p>
+            )}
           </div>
         )}
 

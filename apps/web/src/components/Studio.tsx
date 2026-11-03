@@ -1,23 +1,42 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   answerClarification,
   ApiClientError,
   approvePlan,
   checkHealth,
+  createProject,
+  deleteAsset,
   downloadUrl,
   getJob,
   getPlan,
+  getProject,
   getResult,
+  listAssets,
   rejectPlan,
+  renameProject,
   submitConsent,
   subjectPreviewUrl,
   submitTranscript,
   transcribeRecording,
+  uploadAsset,
   uploadVideo,
 } from "@/lib/api";
-import type { JobResponse, JobResultData, PlanReviewData, TranscriptData } from "@/lib/types";
+import type { AssetData, JobResponse, JobResultData, PlanReviewData, ProjectData, TranscriptData } from "@/lib/types";
+import {
+  approveAssets as approveIdeaAssets,
+  approveStoryboard as approveIdeaStoryboard,
+  cancelIdea,
+  createIdea,
+  getIdea,
+  getIdeaConfig,
+  rejectIdea,
+  rerenderIdea,
+} from "@/lib/ideas";
+import type { IdeaConfigData, IdeaPayload } from "@/lib/idea-types";
+import { IdeaPreview } from "./IdeaPreview";
+import { IdeaStatusPanel } from "./IdeaStatusPanel";
 import { TopBar } from "./TopBar";
 import { MediaPanel, type SourceMeta } from "./MediaPanel";
 import { Viewer } from "./Viewer";
@@ -28,12 +47,16 @@ import { Timeline } from "./Timeline";
 
 const TERMINAL = new Set(["completed", "failed", "rejected", "unsupported"]);
 const REVIEW_WAIT = new Set(["awaiting_approval", "awaiting_clarification"]);
+// Idea-to-video on the same route: while the platform is empty (no clip,
+// no edit job) the assistant routes the confirmed instruction into an idea
+// job instead of an edit. Active worker states are polled; terminal idea
+// states stop the poll and allow a fresh creation from the same draft.
+const IDEA_POLL = new Set(["queued", "processing"]);
+const IDEA_TERMINAL = new Set(["completed", "failed", "rejected"]);
+const IDEA_STORAGE_KEY = "clipforge.idea.last";
 
 export function Studio() {
-  const [apiMode, setApiMode] = useState<string | null>(null);
   const [liveAvailable, setLiveAvailable] = useState(false);
-  const [liveBilling, setLiveBilling] = useState(false);
-  const [billingDismissed, setBillingDismissed] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -41,6 +64,16 @@ export function Studio() {
   const [localMeta, setLocalMeta] = useState<SourceMeta | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+
+  // P0 project workspace: the project persists across reloads via the backend;
+  // only the project id is kept in localStorage.
+  const [project, setProject] = useState<ProjectData | null>(null);
+  const [assets, setAssets] = useState<AssetData[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+  const [assetUploading, setAssetUploading] = useState<string | null>(null);
+  const [assetProgress, setAssetProgress] = useState<number | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
 
   const [job, setJob] = useState<JobResponse | null>(null);
   const [result, setResult] = useState<JobResultData | null>(null);
@@ -72,8 +105,16 @@ export function Studio() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [socialFormat, setSocialFormat] = useState<"reels" | "youtube">("reels");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+
+  const [idea, setIdea] = useState<IdeaPayload | null>(null);
+  const [ideaConfig, setIdeaConfig] = useState<IdeaConfigData | null>(null);
+  const [ideaBusy, setIdeaBusy] = useState<string | null>(null);
+  const [ideaError, setIdeaError] = useState<string | null>(null);
+  const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
+  const [programmaticOnly, setProgrammaticOnly] = useState(false);
 
   const primaryRef = useRef<HTMLVideoElement | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -81,21 +122,63 @@ export function Studio() {
   useEffect(() => {
     checkHealth()
       .then((h) => {
-        setApiMode(h.ai_mode);
         setLiveAvailable(h.live_transcription_available);
-        setLiveBilling(
-          h.live_transcription_available ||
-            h.director_mode === "live" ||
-            h.segmentation_mode === "live" ||
-            h.live_image_available === true,
-        );
         setApiError(null);
       })
       .catch((e) => setApiError(e instanceof ApiClientError ? e.message : "Backend unreachable."));
+    // Restore the persisted project workspace (backend is source of truth;
+    // localStorage holds only the id).
+    const storedId = typeof window !== "undefined" ? window.localStorage.getItem("clipforge.projectId") : null;
+    if (storedId) {
+      setAssetsLoading(true);
+      getProject(storedId)
+        .then((p) => {
+          setProject(p);
+          return listAssets(p.project_id);
+        })
+        .then((l) => {
+          setAssets(l.assets);
+          setAssetsError(null);
+        })
+        .catch(() => {
+          window.localStorage.removeItem("clipforge.projectId");
+          setProject(null);
+          setAssets([]);
+        })
+        .finally(() => setAssetsLoading(false));
+    }
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
   }, []);
+
+  const refreshAssets = useCallback(async (projectId: string) => {
+    setAssetsLoading(true);
+    try {
+      const [p, l] = await Promise.all([getProject(projectId), listAssets(projectId)]);
+      setProject(p);
+      setAssets(l.assets);
+      setAssetsError(null);
+    } catch (e) {
+      setAssetsError(e instanceof ApiClientError ? e.message : "Could not load project assets.");
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, []);
+
+  const ensureProject = useCallback(async (): Promise<ProjectData> => {
+    if (project) return project;
+    setProjectBusy(true);
+    try {
+      const created = await createProject(file ? file.name.replace(/\.[^.]+$/, "") : "Untitled project");
+      setProject(created);
+      setAssets([]);
+      window.localStorage.setItem("clipforge.projectId", created.project_id);
+      return created;
+    } finally {
+      setProjectBusy(false);
+    }
+  }, [project, file]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -103,6 +186,72 @@ export function Studio() {
       pollRef.current = null;
     }
   }, []);
+
+  const rememberIdea = useCallback((ideaId: string) => {
+    window.localStorage.setItem(IDEA_STORAGE_KEY, ideaId);
+    const url = new URL(window.location.href);
+    url.searchParams.set("idea", ideaId);
+    window.history.replaceState({}, "", url.toString());
+  }, []);
+
+  const loadIdea = useCallback(
+    async (ideaId: string) => {
+      try {
+        const data = await getIdea(ideaId);
+        setIdea(data);
+        setApiError(null);
+        rememberIdea(ideaId);
+      } catch {
+        window.localStorage.removeItem(IDEA_STORAGE_KEY);
+      }
+    },
+    [rememberIdea],
+  );
+
+  // Restore an in-flight idea (deep link ?idea= or last session).
+  useEffect(() => {
+    const fromUrl = new URL(window.location.href).searchParams.get("idea");
+    const stored = window.localStorage.getItem(IDEA_STORAGE_KEY);
+    const ideaId = fromUrl || stored;
+    if (ideaId) void loadIdea(ideaId);
+  }, [loadIdea]);
+
+  // Poll only while the idea worker owns the job.
+  useEffect(() => {
+    if (!idea || !IDEA_POLL.has(idea.status)) return;
+    const ideaId = idea.idea_id;
+    const timer = window.setInterval(() => {
+      void getIdea(ideaId)
+        .then((data) => {
+          setIdea(data);
+          setApiError(null);
+        })
+        .catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [idea?.idea_id, idea?.status]);
+
+  // Reset the plate selection whenever a new plan arrives.
+  useEffect(() => {
+    if (!idea?.storyboard || idea.stage !== "awaiting_plan_approval") return;
+    setSelectedAssets(
+      idea.assets.filter((asset) => asset.status !== "skipped").map((asset) => asset.asset_id),
+    );
+    setProgrammaticOnly(!idea.options.use_generated_images);
+  }, [idea?.storyboard_hash, idea?.stage]);
+
+  const ideaModes = idea?.modes ?? ideaConfig?.modes;
+
+  const storyboardCost = useMemo(() => {
+    if ((ideaModes?.director ?? "mock") !== "live") return 0;
+    return idea?.estimate?.storyboard_usd ?? ideaConfig?.prices.storyboard_usd ?? 0.002;
+  }, [ideaConfig?.prices.storyboard_usd, idea?.estimate?.storyboard_usd, ideaModes?.director]);
+
+  const assetCost = useMemo(() => {
+    if ((ideaModes?.image ?? "mock") !== "live") return 0;
+    const unit = ideaConfig?.prices.image_usd ?? 0.01;
+    return Number((selectedAssets.length * unit).toFixed(6));
+  }, [ideaConfig?.prices.image_usd, ideaModes?.image, selectedAssets.length]);
 
   const pollJob = useCallback(
     (jobId: string) => {
@@ -195,14 +344,65 @@ export function Studio() {
     setUploading(true);
     setUploadProgress(0);
     try {
-      const created = await uploadVideo(f, setUploadProgress);
+      // The session clip joins the persistent project: reuse it or create one,
+      // then register the source as a project asset server-side (no extra AI).
+      const active = await ensureProject();
+      const created = await uploadVideo(f, setUploadProgress, active.project_id);
       setJob(created);
+      if (created.project_id && created.project_id !== active.project_id) {
+        window.localStorage.setItem("clipforge.projectId", created.project_id);
+      }
       setApiError(null);
+      void refreshAssets(created.project_id ?? active.project_id);
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : "Upload failed.");
     } finally {
       setUploading(false);
       uploadingRef.current = false;
+    }
+  }
+
+  async function handleImportFiles(files: File[]) {
+    if (files.length === 0) return;
+    setError(null);
+    try {
+      const active = await ensureProject();
+      for (const f of files) {
+        setAssetUploading(f.name);
+        setAssetProgress(0);
+        try {
+          await uploadAsset(active.project_id, f, setAssetProgress);
+        } finally {
+          setAssetUploading(null);
+          setAssetProgress(null);
+        }
+      }
+      await refreshAssets(active.project_id);
+    } catch (e) {
+      setError(e instanceof ApiClientError ? e.message : "Asset import failed.");
+    }
+  }
+
+  async function handleDeleteAsset(assetId: string) {
+    if (!project) return;
+    try {
+      await deleteAsset(project.project_id, assetId);
+      await refreshAssets(project.project_id);
+    } catch (e) {
+      setError(e instanceof ApiClientError ? e.message : "Could not remove the asset.");
+    }
+  }
+
+  async function handleRenameProject(title: string) {
+    if (!project) return;
+    setProjectBusy(true);
+    try {
+      const updated = await renameProject(project.project_id, title);
+      setProject(updated);
+    } catch (e) {
+      setError(e instanceof ApiClientError ? e.message : "Could not rename the project.");
+    } finally {
+      setProjectBusy(false);
     }
   }
 
@@ -212,9 +412,15 @@ export function Studio() {
   }
 
   function sendInstruction() {
-    if (!job || !draft.trim()) return;
+    if (!draft.trim()) return;
     setError(null);
-    void submitInstruction();
+    if (job) {
+      void submitInstruction();
+      return;
+    }
+    // No clip, no edit job: the platform is empty, so the confirmed
+    // instruction becomes a new video idea instead of an edit.
+    void handleCreateIdea();
   }
 
   async function submitInstruction() {
@@ -236,6 +442,84 @@ export function Studio() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function runIdea(label: string, action: () => Promise<IdeaPayload>) {
+    setIdeaBusy(label);
+    setIdeaError(null);
+    try {
+      const data = await action();
+      setIdea(data);
+      rememberIdea(data.idea_id);
+    } catch (e) {
+      setIdeaError(e instanceof ApiClientError ? e.message : "Erro inesperado.");
+    } finally {
+      setIdeaBusy(null);
+    }
+  }
+
+  async function handleCreateIdea() {
+    const text = draft.trim();
+    if (!text || ideaBusy) return;
+    setIdeaBusy("create");
+    setError(null);
+    try {
+      const cfg = ideaConfig ?? (await getIdeaConfig());
+      setIdeaConfig(cfg);
+      setApiError(null);
+      const data = await createIdea(text, cfg.defaults);
+      setIdea(data);
+      rememberIdea(data.idea_id);
+    } catch (e) {
+      // No idea panel exists yet to show this: surface it in the top banner.
+      setError(e instanceof ApiClientError ? e.message : "Não foi possível criar o vídeo da ideia.");
+    } finally {
+      setIdeaBusy(null);
+    }
+  }
+
+  function handleApproveStoryboard() {
+    if (!idea) return;
+    void runIdea("approve-storyboard", () => approveIdeaStoryboard(idea.idea_id, storyboardCost));
+  }
+
+  function handleApproveAssets() {
+    if (!idea) return;
+    const ids = programmaticOnly ? [] : selectedAssets;
+    void runIdea("approve-assets", () =>
+      approveIdeaAssets(idea.idea_id, {
+        asset_ids: ids,
+        max_cost_usd: programmaticOnly ? 0 : assetCost,
+        programmatic_only: programmaticOnly || ids.length === 0,
+      }),
+    );
+  }
+
+  function handleRerenderIdea() {
+    if (!idea?.storyboard_hash) return;
+    void runIdea("render", () => rerenderIdea(idea.idea_id, idea.storyboard_hash as string));
+  }
+
+  function handleCancelIdea() {
+    if (!idea) return;
+    void runIdea("cancel", () => cancelIdea(idea.idea_id));
+  }
+
+  function handleRejectIdea() {
+    if (!idea) return;
+    void runIdea("reject", () => rejectIdea(idea.idea_id));
+  }
+
+  function handleNewIdea() {
+    setIdea(null);
+    setSelectedAssets([]);
+    setProgrammaticOnly(false);
+    setIdeaError(null);
+    setIdeaBusy(null);
+    window.localStorage.removeItem(IDEA_STORAGE_KEY);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("idea");
+    window.history.replaceState({}, "", url.toString());
   }
 
   function declineConsent() {
@@ -397,7 +681,18 @@ export function Studio() {
     setConsentError(null);
     setConsentReason(null);
     uploadingRef.current = false;
+    setIdea(null);
+    setSelectedAssets([]);
+    setProgrammaticOnly(false);
+    setIdeaError(null);
+    setIdeaBusy(null);
+    window.localStorage.removeItem(IDEA_STORAGE_KEY);
+    const resetUrl = new URL(window.location.href);
+    resetUrl.searchParams.delete("idea");
+    window.history.replaceState({}, "", resetUrl.toString());
   }
+
+  // Auto-transcription: stopping a recording sends the audio straight to the
 
   // Auto-transcription: stopping a recording sends the audio straight to the
   // provider — transcription is a service, not a destination, so there is no
@@ -439,22 +734,33 @@ export function Studio() {
   }, []);
 
   const resultReady = Boolean(job?.status === "completed" && result?.render_status === "verified" && result?.rendered);
-  const editedUrl = job && resultReady ? downloadUrl(job.job_id) : null;
+  const editedUrl = job && resultReady ? downloadUrl(job.job_id, "original") : null;
 
   async function handleExport() {
     if (!job || !resultReady) return;
     setExporting(true);
     setExportError(null);
     try {
-      const response = await fetch(downloadUrl(job.job_id));
-      if (!response.ok) throw new Error(`Export failed (${response.status}) — the verified file may have been removed.`);
+      const response = await fetch(downloadUrl(job.job_id, socialFormat));
+      if (!response.ok) {
+        let detail = `Export failed (${response.status}) — the verified file may have been removed.`;
+        try {
+          const body = await response.json();
+          if (body?.error?.message) detail = body.error.message;
+        } catch {
+          /* keep generic message */
+        }
+        throw new Error(detail);
+      }
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `clipforge-${job.job_id}.mp4`;
+      anchor.download = `clipforge-${job.job_id}-${socialFormat}.mp4`;
+      document.body.appendChild(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
       setExportError(e instanceof Error ? e.message : "Export failed.");
     } finally {
@@ -473,7 +779,6 @@ export function Studio() {
       }
     : null;
   const effectiveDuration = duration || jobMeta?.duration_seconds || localMeta?.duration || 0;
-  const resolution = jobMeta ? `${jobMeta.width}×${jobMeta.height}` : localMeta ? `${localMeta.width}×${localMeta.height}` : null;
 
   return (
     <main className="flex min-h-screen flex-col bg-background lg:h-screen lg:overflow-hidden">
@@ -481,24 +786,12 @@ export function Studio() {
       <a href="#viewer" className="sr-only focus:not-sr-only focus:bg-accent focus:px-3 focus:py-1.5 focus:text-sm focus:font-semibold focus:text-[#14110C]">
         Skip to video viewer
       </a>
-      {liveBilling && !billingDismissed && (
-        <div role="note" aria-label="Live billing notice" className="border-b border-accent/40 bg-accent/10 px-4 py-2 text-[12px] leading-relaxed">
-          <span className="font-mono text-[10px] tracking-wider text-accent">LIVE AI ENABLED · </span>
-          Live providers bill your own Meta account and may incur charges.
-          Each model runs only when you request it; rendering is local and free.
-          <button type="button" onClick={() => setBillingDismissed(true)} className="ml-3 font-mono text-[11px] text-muted underline underline-offset-2 hover:text-foreground">
-            Dismiss
-          </button>
-        </div>
-      )}
       <TopBar
-        projectName={file ? file.name.replace(/\.[^.]+$/, "") : "Untitled project"}
-        aiMode={apiMode}
-        liveTranscription={liveAvailable}
+        projectName={project?.title ?? (file ? file.name.replace(/\.[^.]+$/, "") : "Untitled project")}
         apiError={apiError}
-        resolution={resolution}
-        durationLabel={effectiveDuration ? `${effectiveDuration.toFixed(1)}s` : null}
         jobStatus={job?.status ?? null}
+        selectedFormat={socialFormat}
+        onSelectFormat={setSocialFormat}
         canExport={resultReady}
         exporting={exporting}
         onExport={handleExport}
@@ -533,14 +826,29 @@ export function Studio() {
             uploadProgress={uploadProgress}
             onFile={handleFile}
             onReplace={reset}
+            project={project}
+            assets={assets}
+            assetsLoading={assetsLoading}
+            assetsError={assetsError}
+            assetUploading={assetUploading}
+            assetProgress={assetProgress}
+            projectBusy={projectBusy}
+            onImportFiles={(files) => void handleImportFiles(files)}
+            onDeleteAsset={(assetId) => void handleDeleteAsset(assetId)}
+            onRenameProject={(title) => void handleRenameProject(title)}
           />
         </div>
 
         <div className="order-1 flex min-h-[52vh] flex-col lg:order-2 lg:h-full lg:min-h-0">
-          <Viewer
+          {idea && !job ? (
+            <IdeaPreview idea={idea} busy={ideaBusy} />
+          ) : (
+            <>
+              <Viewer
             originalUrl={originalUrl}
             editedUrl={editedUrl}
             resultReady={resultReady}
+            displayFormat={socialFormat}
             primaryRef={primaryRef}
             currentTime={currentTime}
             duration={effectiveDuration}
@@ -572,9 +880,11 @@ export function Studio() {
             hasAudio={jobMeta ? jobMeta.has_audio : null}
             onSeek={handleSeek}
           />
+            </>
+          )}
         </div>
 
-        <div className="order-2 min-h-0 border-t border-border lg:overflow-hidden lg:border-l lg:border-t-0">
+        <div className="order-2 min-h-0 border-t border-border lg:overflow-y-auto lg:border-l lg:border-t-0">
           <AssistantPanel
             job={job}
             result={result}
@@ -605,15 +915,53 @@ export function Studio() {
             onDraftChange={setDraft}
             onTranscribe={handleTranscribe}
             onTypedInstruction={handleTypedInstruction}
-            canConfirm={Boolean(job && job.status === "queued" && !job.ready)}
-            confirming={submitting}
+            canConfirm={
+              job
+                ? Boolean(job.status === "queued" && !job.ready)
+                : !idea || IDEA_TERMINAL.has(idea.status)
+            }
+            confirming={submitting || ideaBusy === "create"}
             submitted={voiceSubmitted}
             onConfirmTranscript={sendInstruction}
             onRetry={reset}
             reviewOpen={planDialogOpen}
             consentWaiting={job?.status === "awaiting_consent" && !consentOpen}
             onConsentContinue={reopenConsent}
+            confirmLabel={
+              !job && (!idea || IDEA_TERMINAL.has(idea.status))
+                ? "Create video from this idea"
+                : undefined
+            }
+            emptyPlatform={!job && !file && !uploading}
           />
+          {idea && (
+            <div className="border-t border-border">
+              <IdeaStatusPanel
+                idea={idea}
+                config={ideaConfig}
+                busy={ideaBusy}
+                error={ideaError}
+                selectedAssets={selectedAssets}
+                programmaticOnly={programmaticOnly}
+                storyboardCost={storyboardCost}
+                assetCost={assetCost}
+                onToggleAsset={(assetId) =>
+                  setSelectedAssets((current) =>
+                    current.includes(assetId)
+                      ? current.filter((id) => id !== assetId)
+                      : [...current, assetId],
+                  )
+                }
+                onProgrammaticOnly={setProgrammaticOnly}
+                onApproveStoryboard={handleApproveStoryboard}
+                onApproveAssets={handleApproveAssets}
+                onCancel={handleCancelIdea}
+                onReject={handleRejectIdea}
+                onRerender={handleRerenderIdea}
+                onNewIdea={handleNewIdea}
+              />
+            </div>
+          )}
         </div>
       </div>
 

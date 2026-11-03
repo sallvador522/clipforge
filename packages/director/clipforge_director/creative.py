@@ -104,8 +104,14 @@ class CreativeDirectorProvider(MetaEditingDirectorProvider):
         *,
         request_id: str | None = None,
         authorization: LiveCallAuthorization | None = None,
+        instructions: str | None = None,
     ) -> Storyboard:
-        """Generate exactly one storyboard via a single Chat Completions call."""
+        """Generate exactly one storyboard via a single Chat Completions call.
+
+        `instructions` carries validated project options (duration, aspect,
+        fps, style). It is appended to the developer playbook, never to the
+        user message, so `user_request` still echoes the brief verbatim.
+        """
         import httpx
 
         from clipforge_director.spark import (
@@ -126,13 +132,16 @@ class CreativeDirectorProvider(MetaEditingDirectorProvider):
             )
         transcript = TranscriptResult(text=idea, language="pt-BR", provider_name="user", is_mock=False)
         expected_request_id = request_id or storyboard_request_id(idea)
+        playbook = CREATIVE_BRIEF
+        if instructions:
+            playbook = f"{CREATIVE_BRIEF}\n\nPROJECT OPTIONS (must obey):\n{instructions}"
         payload = {
             "model": self._model,
             "messages": [
                 {
                     "role": "developer",
                     "content": build_developer_prompt(
-                        playbook_text=CREATIVE_BRIEF,
+                        playbook_text=playbook,
                         capability_summary="storyboard-only",
                     ),
                 },

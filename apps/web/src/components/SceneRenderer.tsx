@@ -36,8 +36,48 @@ export type Board = {
   duration_seconds: number;
   output_fps: number;
   scenes: Scene[];
-  asset_plan: { asset_id: string; scene_ids: string[] }[];
+  asset_plan: AssetRef[];
 };
+
+export type AssetRef = {
+  asset_id: string;
+  scene_ids: string[];
+  role?: string;
+};
+
+/** Resolve one multiplane layer for a scene: backdrop or foreground band. */
+export function layerAssetFor(
+  plan: AssetRef[],
+  assetUrls: Record<string, string> | undefined,
+  assetBasePath: string,
+  sceneId: string,
+  role: "background" | "foreground",
+): string | null {
+  const hit = plan.find(
+    (a) => a.scene_ids.includes(sceneId) && (a.role ?? "background") === role,
+  );
+  if (!hit) return null;
+  if (assetUrls) return assetUrls[hit.asset_id] ?? null;
+  return assetBasePath ? `${assetBasePath}/${hit.asset_id}.png` : null;
+}
+
+export function bgAssetFor(
+  plan: AssetRef[],
+  assetUrls: Record<string, string> | undefined,
+  assetBasePath: string,
+  sceneId: string,
+): string | null {
+  return layerAssetFor(plan, assetUrls, assetBasePath, sceneId, "background");
+}
+
+export function fgAssetFor(
+  plan: AssetRef[],
+  assetUrls: Record<string, string> | undefined,
+  assetBasePath: string,
+  sceneId: string,
+): string | null {
+  return layerAssetFor(plan, assetUrls, assetBasePath, sceneId, "foreground");
+}
 
 export type SceneRendererHandle = {
   seek: (ms: number) => void;
@@ -50,15 +90,17 @@ export type SceneRendererHandle = {
 type Props = {
   board: Board;
   /** Base URL for scene background assets (stable asset refs resolve under it). */
-  assetBasePath: string;
+  assetBasePath?: string;
+  /** Explicit asset URL per asset id. When present, unlisted assets stay programmatic. */
+  assetUrls?: Record<string, string>;
+  /** Stage size. Defaults to the vertical 720x1280 master. */
+  width?: number;
+  height?: number;
   /** Called once the engine is built AND fonts/images are ready to paint. */
   onReady?: () => void;
   /** When false the renderer stays inert until `play()` is called (preview). */
   startPaused?: boolean;
 };
-
-const W = 720;
-const H = 1280;
 
 function mulberry32(seed: number) {
   return () => {
@@ -71,17 +113,20 @@ function mulberry32(seed: number) {
 }
 
 const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRenderer(
-  { board, assetBasePath, onReady, startPaused = true }: Props,
+  { board, assetBasePath = "", assetUrls, width = 720, height = 1280, onReady, startPaused = true }: Props,
   ref
 ) {
+  const W = width;
+  const H = height;
   const stageRef = useRef<HTMLDivElement>(null);
   const tlRef = useRef<ReturnType<typeof createTimeline> | null>(null);
   const readyRef = useRef(false);
 
-  const assetForScene = (sceneId: string): string | null => {
-    const hit = board.asset_plan.find((a) => a.scene_ids.includes(sceneId));
-    return hit ? `${assetBasePath}/${hit.asset_id}.png` : null;
-  };
+  const assetForScene = (sceneId: string): string | null =>
+    bgAssetFor(board.asset_plan, assetUrls, assetBasePath, sceneId);
+
+  const fgAssetForScene = (sceneId: string): string | null =>
+    fgAssetFor(board.asset_plan, assetUrls, assetBasePath, sceneId);
 
   const sceneHue = (sceneId: string): number => {
     let h = 0;
@@ -151,7 +196,7 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
     const tl = createTimeline({ autoplay: !startPaused, defaults: { ease: "outQuad" } });
     // Hold helper: completed tweens don't stick on a never-played timeline
     // under seek-only rendering, so pin each tween's end values with a set.
-    type TweenProps = { [k: string]: number | string | boolean | number[] };
+    type TweenProps = { [k: string]: number | string | boolean | number[] | string[] };
     const hold = (target: object, props: TweenProps, at: number, d: number) => {
       const end: TweenProps = {};
       for (const [k, v] of Object.entries(props)) {
@@ -165,8 +210,24 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
       hold(target, props, at, d);
     };
     let offset = 0;
-    const easeOf = (s: Step) =>
-      s.ease === "inQuad" ? "inQuad" : s.ease === "linear" ? "linear" : "outQuad";
+    // Easing passthrough over the verified Anime.js vocabulary. Anything
+    // else falls back to outQuad so an old or misspelled value can never
+    // throw inside the capture browser.
+    const ENGINE_EASES = new Set([
+      "linear",
+      "inQuad",
+      "outQuad",
+      "inOutQuad",
+      "outExpo",
+      "outCirc",
+      "outBack",
+      "outElastic",
+      "outBounce",
+    ]);
+    const easeOf = (s: Step) => {
+      const eased = s.ease ?? "outQuad";
+      return ENGINE_EASES.has(eased) ? eased : "outQuad";
+    };
     b.scenes.forEach((scene, si) => {
       const sec = root.querySelector<HTMLElement>(`[data-scene="${scene.scene_id}"]`);
       if (!sec) return;
@@ -298,6 +359,82 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
             }
             break;
           }
+          case "mask_reveal": {
+            // Cinematic clip-path wipe. The element must already exist
+            // (title/line/conclusion); the wipe is the animation.
+            const n = el(step.target);
+            if (n) {
+              tl.set(n, { clipPath: "inset(-3% 102% -3% 0%)", opacity: 1 }, at);
+              addHold(
+                n,
+                {
+                  clipPath: ["inset(-3% 102% -3% 0%)", "inset(-3% -2% -3% 0%)"],
+                  duration: d,
+                  ease,
+                },
+                at,
+                d,
+              );
+            }
+            break;
+          }
+          case "elastic_pop": {
+            // Scale pop; pair with an elastic ease for the bounce.
+            const n = el(step.target);
+            if (n) {
+              tl.set(n, { scale: 0.6, opacity: 0 }, at);
+              addHold(n, { scale: [0.6, 1], opacity: [0, 1], duration: d, ease }, at, d);
+            }
+            break;
+          }
+          case "shake": {
+            // Impact shake; amplitude in px, decaying oscillation.
+            const n = el(step.target);
+            if (n) {
+              const raw = Number(step.params?.amplitude ?? 12);
+              const amp = Number.isFinite(raw) ? Math.min(24, Math.max(4, raw)) : 12;
+              addHold(
+                n,
+                { x: [0, -amp, amp, -amp * 0.6, amp * 0.6, 0], duration: d, ease: "outQuad" },
+                at,
+                d,
+              );
+            }
+            break;
+          }
+          case "gradient_shift": {
+            // Hue drift on the backdrop layer. Best on programmatic
+            // gradients; use small angles over generated plates.
+            const bgm = sec.querySelector<HTMLElement>('[data-layer="bg"]');
+            if (bgm) {
+              const raw = Number(step.params?.degrees ?? 50);
+              const deg = Number.isFinite(raw) ? Math.min(120, Math.max(-120, raw)) : 50;
+              tl.set(bgm, { filter: "hue-rotate(0deg)" }, at);
+              addHold(
+                bgm,
+                { filter: ["hue-rotate(0deg)", `hue-rotate(${deg}deg)`], duration: d, ease: "linear" },
+                at,
+                d,
+              );
+            }
+            break;
+          }
+          case "tracking": {
+            // Letterspacing settle; spread in em units.
+            const n = el(step.target);
+            if (n) {
+              const raw = Number(step.params?.spread ?? 0.35);
+              const spread = Number.isFinite(raw) ? Math.min(0.6, Math.max(0.1, raw)) : 0.35;
+              tl.set(n, { opacity: 0, letterSpacing: `${spread}em` }, at);
+              addHold(
+                n,
+                { opacity: [0, 1], letterSpacing: [`${spread}em`, "0em"], duration: d, ease },
+                at,
+                d,
+              );
+            }
+            break;
+          }
           case "counter": {
             const n = el(step.target);
             if (n) {
@@ -358,7 +495,18 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
   };
 
   return (
-    <div id="idea-stage" ref={stageRef} style={{ position: "relative", width: W, height: H, overflow: "hidden", background: "#05060f" }}>
+    <div
+      id="idea-stage"
+      ref={stageRef}
+      style={{
+        position: "relative",
+        width: W,
+        height: H,
+        flexShrink: 0,
+        overflow: "hidden",
+        background: "#05060f",
+      }}
+    >
       {board.scenes.map((scene) => {
         const used = new Set(scene.animation_sequence.map((s) => s.target));
         return (
@@ -373,34 +521,89 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
             const hue = sceneHue(scene.scene_id);
             return <div data-layer="bg" style={{ position: "absolute", inset: 0, background: `linear-gradient(160deg, hsl(${hue},42%,10%), hsl(${(hue + 50) % 360},48%,20%))` }} />;
           })()}
+          {(() => {
+            // Multiplane foreground: bottom-anchored band drifting against
+            // the backdrop via parallax (layers move at different speeds).
+            const fsrc = fgAssetForScene(scene.scene_id);
+            if (!fsrc) return null;
+            // eslint-disable-next-line @next/next/no-img-element
+            return <img data-layer="fg" src={fsrc} alt="" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "62%", width: "100%", objectFit: "cover", objectPosition: "center bottom" }} />;
+          })()}
+          {used.has("grid") && (
+            <div
+              data-el="grid"
+              style={{
+                position: "absolute",
+                inset: 0,
+                opacity: 0.18,
+                backgroundImage:
+                  "linear-gradient(to right, rgba(255,255,255,.35) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,.35) 1px, transparent 1px)",
+                backgroundSize: "72px 72px",
+                maskImage: "radial-gradient(circle at 50% 55%, #000 20%, transparent 78%)",
+                WebkitMaskImage: "radial-gradient(circle at 50% 55%, #000 20%, transparent 78%)",
+              }}
+            />
+          )}
+          {used.has("orb") && (
+            <div
+              data-el="orb"
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "46%",
+                width: 190,
+                height: 190,
+                marginLeft: -95,
+                marginTop: -95,
+                borderRadius: "50%",
+                background: "radial-gradient(circle at 35% 30%, #ffe1bd, #ff7659 48%, #7a2d1d 100%)",
+                boxShadow: "0 0 100px rgba(255,118,89,.45)",
+              }}
+            />
+          )}
+          {used.has("particles") && <div data-el="particles" style={{ position: "absolute", left: "50%", top: "52%", width: 0, height: 0 }} />}
           {used.has("asteroid") && <div data-el="asteroid" style={{ position: "absolute", left: 0, top: 0, width: 90, height: 90, borderRadius: "50%", background: "radial-gradient(circle at 35% 35%, #6b6259, #241f1b 70%)", boxShadow: "0 0 40px rgba(255,150,60,.35)" }} />}
           {used.has("plasma_trail") && <div data-el="plasma_trail" style={{ position: "absolute", left: "50%", top: "55%", width: 0, height: 0 }} />}
-          {used.has("shockwave") && <div data-el="shockwave" style={{ position: "absolute", left: "50%", top: "72%", transform: "translate(-50%,-50%)", borderRadius: "50%", border: "6px solid rgba(255,200,120,.9)" }} />}
+          {used.has("shockwave") && <div data-el="shockwave" style={{ position: "absolute", left: "50%", top: "62%", transform: "translate(-50%,-50%)", borderRadius: "50%", border: "6px solid rgba(255,200,120,.9)" }} />}
           {used.has("flash") && <div data-el="flash" style={{ position: "absolute", inset: 0, background: "#fff", opacity: 0 }} />}
           {used.has("divider") && (
           <svg data-el="divider" width={W} height={H} style={{ position: "absolute", inset: 0 }}>
-            <path d="M60,1100 L660,1100" stroke="#ffb36b" strokeWidth="4" fill="none" />
+            <path d={`M60,${Math.round(H * 0.86)} L${W - 60},${Math.round(H * 0.86)}`} stroke="#ffb36b" strokeWidth="4" fill="none" />
           </svg>
           )}
-          <div style={{ position: "absolute", left: 40, right: 40, top: 120 }}>
+          <div style={{ position: "absolute", left: 40, right: 40, top: Math.round(H * 0.1) }}>
             {scene.on_screen_text.map((t, i) => {
               const elId = i === 0 ? "title" : `line${i}`;
               const animated = scene.animation_sequence.some(
                 (s) => s.primitive === "kinetic_typography" && s.target === elId
               );
+              // Auto-fit: long lines shrink so layout QA never clips them.
+              // Title is the hook (big), lines are support (compact).
+              const size =
+                i === 0
+                  ? t.length > 30
+                    ? 38
+                    : t.length > 20
+                      ? 46
+                      : 54
+                  : t.length > 44
+                    ? 22
+                    : t.length > 32
+                      ? 26
+                      : 32;
               return (
-              <div key={i} data-el={elId} style={{ color: "#fff", fontFamily: "Arial, sans-serif", fontWeight: 800, fontSize: i === 0 ? 54 : 34, textShadow: "0 2px 18px rgba(0,0,0,.8)", marginBottom: 12 }}>
+              <div key={i} data-el={elId} style={{ color: "#fff", fontFamily: "var(--font-manrope), ui-sans-serif, system-ui, sans-serif", fontWeight: 800, fontSize: size, lineHeight: i === 0 ? 1.06 : 1.25, letterSpacing: i === 0 ? "-0.015em" : "0", textShadow: "0 2px 18px rgba(0,0,0,.8)", marginBottom: i === 0 ? 16 : 10 }}>
                 {kinetic(t, animated)}
               </div>
               );
             })}
           </div>
           {used.has("conclusion") && (
-          <div data-el="conclusion" style={{ position: "absolute", left: 40, right: 40, bottom: 220, color: "#ffd9a8", fontFamily: "Arial, sans-serif", fontSize: 28, opacity: 0 }}>
+          <div data-el="conclusion" style={{ position: "absolute", left: 40, right: 40, bottom: 220, color: "#ffd9a8", fontFamily: "var(--font-manrope), ui-sans-serif, system-ui, sans-serif", fontSize: 28, opacity: 0 }}>
             {kinetic(scene.on_screen_text[scene.on_screen_text.length - 1] ?? "", scene.animation_sequence.some((s) => s.primitive === "kinetic_typography" && s.target === "conclusion"))}
           </div>
           )}
-          {used.has("counter") && <div data-el="counter" style={{ position: "absolute", left: 40, top: 560, color: "#fff", fontFamily: "Arial, sans-serif", fontWeight: 800, fontSize: 72 }}>0 m</div>}
+          {used.has("counter") && <div data-el="counter" style={{ position: "absolute", left: 40, top: 560, color: "#fff", fontFamily: "var(--font-manrope), ui-sans-serif, system-ui, sans-serif", fontWeight: 800, fontSize: 72 }}>0 m</div>}
           {used.has("chart") && (
           <div data-el="chart" style={{ position: "absolute", left: 40, right: 40, bottom: 120, display: "flex", gap: 24, alignItems: "flex-end", height: 300 }}>
             {[0, 1, 2].map((i) => (
