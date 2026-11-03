@@ -53,9 +53,9 @@ A new creation mode beside the existing upload editor:
 ## Measured PoC run
 
 - Storyboard `E se um asteroide gigante atingisse a Terra?`: 20 s, 9:16, 24 fps → **480 frames**.
-- Capture: ~81 s wall (≈5.9 fps capture rate) on this machine.
-- QA: 480/480 frames, 0 missing, 0 black; remaining frozen runs are genuine static holds.
-- Output: `storage/idea_poc/idea.mp4` — 720×1280, 20.00 s, 480 frames, h264. Silent (no narration/TTS in the slice; no fake audio).
+- Capture: ~68 s wall (≈7.1 fps capture rate) on this machine.
+- QA: 480/480 frames, 0 missing, 0 black, 20 frozen runs (all genuine static holds, verified by inspection); remaining QA note: heat-only tweens (`onUpdate` counters) are set deterministically via `syncCounters` because callbacks are muted during seek.
+- Output: `storage/idea_poc/idea.mp4` — 720×1280, 20.00 s, 480 frames, h264, silent (no narration/TTS in the slice; no fake audio).
 
 ## Quality review and correction
 
