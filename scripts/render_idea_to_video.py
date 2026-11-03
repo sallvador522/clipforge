@@ -83,6 +83,38 @@ def layout_qa(page, board: Storyboard) -> list[dict]:
     return violations
 
 
+def asset_base_url(args: argparse.Namespace) -> str:
+    """Map the storyboard file to its public asset directory URL."""
+    public = Path("apps/web/public")
+    try:
+        rel = Path(args.storyboard).relative_to(public).parent
+        return "/" + rel.as_posix() + "/assets"
+    except ValueError:
+        return "/idea-fixtures/assets"
+
+
+def check_assets(board: Storyboard, base_url: str, asset_base: str) -> list[str]:
+    """Fail fast on storyboard assets missing from the server.
+
+    A plan referencing an asset file that was never produced must stop the
+    run before any frame is captured — never render with broken images.
+    Returns the list of missing asset ids (empty when all resolve).
+    """
+    import httpx
+
+    origin = base_url.split("/idea")[0]
+    missing: list[str] = []
+    for asset in board.asset_plan:
+        url = f"{origin}{asset_base}/{asset.asset_id}.png"
+        try:
+            ok = httpx.head(url, timeout=15.0).status_code == 200
+        except httpx.HTTPError:
+            ok = False
+        if not ok:
+            missing.append(asset.asset_id)
+    return missing
+
+
 def capture(board: Storyboard, args: argparse.Namespace, frames_dir: Path) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -114,6 +146,13 @@ def capture(board: Storyboard, args: argparse.Namespace, frames_dir: Path) -> in
             raise RuntimeError(
                 f"Scene engine did not respond to seek (scene_1 opacity={opacity}, "
                 f"timeline={debug}); refusing to capture identical frames."
+            )
+        missing_assets = check_assets(board, args.base_url, asset_base_url(args))
+        if missing_assets:
+            browser.close()
+            raise RuntimeError(
+                f"Storyboard references missing asset files: {missing_assets}. "
+                f"Produce them or remove the references; refusing to render with broken images."
             )
         violations = layout_qa(page, board)
         if violations:

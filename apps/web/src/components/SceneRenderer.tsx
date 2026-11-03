@@ -78,9 +78,15 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
   const tlRef = useRef<ReturnType<typeof createTimeline> | null>(null);
   const readyRef = useRef(false);
 
-  const assetForScene = (sceneId: string): string => {
+  const assetForScene = (sceneId: string): string | null => {
     const hit = board.asset_plan.find((a) => a.scene_ids.includes(sceneId));
-    return hit ? `${assetBasePath}/${hit.asset_id}.png` : "";
+    return hit ? `${assetBasePath}/${hit.asset_id}.png` : null;
+  };
+
+  const sceneHue = (sceneId: string): number => {
+    let h = 0;
+    for (let i = 0; i < sceneId.length; i++) h = (h * 31 + sceneId.charCodeAt(i)) % 360;
+    return h;
   };
 
   // Runs after React commits the scenes to the DOM, so every
@@ -357,8 +363,16 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
         const used = new Set(scene.animation_sequence.map((s) => s.target));
         return (
         <section key={scene.scene_id} data-scene={scene.scene_id} style={{ position: "absolute", inset: 0, opacity: 0 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img data-layer="bg" src={`${assetBasePath}/${board.asset_plan.find((a) => a.scene_ids.includes(scene.scene_id))?.asset_id ?? ""}.png`} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          {(() => {
+            const src = assetForScene(scene.scene_id);
+            if (src) {
+              // eslint-disable-next-line @next/next/no-img-element
+              return <img data-layer="bg" src={src} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />;
+            }
+            // Programmatic backdrop: deterministic gradient, no raster needed.
+            const hue = sceneHue(scene.scene_id);
+            return <div data-layer="bg" style={{ position: "absolute", inset: 0, background: `linear-gradient(160deg, hsl(${hue},42%,10%), hsl(${(hue + 50) % 360},48%,20%))` }} />;
+          })()}
           {used.has("asteroid") && <div data-el="asteroid" style={{ position: "absolute", left: 0, top: 0, width: 90, height: 90, borderRadius: "50%", background: "radial-gradient(circle at 35% 35%, #6b6259, #241f1b 70%)", boxShadow: "0 0 40px rgba(255,150,60,.35)" }} />}
           {used.has("plasma_trail") && <div data-el="plasma_trail" style={{ position: "absolute", left: "50%", top: "55%", width: 0, height: 0 }} />}
           {used.has("shockwave") && <div data-el="shockwave" style={{ position: "absolute", left: "50%", top: "72%", transform: "translate(-50%,-50%)", borderRadius: "50%", border: "6px solid rgba(255,200,120,.9)" }} />}

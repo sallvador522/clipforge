@@ -57,6 +57,13 @@ A new creation mode beside the existing upload editor:
 - QA: 480/480 frames, 0 missing, 0 black, 20 frozen runs (all genuine static holds, verified by inspection); remaining QA note: heat-only tweens (`onUpdate` counters) are set deterministically via `syncCounters` because callbacks are muted during seek.
 - Output: `storage/idea_poc/idea.mp4` — 720×1280, 20.00 s, 480 frames, h264, silent (no narration/TTS in the slice; no fake audio).
 
+## TEST A — programmatic-only promo (NEXUS, 15 s)
+
+- Fixture: `tests/fixtures/idea_to_video/test_a_promo.json` — 15 s, 9:16, 3 scenes, empty `image_generation_prompt` (allowed since ADR-025 fix: empty means "no generation needed"), kinetic type, orb, counter, chart bars, drawn divider. No Muse Image involved by design ($0.00).
+- First run correctly REFUSED by the new asset gate: the storyboard referenced `asset_hero` with no file produced — zero frames captured, zero waste.
+- Correction (review→correct): dropped the raster dependency; scene_1 uses the deterministic gradient backdrop. Re-render: 360/360 frames, 0 missing, 0 black, layout QA clean, 720×1280, 15.00 s verified MP4 (`storage/idea_test_a/idea.mp4`, copy in `Videos\Video\NEXUS_promo_15s.mp4`). Frames visually verified (kinetic title, orb, counter, bars, CTA, divider).
+- Manually confirmed defects this loop already caught in the slice: invisible text (spans gated at opacity 0 without a kinetic step), zoom-cropped titles (camera now moves only the backdrop).
+
 ## Quality review and correction
 
 - Deterministic QA runs first; only QA-passed drafts reach the critic.

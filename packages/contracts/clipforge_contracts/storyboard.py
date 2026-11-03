@@ -58,7 +58,8 @@ class SceneSpec(BaseModel):
     duration_ms: int = Field(ge=1000, le=15000)
     narrative_purpose: str = Field(min_length=1, max_length=300)
     visual_description: str = Field(min_length=1, max_length=600)
-    image_generation_prompt: str = Field(min_length=1, max_length=600)
+    # Empty means "no image generation needed" (programmatic scene).
+    image_generation_prompt: str = Field(default="", max_length=600)
     foreground_elements: list[str] = Field(default_factory=list, max_length=8)
     background_elements: list[str] = Field(default_factory=list, max_length=8)
     on_screen_text: list[str] = Field(default_factory=list, max_length=6)

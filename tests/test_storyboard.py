@@ -45,6 +45,24 @@ def test_asteroid_fixture_is_valid_reels_board():
     }
 
 
+def test_test_a_fixture_is_valid_programmatic_board():
+    """TEST A Promo: 15 s, 9:16, 3 scenes, validated by the same contract."""
+    import json
+    from pathlib import Path
+
+    raw = json.loads(
+        (Path(__file__).parent / "fixtures" / "idea_to_video" / "test_a_promo.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    board = Storyboard.model_validate(raw)
+    assert board.duration_seconds == 15
+    assert board.aspect_ratio == "9:16"
+    assert [s.scene_id for s in board.scenes] == ["scene_1", "scene_2", "scene_3"]
+    assert sum(s.duration_ms for s in board.scenes) == 15000
+    assert board.total_frames == 15 * board.output_fps
+
+
 def test_scene_durations_must_cover_project_duration():
     raw = asteroid_reels_storyboard().model_dump(mode="json")
     raw["scenes"][0]["duration_ms"] = 4000
