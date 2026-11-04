@@ -22,6 +22,46 @@ async function parseError(response: Response): Promise<ApiClientError> {
   return new ApiClientError(response.status, "http_error", `Request failed (${response.status}).`);
 }
 
+/** PT-AO user-facing error text. Raw backend messages are English and
+ * technical — never show them to judges. Maps known API codes, falls back
+ * to the caller-supplied PT message for everything else. */
+export function friendlyApiError(e: unknown, fallback: string): string {
+  if (e instanceof ApiClientError) {
+    switch (e.code) {
+      case "api_unreachable":
+        return "Sem ligação à API. Inicia o backend e recarrega.";
+      case "empty_file":
+        return "O ficheiro chegou vazio. Escolhe o ficheiro outra vez.";
+      case "unsupported_extension":
+      case "unsupported_media":
+      case "invalid_mime":
+        return "Formato não suportado. Usa MP4, MOV, WebM, MP3, WAV, PNG, JPG, SVG ou texto.";
+      case "file_too_large":
+      case "media_too_long":
+      case "upload_too_large":
+        return "Ficheiro demasiado grande. O limite é 15 min em 720p.";
+      case "upload_timeout":
+        return "O envio demorou demasiado. Tenta de novo.";
+      case "project_not_found":
+      case "asset_not_found":
+      case "job_not_found":
+        return "Não encontrei esse elemento. Recarrega o projecto.";
+      case "live_budget_exhausted":
+      case "live_call_limit":
+        return "Limite de uso atingido. Tenta mais tarde.";
+      case "edit_window":
+      case "timeline_locked":
+      case "conflict":
+        return "O vídeo já está noutra fase. Recarrega para ver o estado actual.";
+      case "bad_response":
+        return "Resposta ilegível da API. Recarrega e tenta de novo.";
+      default:
+        return fallback;
+    }
+  }
+  return fallback;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {

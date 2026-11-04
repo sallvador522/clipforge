@@ -13,6 +13,7 @@ interface Props {
   onExport: () => void;
   exportError: string | null;
   onRenameProject: (title: string) => void;
+  canRename: boolean;
 }
 
 const TONE_DOT: Record<Props["statusTone"], string> = {
@@ -24,7 +25,7 @@ const TONE_DOT: Record<Props["statusTone"], string> = {
 
 export function TopBar({
   projectName, apiError, statusText, statusTone,
-  canExport, exporting, onExport, exportError, onRenameProject,
+  canExport, exporting, onExport, exportError, onRenameProject, canRename,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -61,8 +62,10 @@ export function TopBar({
           <button
             type="button"
             onClick={() => { setDraft(projectName); setEditing(true); }}
-            title="Mudar o nome do projecto"
-            className="max-w-40 truncate text-left text-[13px] font-medium hover:text-accent focus-visible:outline-2 focus-visible:outline-accent md:max-w-48"
+            disabled={!canRename}
+            title={canRename ? "Mudar o nome do projecto" : "Importa um clipe para dar nome ao projecto"}
+            aria-label={canRename ? `Mudar o nome do projecto (actual: ${projectName})` : "Nome do projecto (disponível após importar um clipe)"}
+            className="max-w-40 truncate text-left text-[13px] font-medium hover:text-accent focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-default disabled:opacity-70 disabled:hover:text-foreground md:max-w-48"
           >
             {projectName}
           </button>

@@ -7,6 +7,8 @@ rendering work. The download endpoint serves only verified rendered outputs.
 
 from __future__ import annotations
 
+import anyio
+import functools
 import logging
 import os
 import uuid
@@ -593,6 +595,21 @@ def _strip_greeting_prefix(low: str) -> str:
     return low
 
 
+# ADR-054 hardening: this fallback is also used when a pending proposal
+# must be withdrawn after the fact (see _guard_pending). Never invents work.
+def _clarify_reply(text: str) -> dict:
+    return {
+        "intent": "clarify",
+        "reply": (
+            f"Não percebi «{text}». Queres desfocar o fundo, substituir o fundo, "
+            "adicionar legendas/texto ou criar outro vídeo?"
+        ),
+        "needs_confirmation": False,
+        "pending_text": None,
+        "pending_kind": None,
+    }
+
+
 _CHAT_COLOURS = {
     "branco": "#FFFFFF", "branca": "#FFFFFF",
     "preto": "#000000", "preta": "#000000",
@@ -1054,16 +1071,7 @@ def _classify_chat(message: str, has_clip: bool) -> dict:
         if not has_actionable_edit_signal(text):
             # Gibberish or content-free text (e.g. "HSDJS") is never an
             # executable instruction: clarify with real options, no pending.
-            return {
-                "intent": "clarify",
-                "reply": (
-                    f"Não percebi «{text}». Queres desfocar o fundo, substituir o fundo, "
-                    "adicionar legendas/texto ou criar outro vídeo?"
-                ),
-                "needs_confirmation": False,
-                "pending_text": None,
-                "pending_kind": None,
-            }
+            return _clarify_reply(text)
         return {
             "intent": "edit_proposal",
             "reply": (
@@ -1452,7 +1460,7 @@ def create_app(
                 has_clip,
                 len(text),
             )
-            return _chat_response(question, text, has_clip, context=context)
+            return await _chat_response(question, text, has_clip, context=context)
 
         # ADR-047 edit router: real tool proposals on the persisted job.
         if record is not None and has_clip and editorial_intent_verifiable(text):
@@ -1474,13 +1482,13 @@ def create_app(
                 logger.info("chat_turn intent=%s has_clip=%s chars=%d tools=%d",
                             payload["intent"], has_clip, len(text),
                             len(proposal.get("tool_calls") or []))
-                return _chat_response(payload, text, has_clip, context=context)
+                return await _chat_response(payload, text, has_clip, context=context)
         classified = _classify_chat(text, has_clip)
         result = _guard_pending(classified, text, context)
         # Director interview (empty platform): an idea request becomes 3
         # quick questions (style/duration/format) before the proposal.
         # Smalltalk/help/status/cancel pass through untouched.
-        if not has_clip and result is not None and result.get("intent") == "idea_proposal":
+        if not has_clip and result.get("intent") == "idea_proposal":
             provided = body.interview.model_dump(exclude_none=True) if body.interview else {}
             turn = _interview_turn(text, provided)
             payload = {
@@ -1494,32 +1502,38 @@ def create_app(
                 "pending_idea_options": turn.get("pending_idea_options"),
                 "interview": turn.get("interview"),
             }
-            payload = _guard_pending(payload, text, context) or payload
+            payload = _guard_pending(payload, text, context)
             logger.info("chat_turn intent=%s has_clip=%s chars=%d interview_needed=%s",
                         payload["intent"], has_clip, len(text),
                         (turn.get("interview") or {}).get("needed"))
-            return _chat_response(payload, text, has_clip, context=context)
+            return await _chat_response(payload, text, has_clip, context=context)
         logger.info(
             "chat_turn intent=%s has_clip=%s chars=%d",
-            result.get("intent") if result is not None else classified.get("intent"),
+            result.get("intent"),
             has_clip,
             len(text),
         )
-        return _chat_response(result, text, has_clip, context=context, context_text=context_text)
+        return await _chat_response(result, text, has_clip, context=context, context_text=context_text)
 
-    def _guard_pending(payload: dict, text: str, context: dict | None) -> dict | None:
-        """Drop pending proposals for meta/informational questions."""
-        if payload.get("pending_text") is None and not payload.get("needs_confirmation"):
-            return payload
+    def _guard_pending(payload: dict, text: str, context: dict | None) -> dict:
+        """Withdraw pending proposals for meta/informational questions.
+
+        Never returns None: a withdrawn proposal becomes a clarify payload
+        without pending work. Returning None here crashed /api/chat with a
+        500 (AttributeError on None.get) on direct questions the context
+        could not answer (e.g. "o vídeo está bom?").
+        """
+        if payload is None or (
+            payload.get("pending_text") is None and not payload.get("needs_confirmation")
+        ):
+            return payload if isinstance(payload, dict) else _clarify_reply(text)
         if context is not None and answer_project_question(
             text, context, has_clip=bool(context["job"]["has_clip"]),
             has_texts=bool(context["job"]["texts"]),
         ) is not None:
-            return None
+            return _clarify_reply(text)
         if is_direct_question(text) and not editorial_intent_verifiable(text):
-            return None
-        if payload.get("pending_text") is None and not payload.get("needs_confirmation"):
-            return payload
+            return _clarify_reply(text)
         if context is not None and answer_project_question(
             text, context, has_clip=bool(context["job"]["has_clip"]),
             has_texts=bool(context["job"]["texts"]),
@@ -1527,7 +1541,7 @@ def create_app(
             return dict(payload, pending_text=None, pending_kind=None, pending_tool_calls=[])
         return payload
 
-    def _chat_response(
+    async def _chat_response(
         payload: dict,
         message: str,
         has_clip: bool,
@@ -1540,9 +1554,11 @@ def create_app(
         Mock returns the contextual router payload as-is. Live sends the
         contextual snapshot to Muse Spark for the human reply; pending work
         remains server-decided and is protected by _guard_pending upstream.
+        The blocking provider call runs in a worker thread so rapid turns
+        never freeze the event loop, and the client is always closed.
         """
         if context is not None:
-            payload = _guard_pending(payload, message, context) or payload
+            payload = _guard_pending(payload, message, context)
 
         if _chat_mode() != "live":
             return JSONResponse(content={**payload, "chat_mode": "mock"})
@@ -1591,16 +1607,22 @@ def create_app(
             brief = str(interview.get("brief", "")).strip()
             if not safe_context_text and brief:
                 safe_context_text = f"Idea brief: {brief}"
-            reply, usage = provider.rewrite_reply(
-                message=message,
-                base_reply=str(payload.get("reply", "")),
-                intent=str(payload.get("intent", "clarify")),
-                has_clip=has_clip,
-                interview_needed=list(interview.get("needed", [])),
-                context=safe_context_text or None,
-                history=history or None,
-                authorization=authorization,
-            )
+            call_kwargs: dict = {
+                "message": message,
+                "base_reply": str(payload.get("reply", "")),
+                "intent": str(payload.get("intent", "clarify")),
+                "has_clip": has_clip,
+                "interview_needed": list(interview.get("needed", [])),
+                "context": safe_context_text or None,
+                "history": history or None,
+                "authorization": authorization,
+            }
+            try:
+                reply, usage = await anyio.to_thread.run_sync(
+                    functools.partial(provider.rewrite_reply, **call_kwargs)
+                )
+            finally:
+                provider.close()
         except ChatMissingCredentialsError:
             return _error(503, "chat_not_configured",
                             "O chat ao vivo precisa de MODEL_API_KEY no servidor.")

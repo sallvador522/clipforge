@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   answerClarification,
-  ApiClientError,
   approvePlan,
   assetFileUrl,
   checkHealth,
@@ -11,6 +10,7 @@ import {
   deleteAsset,
   downloadUrl,
   executeTool,
+  friendlyApiError,
   getClipTexts,
   getColour,
   getJob,
@@ -257,7 +257,7 @@ export function Studio() {
         void putClipTexts(jobId, toBackendTexts(next)).then(
           () => setTextsNote(null),
           (e) => {
-            const msg = e instanceof ApiClientError ? e.message : "Não consegui guardar o texto.";
+            const msg = friendlyApiError(e, "Não consegui guardar o texto.");
             // 409 = edit window closed (director flow mid-review): local stays, honest note.
             setTextsNote(msg);
           },
@@ -563,7 +563,7 @@ export function Studio() {
         setChatLive(h.live_chat_available === true || h.chat_mode === "live");
         setApiError(null);
       })
-      .catch((e) => setApiError(e instanceof ApiClientError ? e.message : "Backend unreachable."));
+      .catch((e) => setApiError(friendlyApiError(e, "Sem ligação à API. Inicia o backend e recarrega.")));
     // Restore the persisted project workspace (backend is source of truth;
     // localStorage holds only the id).
     const storedId = typeof window !== "undefined" ? window.localStorage.getItem("clipforge.projectId") : null;
@@ -599,7 +599,7 @@ export function Studio() {
       setAssetsError(null);
       return l.assets;
     } catch (e) {
-      setAssetsError(e instanceof ApiClientError ? e.message : "Could not load project assets.");
+      setAssetsError(friendlyApiError(e, "Não consegui carregar os recursos. Recarrega."));
       return [];
     } finally {
       setAssetsLoading(false);
@@ -833,7 +833,7 @@ export function Studio() {
           }
         } catch (e) {
           stopPolling();
-          setError(e instanceof ApiClientError ? e.message : "Lost contact with the API while polling.");
+          setError(friendlyApiError(e, "Perdi a ligação à API. Recarrega."));
         }
       }, 1500);
     },
@@ -970,7 +970,18 @@ export function Studio() {
       void refreshAssets(created.project_id ?? active.project_id);
       return created;
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Upload failed.");
+      // A failed upload must not leave a fake loaded session: drop the local
+      // file/blob so the preview and timeline return to the empty state and
+      // the error banner (with Recomeçar) is the only trace left.
+      if (originalUrl && originalUrl.startsWith("blob:")) URL.revokeObjectURL(originalUrl);
+      setFile(null);
+      setOriginalUrl(null);
+      setLocalMeta(null);
+      setUploadProgress(null);
+      setCurrentTime(0);
+      setDuration(0);
+      setPlaying(false);
+      setError(friendlyApiError(e, "O envio falhou. Escolhe o ficheiro outra vez."));
       return null;
     } finally {
       setUploading(false);
@@ -995,7 +1006,7 @@ export function Studio() {
       }
       await refreshAssets(active.project_id);
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Asset import failed.");
+      setError(friendlyApiError(e, "Não consegui importar. Tenta de novo."));
     }
   }
 
@@ -1006,7 +1017,7 @@ export function Studio() {
       if (selectedAssetId === assetId) setSelectedAssetId(null);
       await refreshAssets(project.project_id);
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Could not remove the asset.");
+      setError(friendlyApiError(e, "Não consegui remover. Tenta de novo."));
     }
   }
 
@@ -1017,7 +1028,7 @@ export function Studio() {
       const updated = await renameProject(project.project_id, title);
       setProject(updated);
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Could not rename the project.");
+      setError(friendlyApiError(e, "Não consegui mudar o nome. Tenta de novo."));
     } finally {
       setProjectBusy(false);
     }
@@ -1085,7 +1096,7 @@ export function Studio() {
       if (chat.select_text_id) setSelectedTextId(chat.select_text_id);
     } catch (e) {
       pushMuseMessage("Não consegui responder agora. Tenta de novo.");
-      setError(e instanceof ApiClientError ? e.message : "Não consegui responder. Tenta de novo.");
+      setError(friendlyApiError(e, "Não consegui responder. Tenta de novo."));
     } finally {
       setChatBusy(false);
     }
@@ -1139,7 +1150,7 @@ export function Studio() {
       if (chat.select_text_id) setSelectedTextId(chat.select_text_id);
     } catch (e) {
       pushMuseMessage("Não consegui responder agora. Tenta de novo.");
-      setError(e instanceof ApiClientError ? e.message : "Não consegui responder. Tenta de novo.");
+      setError(friendlyApiError(e, "Não consegui responder. Tenta de novo."));
     } finally {
       setChatBusy(false);
     }
@@ -1194,7 +1205,7 @@ export function Studio() {
           outcomes.push(`${call.tool}: ok`);
         }
       } catch (e) {
-        const msg = e instanceof ApiClientError ? e.message : "falhou";
+        const msg = friendlyApiError(e, "falhou");
         outcomes.push(`${call.tool}: ${msg}`);
         pushMuseMessage(`A ferramenta ${call.tool} falhou: ${msg}. Nada mais foi alterado por este passo.`);
         break;
@@ -1268,7 +1279,7 @@ export function Studio() {
       rememberIdea(data.idea_id);
       setDraft("");
     } catch (e) {
-      setIdeaError(e instanceof ApiClientError ? e.message : "Não consegui preparar o ajuste.");
+      setIdeaError(friendlyApiError(e, "Não consegui preparar o ajuste."));
     } finally {
       setIdeaBusy(null);
     }
@@ -1303,7 +1314,7 @@ export function Studio() {
       setVoiceSubmitted(true);
       pollJob(job.job_id);
     } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Não consegui enviar. Tenta de novo.");
+      setError(friendlyApiError(e, "Não consegui enviar. Tenta de novo."));
     } finally {
       setSubmitting(false);
     }
@@ -1321,7 +1332,7 @@ export function Studio() {
       setIdea(data);
       rememberIdea(data.idea_id);
     } catch (e) {
-      setIdeaError(e instanceof ApiClientError ? e.message : "Algo correu mal. Tenta de novo.");
+      setIdeaError(friendlyApiError(e, "Algo correu mal. Tenta de novo."));
     } finally {
       setIdeaBusy(null);
     }
@@ -1368,7 +1379,7 @@ export function Studio() {
       setDraft("");
     } catch (e) {
       // No idea panel exists yet to show this: surface it in the top banner.
-      setError(e instanceof ApiClientError ? e.message : "Não foi possível criar o vídeo da ideia.");
+      setError(friendlyApiError(e, "Não foi possível criar o vídeo da ideia."));
     } finally {
       setIdeaBusy(null);
     }
@@ -1590,7 +1601,7 @@ export function Studio() {
       setConsentOpen(false);
       pollJob(job.job_id);
     } catch (e) {
-      setConsentError(e instanceof ApiClientError ? e.message : "Could not record consent.");
+      setConsentError(friendlyApiError(e, "Não consegui registar a autorização. Tenta de novo."));
     } finally {
       setSubmitting(false);
     }
@@ -1618,7 +1629,7 @@ export function Studio() {
       setPlanDialogOpen(false);
       pollJob(job.job_id);
     } catch (e) {
-      setDecisionError(e instanceof ApiClientError ? e.message : "Could not approve the plan.");
+      setDecisionError(friendlyApiError(e, "Não consegui registar a decisão. Tenta de novo."));
     } finally {
       setDecisionSubmitting(null);
     }
@@ -1634,7 +1645,7 @@ export function Studio() {
       setPlanReview(null);
       setPlanDialogOpen(false);
     } catch (e) {
-      setDecisionError(e instanceof ApiClientError ? e.message : "Could not reject the plan.");
+      setDecisionError(friendlyApiError(e, "Não consegui registar a decisão. Tenta de novo."));
     } finally {
       setDecisionSubmitting(null);
     }
@@ -1651,7 +1662,7 @@ export function Studio() {
       setPlanDialogOpen(false);
       pollJob(job.job_id);
     } catch (e) {
-      setDecisionError(e instanceof ApiClientError ? e.message : "Could not submit the clarification.");
+      setDecisionError(friendlyApiError(e, "Não consegui registar a decisão. Tenta de novo."));
     } finally {
       setDecisionSubmitting(null);
     }
@@ -1677,7 +1688,7 @@ export function Studio() {
       setTranscribeStatus("done");
     } catch (e) {
       setTranscribeStatus("error");
-      setTranscriptionError(e instanceof ApiClientError ? e.message : "Transcription failed.");
+      setTranscriptionError(friendlyApiError(e, "Não consegui transcrever. Tenta de novo."));
     }
   }
 
@@ -1845,6 +1856,8 @@ export function Studio() {
   }, [transcribeStatus, transcript?.session_id, notifyOnce]);
 
   const studioStatus = useMemo((): { text: string | null; tone: "idle" | "working" | "attention" | "done" } => {
+    if (apiError) return { text: "Sem ligação", tone: "attention" };
+    if (error) return { text: "Precisa de atenção", tone: "attention" };
     if (uploading) return { text: "A enviar vídeo…", tone: "working" };
     if (job) {
       if (job.status === "queued") return { text: "Na fila", tone: "working" };
@@ -1869,7 +1882,7 @@ export function Studio() {
       return { text: "A trabalhar", tone: "working" };
     }
     return { text: null, tone: "idle" as const };
-  }, [job?.status, job?.stage, idea?.status, idea?.stage, uploading]);
+  }, [apiError, error, job?.status, job?.stage, idea?.status, idea?.stage, uploading]);
 
   // Right-column tabs: approvals live in Propriedades, answers in Muse.
   const ideaNeedsReview = Boolean(
@@ -1964,7 +1977,7 @@ export function Studio() {
         saturation: res.colour.saturation,
       });
     } catch (e) {
-      setColourNote(e instanceof ApiClientError ? e.message : "Não consegui guardar a cor.");
+      setColourNote(friendlyApiError(e, "Não consegui guardar a cor."));
     } finally {
       setColourBusy(false);
     }
@@ -1981,7 +1994,7 @@ export function Studio() {
       const data = await putTimeline(job.job_id, clips);
       setAssembly(data);
     } catch (e) {
-      setAssemblyError(e instanceof ApiClientError ? e.message : "Não consegui guardar a timeline.");
+      setAssemblyError(friendlyApiError(e, "Não consegui guardar a timeline."));
       try {
         setAssembly(await getTimeline(job.job_id));
       } catch {
@@ -2161,7 +2174,7 @@ export function Studio() {
       setJob(updated);
       pollJob(job.job_id);
     } catch (e) {
-      setAssemblyError(e instanceof ApiClientError ? e.message : "Não consegui renderizar a timeline.");
+      setAssemblyError(friendlyApiError(e, "Não consegui renderizar a timeline."));
     } finally {
       setRenderingTimeline(false);
     }
@@ -2193,7 +2206,7 @@ export function Studio() {
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
-      setExportError(e instanceof Error ? e.message : "Export failed.");
+      setExportError(friendlyApiError(e, "A exportação falhou. Tenta de novo."));
     } finally {
       setExporting(false);
     }
@@ -2215,17 +2228,18 @@ export function Studio() {
         onExport={handleExport}
         exportError={exportError}
         onRenameProject={(title) => void handleRenameProject(title)}
+        canRename={Boolean(project)}
       />
 
       {apiError && (
         <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[13px]" role="alert">
-          <span className="font-medium text-danger">Sem ligação à API.</span> {apiError} Inicia o backend e recarrega.
+          <span className="font-medium text-danger">{apiError}</span>
         </div>
       )}
       {error && (
         <div className="flex items-center gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-[13px]" role="alert">
           <span>
-            <span className="font-medium text-danger">Algo correu mal:</span> {error}
+            <span className="font-medium text-danger">{error}</span>
           </span>
           <button type="button" onClick={reset} className="ml-auto shrink-0 font-medium text-danger underline">
             Recomeçar

@@ -103,7 +103,7 @@ export function MediaPanel({
         if (!cancelled) setTextPreview(text.slice(0, 4000));
       })
       .catch((e) => {
-        if (!cancelled) setTextPreviewError(e instanceof Error ? e.message : "Preview failed.");
+        if (!cancelled) setTextPreviewError("Não consegui pré-visualizar.");
       });
     return () => { cancelled = true; };
   }, [preview, project]);

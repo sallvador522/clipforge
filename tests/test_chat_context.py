@@ -359,3 +359,20 @@ def test_gibberish_without_clip_goes_to_interview(tmp_path):
     body = client.post("/api/chat", json={"message": "JSDHSD"}).json()
     assert body["intent"] == "idea_interview"
     assert body["needs_confirmation"] is False
+
+
+def test_direct_question_with_clip_does_not_crash(tmp_path):
+    # Regression: "o vídeo está bom?" is a direct question the context
+    # cannot answer, with an actionable noun. The old guard returned None
+    # and /api/chat crashed with a 500 (None.get).
+    client = _job_with_clip(tmp_path)
+    resp = client.post(
+        "/api/chat", json={"message": "o vídeo está bom?", "job_id": "jobchat123"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["intent"] == "clarify"
+    assert body["needs_confirmation"] is False
+    assert body["pending_text"] is None
+    assert body["pending_kind"] is None
+    assert "Executar" not in body["reply"]

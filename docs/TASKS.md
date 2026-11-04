@@ -443,8 +443,16 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Entregáveis `ClipForge_E2E_*.mp4` verificados em Videos/Video; relatório `docs/HACKATHON_FINAL_E2E_REPORT.md`; zero chamadas pagas (ledger intacto).
 - [ ] Live Meta + voz: NOT EXECUTED nesta missão (sem aprovação de custo por chamada / sem microfone headless).
 
+## Milestone 9.17 - Hackathon README + presentation docs (2026-11-04, docs-only)
+- [x] README: ownership, per-model I/O, Mermaid, capability matrix, verified numbers/links; `README.pt-AO.md`, `HACKATHON_PROJECT_OVERVIEW.md`, `HACKATHON_DEMO_GUIDE.md`; zero paid calls, no app changes.
+
+## Milestone 9.16 - UI/UX quality rescue (2026-11-04, frontend-only)
+- [x] `friendlyApiError` (PT-AO) em todos os erros visíveis; upload falhado sem sessão falsa; status honesto; rename guardado.
+- [x] `qa-ux-rescue.mjs` + audits DOM; todas as suites browser PASS (0 erros consola); tsc+build limpos; backend 513 passed.
+- [x] Relatório `docs/UI_UX_QUALITY_REPORT.md`; zero chamadas pagas (ledger intacto).
+
 ## Milestone 9.14 - Director conversacional com contexto real (2026-11-04, ADR-054)
 - [x] `apps/api/clipforge_api/chat_context.py` com snapshot real (ProjectStore/JobStore/IdeaStore), prompt-safe e Q&A direta com contagens/estado/ficheiro/follow-ups meta.
 - [x] `/api/chat` aceita `idea_id` + `history`; perguntas informacionais cortam antes de qualquer pending; `_guard_pending` remove pendentes em conversa/meta.
 - [x] Spark live recebe estado real + historia; continua sem decidir pendentes, ferramentas ou factos novos; capacidades/desactivadas enunciadas com honestidade.
-- [x] Studio propaga `idea_id` e ultimas 12 mensagens; regressao coberta em `tests/test_chat_context.py` (10 testes, inclui barreira anti-gibberish); chat suites 36/36; suite completa 509 passed; `tsc` + `next build` limpos; zero novas chamadas pagas.
+- [x] Studio propaga `idea_id` e ultimas 12 mensagens; regressao coberta em `tests/test_chat_context.py` (11 testes, inclui barreira anti-gibberish e crash 500); chat suites 37/37; suite completa 514 passed; `tsc` + `next build` limpos; zero novas chamadas pagas.

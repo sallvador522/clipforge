@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { friendlyApiError } from "@/lib/api";
 import { Button } from "./ui/button";
 
 /**
@@ -63,7 +64,7 @@ export function ClipTrimAudio({
     try {
       await action();
     } catch (e) {
-      setLocalError(e instanceof Error ? e.message : "Falhou. Tenta de novo.");
+      setLocalError(friendlyApiError(e, "Falhou. Tenta de novo."));
     } finally {
       setLocalBusy(null);
     }
