@@ -193,6 +193,63 @@ def test_complete_mock_job_lifecycle(env, tiny_video):
     assert resp.status_code == 409
 
 
+def test_trim_and_audio_validation(env, tiny_video):
+    client, _, _ = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+
+    bad = client.post(f"/api/jobs/{job_id}/trim", json={"start_s": 0.8, "end_s": 0.2})
+    assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_trim_range"
+    short = client.post(f"/api/jobs/{job_id}/trim", json={"start_s": 0.0, "end_s": 0.2})
+    assert short.status_code == 422 and short.json()["error"]["code"] == "trim_too_short"
+    loud = client.post(f"/api/jobs/{job_id}/audio", json={"gain_db": 30.0})
+    assert loud.status_code == 422
+    fades = client.post(f"/api/jobs/{job_id}/audio", json={"fade_in_s": 0.8, "fade_out_s": 0.8})
+    assert fades.status_code == 422 and fades.json()["error"]["code"] == "invalid_fades"
+
+    ok = client.post(f"/api/jobs/{job_id}/trim", json={"start_s": 0.2, "end_s": 0.8})
+    assert ok.status_code == 200 and ok.json()["trim_start_s"] == 0.2
+    audio = client.post(
+        f"/api/jobs/{job_id}/audio",
+        json={"gain_db": 6.0, "fade_in_s": 0.1, "fade_out_s": 0.1},
+    )
+    assert audio.status_code == 200 and audio.json()["audio_gain_db"] == 6.0
+
+    cleared = client.post(f"/api/jobs/{job_id}/trim", json={})
+    assert cleared.status_code == 200 and cleared.json()["trim_start_s"] is None
+    client.post(f"/api/jobs/{job_id}/trim", json={"start_s": 0.2, "end_s": 0.8})
+
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    locked = client.post(f"/api/jobs/{job_id}/trim", json={"start_s": 0.0, "end_s": 0.5})
+    assert locked.status_code == 409 and locked.json()["error"]["code"] == "trim_not_allowed"
+    locked_audio = client.post(f"/api/jobs/{job_id}/audio", json={"gain_db": 3.0})
+    assert locked_audio.status_code == 409
+
+
+def test_trim_and_audio_end_to_end(env, tiny_video):
+    client, store, worker = env
+    job_id = _upload(client, tiny_video).json()["job_id"]
+    assert client.post(f"/api/jobs/{job_id}/trim", json={"start_s": 0.2, "end_s": 0.8}).status_code == 200
+    assert client.post(
+        f"/api/jobs/{job_id}/audio",
+        json={"gain_db": 6.0, "fade_in_s": 0.1, "fade_out_s": 0.1},
+    ).status_code == 200
+    client.post(f"/api/jobs/{job_id}/voice", json={"audio_fixture_id": "pt_keep_me_sharp"})
+    _drain(worker)
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_approval"
+    _approve(client, job_id)
+    _drain(worker)
+
+    body = client.get(f"/api/jobs/{job_id}").json()
+    assert body["status"] == "completed", body.get("error")
+    data = client.get(f"/api/jobs/{job_id}/result").json()
+    assert data["render_status"] == "verified"
+    assert data["rendered"]["has_audio"] is True
+    assert abs(data["rendered"]["duration_seconds"] - 0.6) < 0.15
+    # Original upload preserved; trim bound the masks to the trimmed copy.
+    assert store.source_path(store.get(job_id)).is_file()
+    assert abs(store.get(job_id).source_info.duration_seconds - 0.6) < 0.15
+
+
 def test_replace_background_lifecycle_includes_background_asset(env, tiny_video):
     client, store, worker = env
     job_id = _upload(client, tiny_video).json()["job_id"]

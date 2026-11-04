@@ -412,7 +412,10 @@ def options_instructions(options: IdeaOptions) -> str:
     """Developer-side instructions derived only from validated options."""
     return (
         f"- Exactly {scene_count_for(options.duration_seconds)} scenes.\n"
-        f"- Total duration exactly {options.duration_seconds} seconds.\n"
+        f"- The scene duration_ms values MUST sum to exactly "
+        f"{options.duration_seconds * 1000} (tolerance ±500 ms); any other total is "
+        f"rejected and the plan is discarded — do not round scenes to neat "
+        f"lengths.\n"
         f"- Aspect ratio {options.aspect_ratio} ({options.width}x{options.height}).\n"
         f"- Output FPS {options.fps}.\n"
         f"- Style preset: {options.style_preset}.\n"
@@ -466,6 +469,48 @@ def create_live_director(effort: str = "medium") -> CreativeDirectorProvider:
     )
 
 
+def create_live_refinement_director(effort: str = "medium"):
+    """Live refinement director on the same one-shot rails (ADR-036)."""
+    api_key = os.environ.get("MODEL_API_KEY", "")
+    if not api_key.strip():
+        raise RuntimeError(
+            "Refinement requires CLIPFORGE_CREATIVE_DIRECTOR_MODE=live and MODEL_API_KEY "
+            "(server-side only). No request was attempted."
+        )
+    from clipforge_director.creative import RefinementDirectorProvider
+    from clipforge_director.spark import REASONING_EFFORTS
+
+    if effort not in REASONING_EFFORTS:
+        raise RuntimeError(
+            f"Unknown effort {effort!r}; verified values: {sorted(REASONING_EFFORTS)}. "
+            "No request was attempted."
+        )
+    return RefinementDirectorProvider(
+        api_key,
+        "refinement",
+        "storyboard-patch-only",
+        model="muse-spark-1.3-contributor",
+        reasoning_effort=effort,
+        timeout_seconds=EFFORT_TIMEOUT_SECONDS.get(effort, 60.0),
+        require_contributor=True,
+        max_output_tokens=16000,
+    )
+
+
+def create_refinement_live(provider, board, instruction, storage_root, *, clarification_context=None):
+    """One authorised refinement request. Returns (patch, cost_usd, request_id)."""
+    authorization = LiveCallAuthorization.from_storage(storage_root, "director")
+    patch = provider.create_patch(
+        board,
+        instruction,
+        authorization=authorization,
+        clarification_context=clarification_context,
+    )
+    usage = getattr(provider, "last_usage", None)
+    cost = float(usage.cost_usd) if usage is not None else 0.0
+    return patch, cost, getattr(provider, "last_request_id", None)
+
+
 def create_storyboard_live(
     provider: CreativeDirectorProvider,
     brief: str,
@@ -484,15 +529,23 @@ def create_storyboard_live(
     return board, cost, getattr(provider, "last_request_id", None)
 
 
+def validate_overlay_assets(board: Storyboard, generated_ids: set[str]) -> list[str]:
+    """Overlay ids whose image plate is not generated (fail closed at render)."""
+    return [
+        overlay.overlay_id
+        for overlay in (board.overlays or [])
+        if overlay.kind == "image"
+        and (not overlay.asset_id or overlay.asset_id not in generated_ids)
+    ]
+
+
 def validate_board_for_options(board: Storyboard, brief: str, options: IdeaOptions) -> None:
     """Reject a live board that ignores the approved project options."""
     if board.user_request.strip() != brief.strip():
         raise ValueError("Storyboard user_request must echo the brief verbatim.")
-    if board.duration_seconds != options.duration_seconds:
-        raise ValueError(
-            f"Storyboard duration is {board.duration_seconds}s; approved options require "
-            f"{options.duration_seconds}s."
-        )
+    # ADR-036: duration is NOT checked here. The director's delivered scene
+    # durations are authoritative and Storyboard derives duration_seconds
+    # from them; diverging from the requested duration never rejects a board.
     if board.aspect_ratio != options.aspect_ratio:
         raise ValueError(
             f"Storyboard aspect ratio is {board.aspect_ratio}; approved options require "

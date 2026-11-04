@@ -16,6 +16,16 @@ from clipforge_director.evaluation import (
     SamplePoint,
     evaluate_output,
 )
+from clipforge_director.chat import (
+    ChatAPIError,
+    ChatError,
+    ChatRateLimitedError,
+    ChatTimeoutError,
+    ChatUsage,
+    ChatValidationError,
+    MissingCredentialsError as ChatMissingCredentialsError,
+    SparkChatAssistant,
+)
 from clipforge_director.mock import MockProfessionalEditingDirector, ProfessionalEditingDirector
 from clipforge_director.ledger import (
     LedgerIntegrityError,
@@ -46,6 +56,13 @@ from clipforge_director.spark import (
 __all__ = [
     "CREATIVE_BRIEF",
     "CorrectionAttempt",
+    "ChatAPIError",
+    "ChatError",
+    "ChatMissingCredentialsError",
+    "ChatRateLimitedError",
+    "ChatTimeoutError",
+    "ChatUsage",
+    "ChatValidationError",
     "CreativeDirectorProvider",
     "DirectorAPIError",
     "DirectorRateLimitedError",
@@ -68,6 +85,7 @@ __all__ = [
     "OutputEvaluationReport",
     "ProfessionalEditingDirector",
     "SamplePoint",
+    "SparkChatAssistant",
     "SparkDirectorError",
     "SparkMissingCredentialsError",
     "allowed_primitives",

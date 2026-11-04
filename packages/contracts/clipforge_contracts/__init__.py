@@ -13,6 +13,8 @@ from clipforge_contracts.capabilities import (
     CAPABILITIES,
     Capability,
     CapabilityStatus,
+    ColourAdjustParams,
+    TextOverlayParams,
     capability_summary_for_prompt,
     disabled_capability_ids,
     executable_capabilities,
@@ -71,6 +73,10 @@ from clipforge_contracts.storyboard import (
     AssetSpec,
     SceneSpec,
     Storyboard,
+    StoryboardPatch,
+    OverlaySpec,
+    TextStyle,
+    TextStyleUpdate,
     Transition,
 )
 from clipforge_contracts.edl import (
@@ -100,12 +106,28 @@ from clipforge_contracts.editing_plan import (
     SubjectSpec,
 )
 from clipforge_contracts.mask_manifest import MaskFrameEntry, MaskManifest
+from clipforge_contracts.text_overlay import (
+    CLIP_TEXT_MAX,
+    CLIP_TEXT_STYLES,
+    ClipTextOverlay,
+    ColourGrade,
+)
+from clipforge_contracts.timeline import (
+    AUDIO_TRACKS,
+    TIMELINE_MAX_CLIPS,
+    TIMELINE_MAX_DURATION_S,
+    TIMELINE_MIN_CLIP_S,
+    VIDEO_TRACKS,
+    Timeline,
+    TimelineClip,
+)
 from clipforge_contracts.responses import (
     BackgroundResult,
     RenderResult,
     SegmentationResult,
     SegmentationSubject,
     TranscriptResult,
+    TranscriptTurn,
 )
 
 __all__ = [
@@ -116,6 +138,10 @@ __all__ = [
     "BackgroundResult",
     "BlurBackgroundOperation",
     "CAPABILITIES",
+    "CLIP_TEXT_MAX",
+    "CLIP_TEXT_STYLES",
+    "ColourAdjustParams",
+    "TextOverlayParams",
     "Capability",
     "CapabilityStatus",
     "DirectorAudit",
@@ -155,6 +181,10 @@ __all__ = [
     "SegmentationSubject",
     "SubjectSelection",
     "Storyboard",
+    "StoryboardPatch",
+    "OverlaySpec",
+    "TextStyle",
+    "TextStyleUpdate",
     "AnimationPrimitive",
     "AnimationStep",
     "AssetSpec",
@@ -167,6 +197,11 @@ __all__ = [
     "SubjectSpec",
     "SubjectStrategy",
     "TranscriptResult",
+    "TranscriptTurn",
+    "Timeline",
+    "TimelineClip",
+    "ClipTextOverlay",
+    "ColourGrade",
     "VerificationRequirement",
     "can_transition",
     "can_transition_operation",

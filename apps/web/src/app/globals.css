@@ -10,6 +10,7 @@
   --color-accent: #ff7659;
   --color-danger: #ff6b57;
   --color-success: #9bc49b;
+  --color-canvas: #0b0906;
   --font-sans: var(--font-manrope), ui-sans-system, system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 }
@@ -23,6 +24,8 @@ body {
   background: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.43;
 }
 
 ::selection {
@@ -47,6 +50,23 @@ video {
 
 input[type="range"] {
   accent-color: #ff7659;
+}
+
+/* Dense editor chrome: thin dark scrollbars, no decorative shadows. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a332a transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3a332a;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

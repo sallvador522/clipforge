@@ -2,47 +2,48 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import type { JobResponse, JobResultData, PlanReviewData, TranscriptData } from "@/lib/types";
+import type { JobResponse, PlanReviewData } from "@/lib/types";
 import { Button } from "./ui/button";
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "muse";
+  text: string;
+}
 
 type RecorderState = "idle" | "recording" | "recorded" | "unsupported" | "denied";
 export type TranscribeStatus = "idle" | "uploading" | "transcribing" | "done" | "error";
-type TranscriptSource = "live" | "mock-audio" | "mock-fixture" | "typed" | null;
 
-const STEPS = [
-  { key: "instruction", label: "Listening to your instruction" },
-  { key: "planning", label: "Understanding what you want" },
-  { key: "detecting", label: "Detecting people in your video" },
-  { key: "review", label: "Reviewing your plan" },
-  { key: "rendering", label: "Bringing your video to life" },
-  { key: "verifying", label: "Verifying your video" },
-  { key: "completed", label: "Done — verified MP4" },
-];
-const STAGE_INDEX: Record<string, number> = {
-  transcribing: 0, planning: 1, replanning: 1,
-  segmenting: 2, awaiting_consent: 2,
-  awaiting_approval: 3, awaiting_clarification: 3,
-  approved: 4, preparing_masks: 4, preparing_background: 4, rendering: 4,
-  verifying: 5, completed: 6, pipeline_completed: 6,
-};
-const STATUS_LABEL: Record<string, string> = {
-  queued: "Getting ready",
-  processing: "Working on it",
-  awaiting_consent: "Waiting for your consent",
-  awaiting_approval: "Ready for your review",
-  awaiting_clarification: "Needs your answer",
-  completed: "Done",
-  failed: "Failed",
-  rejected: "Rejected",
-  unsupported: "Not supported",
+const STAGE_LABEL: Record<string, string> = {
+  transcribing: "A transcrever",
+  planning: "A planear",
+  replanning: "A planear",
+  segmenting: "A analisar o vídeo",
+  awaiting_consent: "A aguardar autorização",
+  awaiting_approval: "A aguardar revisão",
+  awaiting_clarification: "Preciso de uma resposta",
+  approved: "Aprovado — a gerar",
+  preparing_masks: "A preparar",
+  preparing_background: "A preparar",
+  rendering: "A gerar o vídeo",
+  verifying: "A verificar",
+  completed: "Concluído",
+  pipeline_completed: "Concluído",
 };
 
 interface Props {
+  messages: ChatMessage[];
+  emptyPlatform: boolean;
   job: JobResponse | null;
-  result: JobResultData | null;
+  resultReady: boolean;
   planReview: PlanReviewData | null;
   onOpenPlanReview: () => void;
+  onRejectPlan: () => void;
+  decisionBusy: boolean;
   liveAvailable: boolean;
+  /** ADR-053: true = respostas reescritas pelo Muse Spark (pago); false = router local sem custo. */
+  chatLive?: boolean;
+  working?: boolean;
   recorded: boolean;
   recordingName: string | null;
   onRecordingReady: (blob: Blob, filename: string) => void;
@@ -50,49 +51,87 @@ interface Props {
   transcribeStatus: TranscribeStatus;
   transcribeProgress: number | null;
   transcriptionError: string | null;
-  transcript: TranscriptData | null;
-  transcriptSource: TranscriptSource;
   draft: string;
   onDraftChange: (value: string) => void;
   onTranscribe: () => void;
-  onTypedInstruction: (text: string) => void;
   canConfirm: boolean;
   confirming: boolean;
   submitted: boolean;
   onConfirmTranscript: () => void;
   onRetry: () => void;
-  reviewOpen: boolean;
   consentWaiting: boolean;
   onConsentContinue: () => void;
-  /** Overrides the confirm button label when no edit job exists (idea flow). */
   confirmLabel?: string;
-  /** True when the session has no clip and no edit job: confirming creates a new video. */
-  emptyPlatform?: boolean;
+  /** Duration pills only make sense when the send creates a new idea. */
+  showDurationChoices?: boolean;
+  /** Duração escolhida para a próxima ideia (o backend aceita 5–60 s). */
+  pendingDuration: number;
+  onDurationChange: (seconds: number) => void;
+  /** Duração detetada no rascunho (nula se override manual ou sem número). */
+  detectedDuration: number | null;
+  /** Proposta do /api/chat a aguardar confirmação explícita. */
+  pendingChat?: {
+    intent: string;
+    reply: string;
+    needs_confirmation: boolean;
+    pending_text: string | null;
+    pending_kind: "edit" | "idea" | "tools" | null;
+    pending_tool_calls?: { tool: string; params: Record<string, unknown> }[];
+    pending_idea_options?: {
+      style: string;
+      duration_seconds: number;
+      aspect_ratio: string;
+    } | null;
+  } | null;
+  chatBusy?: boolean;
+  /** Director interview: one question + quick-reply chips (empty platform). */
+  interviewCard?: {
+    question: string;
+    chips: { label: string; value: string }[];
+  } | null;
+  onInterviewChip?: (value: string) => void;
+  /** Attach a video file straight from the chat (same upload path). */
+  onAttachVideo?: (file: File) => void;
+  onConfirmChat?: () => void;
+  onAdjustChat?: () => void;
+  onCancelChat?: () => void;
 }
 
+const DURATION_CHOICES = [15, 20, 25, 30, 60];
+
 export function AssistantPanel({
-  job, result, planReview, onOpenPlanReview, liveAvailable, recorded, recordingName,
-  onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress, transcriptionError,
-  transcript, transcriptSource, draft, onDraftChange, onTranscribe,
-  onTypedInstruction, canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
-  reviewOpen, consentWaiting, onConsentContinue, confirmLabel, emptyPlatform,
+  messages, emptyPlatform, job, resultReady, planReview, onOpenPlanReview,
+  onRejectPlan, decisionBusy, liveAvailable, chatLive, working, recorded, recordingName,
+  onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress,
+  transcriptionError, draft, onDraftChange, onTranscribe,
+  canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
+  consentWaiting, onConsentContinue, confirmLabel, showDurationChoices,
+  pendingDuration, onDurationChange, detectedDuration,
+  pendingChat, chatBusy, onConfirmChat, onAdjustChat, onCancelChat,
+  interviewCard, onInterviewChip, onAttachVideo,
 }: Props) {
   const [recState, setRecState] = useState<RecorderState>("idle");
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [typedText, setTypedText] = useState("");
-  const [typeNotice, setTypeNotice] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const rafRef = useRef<number>(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const attachRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => () => {
     if (timerRef.current) window.clearInterval(timerRef.current);
     cancelAnimationFrame(rafRef.current);
   }, []);
+
+  // Keep the newest message visible.
+  useEffect(() => {
+    const list = listRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [messages.length, job?.status, job?.stage]);
 
   async function startRecording() {
     if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -145,367 +184,419 @@ export function AssistantPanel({
     recorderRef.current?.stop();
   }
 
-  function applyTyped() {
-    if (!typedText.trim()) return;
-    setTypeNotice(null);
-    onTypedInstruction(typedText.trim());
+  function discardRecording() {
+    if (timerRef.current) window.clearInterval(timerRef.current);
+    setAudioUrl(null);
+    setRecState("idle");
+    onRecordingCleared();
   }
 
-  const busy = transcribeStatus === "uploading" || transcribeStatus === "transcribing";
-  const verified = Boolean(job?.status === "completed" && result?.render_status === "verified");
-  const detected = Boolean(planReview?.segmentation || result?.segmentation);
-  // No step is invented for failed or no-render terminal jobs; the explicit
-  // notice/error below carries the real state instead.
-  const hideSteps =
-    job?.status === "failed" || job?.status === "rejected" || job?.status === "unsupported";
-  const stageIndex = job
-    ? job.status === "completed" && !verified
-      ? 2
-      : STAGE_INDEX[job.stage] ?? (job.status === "queued" ? -1 : 0)
-    : -1;
-  const plan = result?.plan ?? job?.result?.plan ?? null;
-  const directorPlan = planReview?.plan ?? result?.director_plan ?? job?.result?.director_plan ?? null;
+  const busyTranscribe = transcribeStatus === "uploading" || transcribeStatus === "transcribing";
+  // Honest busy: a job only counts as working while the worker can own it
+  // (processing, or queued with an instruction/render request attached).
+  // A restored queued job without `ready` is idle — never claim otherwise.
+  const jobWorking = Boolean(
+    job && (job.status === "processing" || (job.status === "queued" && job.ready)),
+  );
+  const headerBusy = confirming || busyTranscribe || jobWorking || recState === "recording" || Boolean(working);
+  const planSummary =
+    planReview?.plan?.interpreted_intention ??
+    planReview?.legacy_plan?.raw_transcript ??
+    "Plano pronto para revisão.";
+  const showPlanCard = Boolean(job && job.status === "awaiting_approval" && planReview);
+  const showClarifyCard = Boolean(job && job.status === "awaiting_clarification" && planReview);
+  const showResultCard = Boolean(job && job.status === "completed" && resultReady);
+  const showFailedCard = Boolean(job && (job.status === "failed" || job.status === "unsupported") && job.error);
+  const showRejectedCard = Boolean(job && job.status === "rejected");
+  const showWorkingLine = Boolean(
+    jobWorking && !showPlanCard && !showClarifyCard && !consentWaiting,
+  );
 
   return (
-    <section aria-label="AI editing assistant" className="flex min-h-0 flex-col bg-surface lg:h-full">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <h2 className="font-mono text-[11px] font-medium tracking-wider text-muted">AI ASSISTANT</h2>
-        <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] ${liveAvailable ? "border-success/60 text-success" : "border-accent/50 text-accent"}`}>
-          {liveAvailable ? "LIVE TRANSCRIPTION" : "MOCK TRANSCRIPTION"}
+    <section aria-label="Muse — director criativo" className="flex min-h-0 flex-1 flex-col bg-surface">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+        <span aria-hidden className="flex h-6 w-6 items-center justify-center rounded-full bg-accent">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <path d="M12 3v18M5 8l14 8M19 8L5 16" stroke="#14110C" strokeWidth="2.4" strokeLinecap="round" />
+          </svg>
         </span>
+        <div className="min-w-0 flex-1 leading-tight">
+          <h2 className="text-[13px] font-semibold">Muse</h2>
+          <p className="truncate text-[11px] text-muted">
+            {headerBusy ? "A trabalhar…" : chatLive ? "Ao vivo · Muse Spark" : "Disponível"}
+          </p>
+        </div>
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${headerBusy ? "animate-pulse bg-accent" : "bg-muted"}`} aria-hidden />
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
-        <div>
-          <p className="text-[15px] font-semibold leading-snug">
-            {emptyPlatform ? "No clip yet — describe the video you want." : "Tell ClipForge what to change."}
-          </p>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            {emptyPlatform
-              ? "Record or type your idea, then send it. ClipForge plans it, you approve each cost, and the Studio renders a verified MP4."
-              : "Record or type your instruction, then send it. Only the confirmed sentence reaches the editing planner."}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <motion.button
-            type="button"
-            onClick={recState === "recording" ? stopRecording : startRecording}
-            disabled={submitted}
-            aria-label={recState === "recording" ? "Stop recording" : "Start voice recording"}
-            className={`relative flex h-16 w-16 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground disabled:opacity-40 ${
-              recState === "recording" ? "bg-danger" : "bg-accent hover:bg-[#FF8A70]"
-            }`}
-            animate={{ scale: recState === "recording" ? 1 + level * 0.25 : 1 }}
-            transition={{ type: "spring", stiffness: 300, damping: 18 }}
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <rect x="9" y="3" width="6" height="11" rx="3" fill="#14110C" />
-              <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="#14110C" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            {recState === "recording" && (
-              <span className="absolute -bottom-5 font-mono text-[11px] tabular-nums text-danger">
-                00:{String(seconds).padStart(2, "0")}
-              </span>
-            )}
-          </motion.button>
-          <div aria-live="polite">
-            <p className="text-sm font-medium">
-              {recState === "recording" && "Listening… tap to stop"}
-              {recState === "recorded" && `Recorded 00:${String(seconds).padStart(2, "0")}`}
-              {recState === "idle" && "Tap the microphone and speak"}
-              {recState === "unsupported" && "MediaRecorder unavailable in this browser"}
-              {recState === "denied" && "Microphone permission denied"}
+      <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3" aria-live="polite" aria-label="Conversa com o Muse">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center px-6 py-8 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent" aria-hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M12 3v18M5 8l14 8M19 8L5 16" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+              </svg>
+            </span>
+            <p className="mt-3 text-[14px] font-semibold">Edita a conversar</p>
+            <p className="mt-1 max-w-[240px] text-[12px] leading-relaxed text-muted">
+              {emptyPlatform
+                ? "Descreve o vídeo que queres criar e eu trato do resto."
+                : "Descreve a alteração com a tua voz ou por escrito."}
             </p>
-            {recState === "recording" && (
-              <div className="mt-1.5 h-1 w-32 overflow-hidden rounded bg-border" aria-hidden>
-                <div className="h-full bg-danger transition-[width] duration-100" style={{ width: `${Math.round(level * 100)}%` }} />
-              </div>
-            )}
-            <p className="mt-1 font-mono text-[11px] text-muted">
-              {recorded && recordingName ? `Audio captured: ${recordingName}` : "The ring reacts to your actual voice level."}
+            <p className="mt-2 font-mono text-[10px] text-muted/80">
+              Nada acontece sem a tua confirmação.
             </p>
           </div>
-        </div>
-
-        {audioUrl && recState === "recorded" && (
-          <audio
-            controls
-            src={audioUrl}
-            className="w-full rounded-md border border-border bg-raised"
-            style={{ colorScheme: "dark" }}
-            aria-label="Your recorded instruction"
-          />
         )}
 
-        {recState === "recorded" && (
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[11px] text-muted">
-                {liveAvailable
-                  ? transcribeStatus === "done"
-                    ? "Transcript ready below — review and send it."
-                    : "Sending your recording for transcription…"
-                  : "Recording kept locally — mock mode never transcribes audio."}
-              </span>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setAudioUrl(null);
-                  setRecState("idle");
-                  onRecordingCleared();
-                }}
-                disabled={busy || submitted}
+        <AnimatePresence initial={false}>
+          {messages.map((m) => (
+            <motion.div
+              key={m.id}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18 }}
+              className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <div
+                className={`max-w-[92%] rounded-lg px-4 py-2.5 text-[13px] leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-accent/15 text-foreground"
+                    : "border border-border bg-raised/50 text-foreground"
+                }`}
               >
-                Discard recording
+                <p className={`mb-0.5 text-[11px] ${m.role === "user" ? "text-right text-accent" : "text-muted"}`}>
+                  {m.role === "user" ? "Tu" : "Muse"}
+                </p>
+                <p className="whitespace-pre-wrap break-words">{m.text}</p>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+
+        {consentWaiting && (
+          <div className="rounded-lg border border-accent/40 bg-accent/[0.07] p-3" role="status">
+            <p className="text-[13px] font-semibold">Preciso da tua autorização</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted">
+              Para continuar, tenho de analisar as pessoas do vídeo. Nada foi enviado até agora.
+            </p>
+            <Button className="mt-2 w-full" onClick={onConsentContinue}>
+              Continuar com a detecção
+            </Button>
+          </div>
+        )}
+
+        {showPlanCard && (
+          <div className="rounded-lg border border-accent/40 bg-accent/[0.07] p-3" role="status">
+            <p className="text-[13px] font-semibold">Plano pronto para revisão</p>
+            <p className="mt-1 line-clamp-4 text-[12px] leading-relaxed text-muted">{planSummary}</p>
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <Button variant="secondary" onClick={onOpenPlanReview}>
+                Rever plano
+              </Button>
+              <Button variant="ghost" onClick={onRejectPlan} disabled={decisionBusy}>
+                Rejeitar
               </Button>
             </div>
+          </div>
+        )}
+
+        {showClarifyCard && (
+          <div className="rounded-lg border border-accent/40 bg-accent/[0.07] p-3" role="status">
+            <p className="text-[13px] font-semibold">Tenho uma pergunta</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted">
+              Preciso de um esclarecimento para afinar o plano.
+            </p>
+            <Button variant="secondary" className="mt-2 w-full" onClick={onOpenPlanReview}>
+              Responder
+            </Button>
+          </div>
+        )}
+
+        {pendingChat?.needs_confirmation && pendingChat.pending_text && (
+          <div className="rounded-lg border border-accent/40 bg-accent/[0.07] p-3" role="status">
+            <p className="text-[13px] font-semibold">Posso executar?</p>
+            <p className="mt-1 line-clamp-4 text-[12px] leading-relaxed text-muted">
+              «{pendingChat.pending_text}» — nada foi executado ainda.
+            </p>
+            {pendingChat.pending_tool_calls && pendingChat.pending_tool_calls.length > 0 && (
+              <ul className="mt-1.5 space-y-1">
+                {pendingChat.pending_tool_calls.map((call, i) => (
+                  <li key={i} className="rounded border border-border/70 bg-black/30 px-2 py-1 font-mono text-[10px] text-muted">
+                    {call.tool}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {pendingChat.pending_idea_options && (
+              <p className="mt-1.5 font-mono text-[10px] text-muted">
+                {pendingChat.pending_idea_options.style} · {pendingChat.pending_idea_options.duration_seconds}s ·{" "}
+                {pendingChat.pending_idea_options.aspect_ratio === "9:16" ? "vertical 9:16" : "horizontal 16:9"}
+              </p>
+            )}
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              <Button variant="secondary" onClick={onConfirmChat} disabled={chatBusy || confirming || submitted}>
+                Executar
+              </Button>
+              <Button variant="ghost" onClick={onAdjustChat} disabled={chatBusy}>
+                Ajustar
+              </Button>
+            </div>
+            <button
+              type="button"
+              onClick={onCancelChat}
+              disabled={chatBusy}
+              className="mt-1.5 w-full text-center text-[11px] text-muted underline underline-offset-2 hover:text-danger disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+          </div>
+        )}
+
+        {interviewCard && interviewCard.chips.length > 0 && (
+          <div className="rounded-lg border border-border bg-raised/40 p-3" role="group" aria-label={interviewCard.question}>
+            <p className="text-[12px] font-medium">{interviewCard.question}</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {interviewCard.chips.map((chip) => (
+                <button
+                  key={chip.value}
+                  type="button"
+                  onClick={() => onInterviewChip?.(chip.value)}
+                  disabled={chatBusy}
+                  className="rounded-full border border-accent/50 px-2.5 py-1 text-[11px] text-foreground transition-colors hover:bg-accent hover:text-[#14110C] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {chatBusy && (
+          <div className="flex items-center gap-2 px-1 text-[12px] text-muted" role="status">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden />
+            O Muse está a responder…
+          </div>
+        )}
+
+        {showWorkingLine && job && (
+          <div className="flex items-center gap-2 px-1 text-[12px] text-muted" role="status">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden />
+            {STAGE_LABEL[job.stage] ?? "A trabalhar…"}
+          </div>
+        )}
+
+        {showResultCard && (
+          <div className="rounded-lg border border-success/40 bg-success/[0.06] p-3" role="status">
+            <p className="text-[13px] font-semibold text-success">Vídeo pronto e verificado</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted">
+              Usa Exportar no topo para descarregar.
+            </p>
+          </div>
+        )}
+
+        {showFailedCard && job?.error && (
+          <div className="rounded-lg border border-danger/40 bg-danger/[0.06] p-3" role="alert">
+            <p className="text-[13px] font-semibold text-danger">Não consegui concluir</p>
+            <p className="mt-1 break-words text-[12px] leading-relaxed text-muted">{job.error.message}</p>
+            <Button variant="danger" className="mt-2 w-full" onClick={onRetry}>
+              Recomeçar
+            </Button>
+          </div>
+        )}
+
+        {showRejectedCard && (
+          <div className="rounded-lg border border-border bg-raised/40 p-3" role="status">
+            <p className="text-[13px] font-semibold">Plano rejeitado</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-muted">
+              O teu vídeo original ficou intacto.
+            </p>
+            <Button variant="secondary" className="mt-2 w-full" onClick={onRetry}>
+              Recomeçar
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 border-t border-border bg-surface p-4">
+        {recState === "recorded" && (
+          <div className="mb-2">
+            {audioUrl && (
+              <audio controls src={audioUrl} className="w-full rounded-md border border-border bg-raised" style={{ colorScheme: "dark" }} aria-label="A tua gravação" />
+            )}
+            <div className="mt-1 flex items-center justify-between">
+              <span className="text-[11px] text-muted">
+                {liveAvailable
+                  ? transcribeStatus === "done"
+                    ? "Transcrição pronta — revê e envia."
+                    : "A enviar a gravação para transcrição…"
+                  : "Gravação guardada. Neste servidor a voz está em simulação."}
+              </span>
+              <button
+                type="button"
+                onClick={discardRecording}
+                disabled={busyTranscribe || submitted}
+                className="text-[12px] text-muted underline underline-offset-2 hover:text-danger disabled:opacity-40"
+              >
+                Descartar
+              </button>
+            </div>
             {!liveAvailable && (
-              <p className="font-mono text-[11px] text-muted">
-                This server is in mock mode, so recorded audio is not transcribed. Use the typed instruction below, or
-                enable <span className="text-foreground">CLIPFORGE_TRANSCRIBE_MODE=live</span>.
+              <p className="mt-1 text-[11px] leading-relaxed text-muted">
+                Escreve o pedido abaixo — em simulação o áudio não é transcrito.
               </p>
             )}
           </div>
         )}
 
-        {transcribeStatus === "uploading" && transcribeProgress !== null && (
-          <div>
+        {busyTranscribe && (
+          <div className="mb-2" role="status">
             <div className="h-1 overflow-hidden rounded bg-border">
-              <div className="h-full bg-accent transition-[width]" style={{ width: `${transcribeProgress}%` }} />
+              <div className="h-full bg-accent transition-[width]" style={{ width: `${transcribeProgress ?? 0}%` }} />
             </div>
-            <p className="mt-1 font-mono text-[11px] text-muted">Sending audio to the local API… {transcribeProgress}%</p>
+            <p className="mt-1 text-[11px] text-muted">A transcrever… {transcribeProgress ?? 0}%</p>
           </div>
         )}
 
         {transcriptionError && (
-          <div className="rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-            <p className="text-[13px] font-medium text-danger">Transcription failed</p>
-            <p className="mt-1 text-[13px]">{transcriptionError}</p>
-            <div className="mt-2 flex gap-2">
-              {recorded && (
-                <Button variant="danger" onClick={onTranscribe} disabled={busy}>
-                  Retry transcription
-                </Button>
-              )}
-              <p className="self-center font-mono text-[11px] text-muted">No retry happens automatically.</p>
-            </div>
-          </div>
-        )}
-
-        {(transcript || draft) && (
-          <div className="space-y-2 border-t border-border pt-4">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-mono text-[11px] text-muted">RECOGNISED INSTRUCTION — REVIEW & CONFIRM</p>
-              {transcript?.is_mock && <span className="rounded border border-accent/50 px-1.5 py-0.5 font-mono text-[10px] text-accent">MOCK</span>}
-              {transcriptSource === "typed" && <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted">TYPED</span>}
-            </div>
-            <textarea
-              value={draft}
-              onChange={(e) => onDraftChange(e.target.value)}
-              rows={3}
-              maxLength={500}
-              disabled={submitted}
-              aria-label="Transcript to confirm"
-              className="w-full resize-none rounded-md border border-border bg-raised p-2.5 text-sm outline-none focus:border-accent disabled:opacity-70"
-            />
-            <p className="font-mono text-[11px] text-muted">
-              {transcript?.provider_name ?? (transcriptSource === "typed" ? "typed by you" : "pending")}
-              {transcript?.session_id ? ` · session ${transcript.session_id}` : ""}
-              {transcript?.audio_duration_ms ? ` · ${transcript.audio_duration_ms} ms audio` : ""}
-              {transcript?.confidence != null ? ` · confidence ${transcript.confidence.toFixed(2)}` : ""}
-            </p>
-            <Button onClick={onConfirmTranscript} disabled={!canConfirm || confirming || submitted || !draft.trim()} className="w-full">
-              {submitted ? "Editing in progress…" : confirming ? "Sending…" : (confirmLabel ?? "Send to ClipForge")}
-            </Button>
-            {!job && (
-              <p className="font-mono text-[11px] text-muted">
-                {emptyPlatform
-                  ? "No clip in this session — sending creates a new video from your idea."
-                  : "Upload a clip first — the job is created in the Media panel."}
-              </p>
+          <div className="mb-2 rounded-md border border-danger/40 bg-danger/10 p-2.5" role="alert">
+            <p className="text-[12px] font-medium text-danger">A transcrição falhou</p>
+            <p className="mt-0.5 text-[12px] text-muted">{transcriptionError}</p>
+            {recorded && (
+              <Button variant="danger" className="mt-2" onClick={onTranscribe} disabled={busyTranscribe}>
+                Tentar de novo
+              </Button>
             )}
           </div>
         )}
 
-        <div className="space-y-2">
-          <label htmlFor="typed-instruction" className="font-mono text-[11px] text-muted">
-            OR TYPE THE INSTRUCTION
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="typed-instruction"
-              name="instruction"
-              autoComplete="off"
-              value={typedText}
-              onChange={(e) => setTypedText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && applyTyped()}
-              placeholder="e.g. blur the background"
-              disabled={submitted}
-              className="min-w-0 flex-1 rounded-md border border-border bg-raised px-2.5 py-2 text-sm outline-none placeholder:text-muted/60 focus:border-accent"
-            />
-            <Button variant="secondary" onClick={applyTyped} disabled={submitted || !typedText.trim()}>
-              Use
-            </Button>
-          </div>
-          {typeNotice && <p className="text-[13px] text-accent" role="status">{typeNotice}</p>}
-          <p className="font-mono text-[11px] text-muted">Typed text is used verbatim; it is not transcription.</p>
-        </div>
-
-        <AnimatePresence>
-          {job && (
-            <motion.div
-              key="progress"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="border-t border-border pt-4"
-            >
-              <div className="flex items-baseline justify-between">
-                <p className="font-mono text-[11px] text-muted">JOB PROGRESS</p>
-                <p className="font-mono text-[11px] text-muted">{job.job_id.slice(0, 8)}… · try {job.attempts}</p>
-              </div>
-              <p className="mt-1.5 text-sm font-medium">Status:{" "}
-                <span className={job.status === "failed" || job.status === "rejected" || job.status === "unsupported" ? "text-danger" : verified ? "text-success" : "text-accent"}>
-                  {STATUS_LABEL[job.status] ?? job.status}
-                </span>{" "}
-                <span className="font-mono text-[11px] text-muted">({job.stage})</span>
-              </p>
-              {planReview && !reviewOpen && (job.status === "awaiting_approval" || job.status === "awaiting_clarification") && (
-                <button type="button" onClick={onOpenPlanReview} className="mt-1 font-mono text-[11px] text-accent underline underline-offset-2 hover:text-foreground">
-                  Review plan
+        {confirmLabel && showDurationChoices && !submitted && (
+          <div className="mb-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Escolher a duração do vídeo">
+            <span className="text-[11px] text-muted">Duração:</span>
+            {DURATION_CHOICES.map((seconds) => {
+              const active = pendingDuration === seconds;
+              return (
+                <button
+                  key={seconds}
+                  type="button"
+                  onClick={() => onDurationChange(seconds)}
+                  aria-pressed={active}
+                  className={`rounded-full px-2.5 py-0.5 font-mono text-[11px] transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                    active
+                      ? "bg-accent font-semibold text-[#14110C]"
+                      : "border border-border text-muted hover:text-foreground"
+                  }`}
+                >
+                  {seconds}s
                 </button>
-              )}
-              {consentWaiting && (
-                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
-                  <p className="text-[13px] font-medium">Your plan needs people detection first.</p>
-                  <p className="mt-1 text-[12px] text-muted">Consent to the external SAM check to continue — nothing has been sent yet.</p>
-                  <Button className="mt-2" onClick={onConsentContinue}>Continue with subject detection</Button>
-                </div>
-              )}
-              {job.status === "awaiting_approval" && (
-                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
-                  <p className="text-[13px] font-medium">Plan ready for your review.</p>
-                  <p className="mt-1 text-[12px] text-muted">No video changes have been made. Approve the plan to render.</p>
-                </div>
-              )}
-              {job.status === "awaiting_clarification" && (
-                <div className="mt-3 rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
-                  <p className="text-[13px] font-medium">ClipForge needs one clarification.</p>
-                  <p className="mt-1 text-[12px] text-muted">Answer the question to rebuild the plan; no rendering has started.</p>
-                </div>
-              )}
-              {job.status === "rejected" && (
-                <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-                  <p className="text-[13px] font-medium text-danger">Plan rejected</p>
-                  <p className="mt-1 text-[12px]">No rendering was started. Your original video is untouched.</p>
-                  <Button variant="secondary" className="mt-2" onClick={onRetry}>Start a new session</Button>
-                </div>
-              )}
-              {job.status === "unsupported" && (
-                <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-                  <p className="text-[13px] font-medium text-danger">
-                    {job.error?.code === "NoSubjectsDetected" ? "No people detected" : "Request not supported"}
-                  </p>
-                  <p className="mt-1 text-[12px]">
-                    {job.error?.code === "NoSubjectsDetected"
-                      ? job.error.message
-                      : planReview?.plan?.summary_explanation ?? "This build cannot perform the requested edit."}
-                  </p>
-                </div>
-              )}
+              );
+            })}
+          </div>
+        )}
+        {confirmLabel && showDurationChoices && !submitted && detectedDuration != null && detectedDuration !== pendingDuration && (
+          <p className="mb-2 font-mono text-[10px] text-muted">
+            Detetei {detectedDuration}s no teu texto — é essa a duração usada. Toca numa pill para mudar.
+          </p>
+        )}
 
-              {!hideSteps && (
-                <ol className="mt-2.5 space-y-1.5">
-                  {STEPS.map((step, i) => {
-                    const done = verified || (i < stageIndex && (i !== 2 || detected));
-                    const active = !verified && job.status !== "failed" && i === stageIndex;
-                    return (
-                      <li key={step.key} className={`flex items-center gap-2 text-[13px] ${done ? "text-success" : active ? "text-foreground" : "text-muted/60"}`}>
-                        <span className={`flex h-4 w-4 items-center justify-center rounded-full border font-mono text-[9px] ${done ? "border-success" : active ? "border-accent" : "border-border"}`}>
-                          {done ? "✓" : active ? "●" : ""}
-                        </span>
-                        {step.label}
-                      </li>
-                    );
-                  })}
-                </ol>
-              )}
-
-              {job.status === "failed" && job.error && (
-                <div className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-                  <p className="font-mono text-[11px] text-danger">{job.error.code}</p>
-                  <p className="mt-1 text-[13px]">{job.error.message}</p>
-                  <Button variant="danger" className="mt-2.5" onClick={onRetry}>Start a new session</Button>
-                </div>
-              )}
-
-              {result?.transcript && (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="font-mono text-[11px] text-muted">PLANNED FROM {result.transcript.is_mock ? "MOCK TRANSCRIPT" : "CONFIRMED TRANSCRIPT"}</p>
-                  <p className="mt-1 text-sm">“{result.transcript.text}”</p>
-                  {plan && (
-                    <p className="mt-1 font-mono text-[11px] text-muted">
-                      plan: {plan.intent} · {plan.operations.map((o) => o.type).join(", ") || "no operations"}
-                    </p>
-                  )}
-                  {directorPlan && (
-                    <p className="mt-1 font-mono text-[11px] text-muted">
-                      director: {directorPlan.operations.map((o) => o.title).join(" · ") || "no operations"}
-                    </p>
-                  )}
-                  {result?.rendered && (
-                    <p className="mt-1 font-mono text-[11px] text-muted">
-                      render: {result.rendered.mode} · {result.rendered.width}×{result.rendered.height} · {result.rendered.frame_count} frames ·{" "}
-                      {result.rendered.duration_seconds.toFixed(2)}s · audio {result.rendered.has_audio ? "preserved" : "none in source"}
-                    </p>
-                  )}
-                  {result && (
-                    <div className="mt-2 border-t border-border pt-2 font-mono text-[11px] leading-relaxed text-muted">
-                      <p>MODELS USED (from this job&apos;s execution record):</p>
-                      <p>
-                        voice:{" "}
-                        {result.transcript == null
-                          ? "not called"
-                          : result.transcript.provider_name === "user-confirmed"
-                            ? "not called (typed instruction)"
-                            : result.transcript.is_mock
-                              ? `mock fixture (${result.transcript.provider_name})`
-                              : `${result.transcript.provider_name} — LIVE`}
-                      </p>
-                      <p>
-                        director:{" "}
-                        {directorPlan == null
-                          ? "not called"
-                          : result.director_usage != null
-                            ? "Muse Spark — LIVE"
-                            : "deterministic mock"}
-                      </p>
-                      <p>
-                        segmentation:{" "}
-                        {result.segmentation == null
-                          ? "not called"
-                          : result.segmentation.is_mock
-                            ? `synthetic mock (${result.segmentation.provider_name})`
-                            : `${result.segmentation.provider_name} ${result.segmentation.model ?? ""} — LIVE`}
-                      </p>
-                      <p>
-                        background:{" "}
-                        {result.background == null
-                          ? "not called"
-                          : result.background.is_mock
-                            ? "local mock asset"
-                            : "Muse Image — LIVE"}
-                      </p>
-                      <p>render: local FFmpeg/OpenCV (never billed)</p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </motion.div>
+        <div className="flex items-end gap-2">
+          {onAttachVideo && (
+            <>
+              <input
+                ref={attachRef}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                aria-label="Anexar vídeo ao chat"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (f) onAttachVideo(f);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => attachRef.current?.click()}
+                disabled={submitted || chatBusy}
+                aria-label="Anexar vídeo"
+                title="Anexar vídeo (começar a trabalhar nele)"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="m21 12-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8L12 5.5a3.7 3.7 0 0 1 5.2 5.2l-7.1 7.1a1.85 1.85 0 0 1-2.6-2.6L14 8.7" />
+                </svg>
+              </button>
+            </>
           )}
-        </AnimatePresence>
+          <button
+            type="button"
+            onClick={recState === "recording" ? stopRecording : startRecording}
+            disabled={submitted || busyTranscribe || chatBusy}
+            aria-label={recState === "recording" ? "Parar gravação" : "Gravar mensagem de voz"}
+            title={recState === "recording" ? "Parar (a transcrever ao parar)" : "Gravar voz"}
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40 ${
+              recState === "recording" ? "bg-danger" : "bg-accent hover:bg-[#ff8a70]"
+            }`}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <rect x="9" y="3" width="6" height="11" rx="3" fill="#14110C" />
+              <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="#14110C" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="min-w-0 flex-1 rounded-xl border border-border bg-raised px-2.5 pb-1.5 pt-2 focus-within:border-accent">
+            <textarea
+              value={draft}
+              onChange={(e) => onDraftChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                if (!canConfirm || confirming || submitted || !draft.trim()) return;
+                onConfirmTranscript();
+              }}
+              rows={2}
+              maxLength={1000}
+              disabled={submitted}
+              aria-label="Mensagem para o Muse"
+              placeholder={emptyPlatform ? "Descreve o vídeo que queres criar…" : "Descreve a alteração…"}
+              className="w-full resize-none bg-transparent text-[13px] leading-relaxed outline-none placeholder:text-muted/60 disabled:opacity-70"
+            />
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span className="truncate text-[10px] text-muted/70">
+                Enter para enviar · Shift+Enter nova linha
+              </span>
+              <button
+                type="button"
+                onClick={onConfirmTranscript}
+                disabled={!canConfirm || confirming || submitted || !draft.trim()}
+                aria-label="Enviar para o Muse"
+                title="Enviar (Enter)"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-[#14110C] transition-colors hover:bg-[#ff8a70] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
+              >
+                {confirming ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#14110C]/40 border-t-[#14110C]" aria-hidden />
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                    <path d="M12 19V5m0 0-6 6m6-6 6 6" stroke="#14110C" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <span className="text-[11px] text-muted" aria-live="polite">
+            {recState === "recording" && `A gravar… 00:${String(seconds).padStart(2, "0")} — prime para parar`}
+            {recState === "recorded" && !liveAvailable && "Revê o texto e envia."}
+            {recState === "recorded" && liveAvailable && transcribeStatus !== "done" && "A transcrever…"}
+            {recState === "unsupported" && "Gravação indisponível neste navegador."}
+            {recState === "denied" && "Microfone bloqueado pelo navegador."}
+            {recState === "idle" && (liveAvailable ? "Voz transcrita por serviço externo." : "Voz em simulação — sem custo.")}
+            {submitted && "A tratar do teu pedido…"}
+          </span>
+          {draft.trim() && !submitted && (
+            <span className="shrink-0 font-mono text-[10px] text-muted">{draft.trim().length}/1000</span>
+          )}
+        </div>
       </div>
     </section>
   );

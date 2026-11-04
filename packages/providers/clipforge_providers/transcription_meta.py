@@ -8,10 +8,14 @@ Official configuration verified against:
 Facts implemented here (as documented): model `muse-voice-transcribe-1.0`,
 `POST https://api.meta.ai/v1/asr/transcribe`, Bearer auth, multipart with a
 `request` JSON part and an `audio` WAV part, request fields `model`,
-`audioEncoding: "WAV"`, `mode: "PUSH_TO_TALK"`, `languageBias: ["Portuguese"]`,
+`audioEncoding: "WAV"`, `mode` (`PUSH_TO_TALK` default, `ENDPOINTING` for
+model-detected turn boundaries), `languageBias: ["Portuguese"]`,
 optional `sessionId` query parameter, JSON response `{sessionId, transcript,
-audioDurationMs, turns}`. Audio must be mono 16-bit PCM WAV at 16 or 24 kHz
-(the caller converts; this provider rejects anything else by contract).
+audioDurationMs, turns}` where each turn is `{turnId, startMs, endMs,
+transcript, speaker?}` (turns are empty in PUSH_TO_TALK; word-level
+timestamps do not exist in any mode). Audio must be mono 16-bit PCM WAV at
+16 or 24 kHz (the caller converts; this provider rejects anything else by
+contract).
 
 No automatic retries: exactly one HTTP request per call. Credentials and raw
 audio are never logged.
@@ -27,7 +31,7 @@ from typing import Any, Sequence
 
 import httpx
 
-from clipforge_contracts import TranscriptResult
+from clipforge_contracts import TranscriptResult, TranscriptTurn
 from clipforge_director.ledger import LiveCallAuthorization, LiveCallNotAuthorizedError
 
 logger = logging.getLogger("clipforge.providers.transcription")
@@ -66,6 +70,44 @@ class TranscriptionAPIError(TranscriptionError):
         super().__init__(message)
         self.status_code = status_code
         self.error_type = error_type
+
+
+def _parse_turns(raw: Any, mode: str, session_id: str) -> list[TranscriptTurn]:
+    """Validate the documented `turns` array into TranscriptTurn records.
+
+    PUSH_TO_TALK returns no turns (empty list, never an error). ENDPOINTING
+    turns carry {turnId, startMs, endMs, transcript, speaker?}; anything
+    else shaped is rejected before it can reach captions.
+    """
+    if not isinstance(raw, list):
+        if raw is None:
+            return []
+        raise TranscriptionAPIError(
+            502, f"Transcription turns were not a list (session {session_id}).")
+    turns: list[TranscriptTurn] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise TranscriptionAPIError(
+                502, f"Transcription turn was not an object (session {session_id}).")
+        text = entry.get("transcript")
+        if not isinstance(text, str) or not text.strip():
+            raise TranscriptionAPIError(
+                502, f"Transcription turn had no text (session {session_id}).")
+        try:
+            turns.append(TranscriptTurn.model_validate({
+                "turn_id": entry.get("turnId"),
+                "start_ms": entry.get("startMs"),
+                "end_ms": entry.get("endMs"),
+                "text": " ".join(text.split()),
+                "speaker": entry.get("speaker"),
+            }))
+        except Exception as exc:
+            raise TranscriptionAPIError(
+                502, f"Transcription turn failed validation (session {session_id}): {exc}") from exc
+    if mode == "PUSH_TO_TALK" and turns:
+        raise TranscriptionAPIError(
+            502, f"Transcription returned turns in PUSH_TO_TALK mode (session {session_id}).")
+    return turns
 
 
 def _wav_format(path: Path) -> tuple[int, int, int]:
@@ -128,6 +170,7 @@ class MetaVoiceTranscriptionProvider:
         audio_path: str | Path,
         *,
         language_bias: Sequence[str] = DEFAULT_LANGUAGE_BIAS,
+        mode: str = "PUSH_TO_TALK",
         authorization: LiveCallAuthorization | None = None,
     ) -> TranscriptResult:
         if not isinstance(authorization, LiveCallAuthorization):
@@ -135,6 +178,8 @@ class MetaVoiceTranscriptionProvider:
                 "A valid LiveCallAuthorization is required before a live transcription request. "
                 "No request was attempted."
             )
+        if mode not in ("PUSH_TO_TALK", "ENDPOINTING"):
+            raise ValueError(f"Unsupported transcription mode: {mode!r}.")
         path = Path(audio_path)
         if not path.is_file():
             raise InvalidAudioError(f"Audio file not found: {path}")
@@ -144,7 +189,7 @@ class MetaVoiceTranscriptionProvider:
         request_config = {
             "model": self._model,
             "audioEncoding": "WAV",
-            "mode": "PUSH_TO_TALK",
+            "mode": mode,
             "languageBias": list(language_bias),
         }
         logger.info("transcription_request session_id=%s bytes=%d", session_id, path.stat().st_size)
@@ -200,11 +245,13 @@ class MetaVoiceTranscriptionProvider:
             raise TranscriptionAPIError(502, f"Transcription response contained no transcript (session {session_id}).")
         audio_duration_ms = payload.get("audioDurationMs")
         response_session = payload.get("sessionId") if isinstance(payload.get("sessionId"), str) else session_id
+        turns = _parse_turns(payload.get("turns"), mode, session_id)
         logger.info(
-            "transcription_ok session_id=%s duration_ms=%s turns=%d",
+            "transcription_ok session_id=%s mode=%s duration_ms=%s turns=%d",
             response_session,
+            mode,
             audio_duration_ms if isinstance(audio_duration_ms, int) else "unknown",
-            len(payload.get("turns") or []),
+            len(turns),
         )
         return TranscriptResult(
             text=" ".join(transcript.split()),
@@ -214,6 +261,7 @@ class MetaVoiceTranscriptionProvider:
             is_mock=False,
             session_id=response_session,
             audio_duration_ms=audio_duration_ms if isinstance(audio_duration_ms, int) else None,
+            turns=turns,
         )
 
     @staticmethod

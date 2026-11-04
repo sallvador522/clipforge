@@ -33,6 +33,10 @@ def test_only_expected_capabilities_are_executable():
         "audio.preserve",
         "video.render_mp4",
         "output.verify",
+        # ADR-047: selectable text overlays + local colour grade, both real
+        # local rendering (timeline composition), never AI.
+        "text.overlay",
+        "colour.adjust",
     }
 
 

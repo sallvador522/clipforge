@@ -23,12 +23,37 @@ export type Step = {
   ease?: string;
 };
 
+export type SceneTextStyle = {
+  family: "sans" | "serif" | "mono";
+  weight: number;
+  size_scale: number;
+  color: string;
+  align: "left" | "center" | "right";
+  valign: "top" | "middle" | "lower";
+  letter_spacing_em: number;
+};
+
 export type Scene = {
   scene_id: string;
   duration_ms: number;
   visual_description: string;
   on_screen_text: string[];
+  text_style?: SceneTextStyle;
+  backdrop_hue_deg?: number | null;
+  transition_in?: string;
+  transition_out?: string;
+  transition_ms?: number;
   animation_sequence: Step[];
+};
+
+export type Overlay = {
+  overlay_id: string;
+  kind?: "text" | "image";
+  text: string;
+  asset_id?: string | null;
+  start_ms: number;
+  end_ms: number;
+  style?: SceneTextStyle;
 };
 
 export type Board = {
@@ -37,6 +62,7 @@ export type Board = {
   output_fps: number;
   scenes: Scene[];
   asset_plan: AssetRef[];
+  overlays?: Overlay[];
 };
 
 export type AssetRef = {
@@ -231,11 +257,59 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
     b.scenes.forEach((scene, si) => {
       const sec = root.querySelector<HTMLElement>(`[data-scene="${scene.scene_id}"]`);
       if (!sec) return;
-      tl.set(sec, { opacity: 0 }, offset);
-      tl.set(sec, { opacity: 1 }, offset + 1);
-      if (si > 0) {
+      if (si === 0) {
+        // First scene: legacy instant intro, never touched.
+        tl.set(sec, { opacity: 0 }, offset);
+        tl.set(sec, { opacity: 1 }, offset + 1);
+      } else {
+        // ADR-040/041: the outgoing scene's transition_out drives the boundary,
+        // with its own transition_ms length. transition_in is legacy metadata.
         const prev = root.querySelector<HTMLElement>(`[data-scene="${b.scenes[si - 1].scene_id}"]`);
-        if (prev) tl.set(prev, { opacity: 0 }, offset);
+        const trans = (b.scenes[si - 1] as Scene).transition_out ?? "cut";
+        const T = offset;
+        // transition_ms is contract-bound to 200–1000; scenes are >= 1000 ms,
+        // so T - D never goes negative.
+        const D = (b.scenes[si - 1] as Scene).transition_ms ?? 400;
+        if (trans === "dissolve" || trans === "zoom_blur") {
+          if (prev) {
+            tl.set(prev, { opacity: 1 }, T - D);
+            addHold(prev, { opacity: [1, 0], duration: D, ease: "linear" }, T - D, D);
+          }
+          tl.set(sec, { opacity: 0, scale: trans === "zoom_blur" ? 1.12 : 1 }, T - D);
+          addHold(
+            sec,
+            trans === "zoom_blur"
+              ? { opacity: [0, 1], scale: [1.12, 1], duration: D, ease: "linear" }
+              : { opacity: [0, 1], duration: D, ease: "linear" },
+            T - D,
+            D,
+          );
+        } else if (trans === "fade") {
+          if (prev) {
+            tl.set(prev, { opacity: 1 }, T - D);
+            addHold(prev, { opacity: [1, 0], duration: D, ease: "linear" }, T - D, D);
+          }
+          tl.set(sec, { opacity: 0 }, T);
+          addHold(sec, { opacity: [0, 1], duration: D, ease: "linear" }, T, D);
+        } else if (trans === "wipe") {
+          tl.set(sec, { clipPath: "inset(0 100% 0 0)", opacity: 1 }, T - D);
+          addHold(
+            sec,
+            {
+              clipPath: ["inset(0 100% 0 0)", "inset(0 0% 0 0)"],
+              duration: D,
+              ease: "linear",
+            },
+            T - D,
+            D,
+          );
+          if (prev) tl.set(prev, { opacity: 0 }, T);
+        } else {
+          // cut: legacy instant behavior preserved exactly.
+          tl.set(sec, { opacity: 0 }, T);
+          tl.set(sec, { opacity: 1 }, T + 1);
+          if (prev) tl.set(prev, { opacity: 0 }, T);
+        }
       }
       for (const step of scene.animation_sequence) {
         const at = offset + step.start_ms;
@@ -478,6 +552,16 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
       }
       offset += scene.duration_ms;
     });
+    // ADR-040 multitrack layer 1: global overlays above the scenes.
+    for (const overlay of b.overlays ?? []) {
+      const node = root.querySelector<HTMLElement>(`[data-overlay="${overlay.overlay_id}"]`);
+      if (!node) continue;
+      const dur = Math.max(1, overlay.end_ms - overlay.start_ms);
+      const fade = Math.min(300, Math.floor(dur / 2));
+      tl.set(node, { opacity: 0 }, 0);
+      addHold(node, { opacity: [0, 1], duration: fade, ease: "linear" }, overlay.start_ms, fade);
+      addHold(node, { opacity: [1, 0], duration: fade, ease: "linear" }, overlay.end_ms - fade, fade);
+    }
     tlRef.current = tl;
   };
 
@@ -515,10 +599,10 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
             const src = assetForScene(scene.scene_id);
             if (src) {
               // eslint-disable-next-line @next/next/no-img-element
-              return <img data-layer="bg" src={src} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />;
+              return <img data-layer="bg" src={src} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", filter: scene.backdrop_hue_deg != null ? `hue-rotate(${scene.backdrop_hue_deg}deg)` : undefined }} />;
             }
             // Programmatic backdrop: deterministic gradient, no raster needed.
-            const hue = sceneHue(scene.scene_id);
+            const hue = scene.backdrop_hue_deg != null ? scene.backdrop_hue_deg : sceneHue(scene.scene_id);
             return <div data-layer="bg" style={{ position: "absolute", inset: 0, background: `linear-gradient(160deg, hsl(${hue},42%,10%), hsl(${(hue + 50) % 360},48%,20%))` }} />;
           })()}
           {(() => {
@@ -571,7 +655,17 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
             <path d={`M60,${Math.round(H * 0.86)} L${W - 60},${Math.round(H * 0.86)}`} stroke="#ffb36b" strokeWidth="4" fill="none" />
           </svg>
           )}
-          <div style={{ position: "absolute", left: 40, right: 40, top: Math.round(H * 0.1) }}>
+          {(() => {
+            const style = scene.text_style;
+            const topPct = style?.valign === "middle" ? 0.34 : style?.valign === "lower" ? 0.55 : 0.1;
+            const fontFamily =
+              style?.family === "serif"
+                ? "Georgia, 'Times New Roman', serif"
+                : style?.family === "mono"
+                  ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                  : "var(--font-manrope), ui-sans-serif, system-ui, sans-serif";
+            return (
+          <div style={{ position: "absolute", left: 40, right: 40, top: Math.round(H * topPct), textAlign: style?.align ?? "left" }}>
             {scene.on_screen_text.map((t, i) => {
               const elId = i === 0 ? "title" : `line${i}`;
               const animated = scene.animation_sequence.some(
@@ -579,7 +673,7 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
               );
               // Auto-fit: long lines shrink so layout QA never clips them.
               // Title is the hook (big), lines are support (compact).
-              const size =
+              const baseSize =
                 i === 0
                   ? t.length > 30
                     ? 38
@@ -591,13 +685,16 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
                     : t.length > 32
                       ? 26
                       : 32;
+              const size = Math.round(baseSize * (style?.size_scale ?? 1));
               return (
-              <div key={i} data-el={elId} style={{ color: "#fff", fontFamily: "var(--font-manrope), ui-sans-serif, system-ui, sans-serif", fontWeight: 800, fontSize: size, lineHeight: i === 0 ? 1.06 : 1.25, letterSpacing: i === 0 ? "-0.015em" : "0", textShadow: "0 2px 18px rgba(0,0,0,.8)", marginBottom: i === 0 ? 16 : 10 }}>
+              <div key={i} data-el={elId} style={{ color: style?.color ?? "#fff", fontFamily, fontWeight: style?.weight ?? 800, fontSize: size, lineHeight: i === 0 ? 1.06 : 1.25, letterSpacing: `${(style?.letter_spacing_em ?? 0) + (i === 0 ? -0.015 : 0)}em`, textShadow: "0 2px 18px rgba(0,0,0,.8)", marginBottom: i === 0 ? 16 : 10 }}>
                 {kinetic(t, animated)}
               </div>
               );
             })}
           </div>
+            );
+          })()}
           {used.has("conclusion") && (
           <div data-el="conclusion" style={{ position: "absolute", left: 40, right: 40, bottom: 220, color: "#ffd9a8", fontFamily: "var(--font-manrope), ui-sans-serif, system-ui, sans-serif", fontSize: 28, opacity: 0 }}>
             {kinetic(scene.on_screen_text[scene.on_screen_text.length - 1] ?? "", scene.animation_sequence.some((s) => s.primitive === "kinetic_typography" && s.target === "conclusion"))}
@@ -614,6 +711,59 @@ const SceneRenderer = forwardRef<SceneRendererHandle, Props>(function SceneRende
         </section>
         );
       })}
+      {/* ADR-040/041 multitrack layers: global overlays above every scene. */}
+      {(board.overlays ?? []).length > 0 && (
+        <div data-layer="overlays" style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 30 }}>
+          {(board.overlays ?? []).map((overlay) => {
+            const style = overlay.style;
+            if (overlay.kind === "image" && overlay.asset_id) {
+              const src = assetUrls ? assetUrls[overlay.asset_id] : undefined;
+              if (!src && !assetBasePath) return null;
+              return (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={overlay.overlay_id}
+                  data-overlay={overlay.overlay_id}
+                  src={src ?? `${assetBasePath}/${overlay.asset_id}.png`}
+                  alt=""
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0 }}
+                />
+              );
+            }
+            const valign = style?.valign ?? "lower";
+            const fontFamily =
+              style?.family === "serif"
+                ? "Georgia, 'Times New Roman', serif"
+                : style?.family === "mono"
+                  ? "ui-monospace, SFMono-Regular, Menlo, monospace"
+                  : "var(--font-manrope), ui-sans-serif, system-ui, sans-serif";
+            return (
+              <div
+                key={overlay.overlay_id}
+                data-overlay={overlay.overlay_id}
+                style={{
+                  position: "absolute",
+                  left: 40,
+                  right: 40,
+                  top: valign === "top" ? Math.round(H * 0.16) : valign === "middle" ? Math.round(H * 0.42) : undefined,
+                  bottom: valign === "lower" ? Math.round(H * 0.12) : undefined,
+                  textAlign: style?.align ?? "center",
+                  color: style?.color ?? "#fff",
+                  fontFamily,
+                  fontWeight: style?.weight ?? 800,
+                  fontSize: Math.round(30 * (style?.size_scale ?? 1)),
+                  lineHeight: 1.25,
+                  letterSpacing: `${style?.letter_spacing_em ?? 0}em`,
+                  textShadow: "0 2px 14px rgba(0,0,0,.85)",
+                  opacity: 0,
+                }}
+              >
+                {overlay.text}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 });

@@ -8,7 +8,7 @@
  * storyboard stays available for inspection.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import SceneRenderer, { type SceneRendererHandle } from "./SceneRenderer";
 import type { IdeaPayload } from "@/lib/idea-types";
 
@@ -54,21 +54,43 @@ function formatTime(ms: number): string {
 interface Props {
   idea: IdeaPayload | null;
   busy: string | null;
+  onTimeUpdate?: (ms: number) => void;
 }
 
-export function IdeaPreview({ idea, busy }: Props) {
+export interface IdeaPreviewHandle {
+  seek: (ms: number) => void;
+  play: () => void;
+  pause: () => void;
+}
+
+export const IdeaPreview = forwardRef<IdeaPreviewHandle, Props>(function IdeaPreview(
+  { idea, busy, onTimeUpdate },
+  ref,
+) {
   const rendererRef = useRef<SceneRendererHandle>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [scale, setScale] = useState(0.32);
   const [view, setView] = useState<"storyboard" | "video">("storyboard");
+  const timeCb = useRef(onTimeUpdate);
+  timeCb.current = onTimeUpdate;
 
   const board = idea?.storyboard ?? null;
   const render = idea?.render ?? null;
   const size = useMemo(() => (idea ? stageSize(idea) : { width: 720, height: 1280 }), [idea]);
   const durationMs = board ? board.duration_seconds * 1000 : 0;
   const working = Boolean(idea && WORKING_STAGES.has(idea.stage));
+  // Preview resolves the same generated plates the export captures, so what
+  // you see is what the worker renders (programmatic fallback otherwise).
+  const assetUrls = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const asset of idea?.assets ?? []) {
+      if (asset.url) map[asset.asset_id] = asset.url;
+    }
+    return map;
+  }, [idea?.assets]);
 
   // The final MP4 takes over as soon as a verified render exists.
   useEffect(() => {
@@ -105,9 +127,11 @@ export function IdeaPreview({ idea, busy }: Props) {
     const tick = () => {
       const current = rendererRef.current?.debug().currentTime ?? 0;
       setTime(current);
+      timeCb.current?.(current);
       if (durationMs > 0 && current >= durationMs - 8) {
         rendererRef.current?.pause();
         setTime(durationMs);
+        timeCb.current?.(durationMs);
         setPlaying(false);
         return;
       }
@@ -125,19 +149,49 @@ export function IdeaPreview({ idea, busy }: Props) {
       return;
     }
     if (durationMs > 0 && time >= durationMs - 20) {
-      rendererRef.current.seek(0);
-      setTime(0);
+      seekTo(0);
     }
     rendererRef.current.play();
     setPlaying(true);
   }
 
   function scrub(ms: number) {
-    rendererRef.current?.pause();
-    setPlaying(false);
-    setTime(ms);
-    rendererRef.current?.seek(ms);
+    seekTo(ms);
   }
+
+  function seekTo(ms: number) {
+    const clamped = Math.max(0, Math.min(ms, durationMs));
+    setPlaying(false);
+    setTime(clamped);
+    timeCb.current?.(clamped);
+    if (view === "video" && videoRef.current) {
+      videoRef.current.currentTime = clamped / 1000;
+    } else {
+      rendererRef.current?.pause();
+      rendererRef.current?.seek(clamped);
+    }
+  }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      seek: (ms: number) => seekTo(ms),
+      play: () => {
+        if (view === "video") {
+          void videoRef.current?.play().catch(() => undefined);
+        } else {
+          rendererRef.current?.play();
+        }
+        setPlaying(true);
+      },
+      pause: () => {
+        if (view === "video") videoRef.current?.pause();
+        else rendererRef.current?.pause();
+        setPlaying(false);
+      },
+    }),
+    [durationMs, view],
+  );
 
   const progress = idea?.progress;
   const percent =
@@ -149,10 +203,10 @@ export function IdeaPreview({ idea, busy }: Props) {
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-4">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[10px] tracking-[0.16em] text-muted">PREVIEW</span>
+          <span className="text-[11px] text-muted">Pré-visualização</span>
           {idea && (
-            <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted">
-              {idea.options.aspect_ratio} · {idea.options.fps} FPS
+            <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">
+              {idea.options.aspect_ratio} · {idea.options.fps} fps
             </span>
           )}
         </div>
@@ -168,7 +222,7 @@ export function IdeaPreview({ idea, busy }: Props) {
                   view === value ? "bg-accent text-[#14110C]" : "text-muted hover:text-foreground"
                 }`}
               >
-                {value === "video" ? "VÍDEO FINAL" : "STORYBOARD"}
+                {value === "video" ? "Vídeo final" : "Plano"}
               </button>
             ))}
           </div>
@@ -183,11 +237,11 @@ export function IdeaPreview({ idea, busy }: Props) {
               <span className="absolute inset-2 rounded-full border border-accent/50" />
               <span className="h-4 w-4 rounded-full bg-accent shadow-[0_0_28px_rgba(255,118,89,.6)]" />
             </div>
-            <p className="font-mono text-[10px] tracking-[0.16em] text-accent">IDEA-TO-VIDEO</p>
+            <p className="text-[11px] text-accent">A partir de uma ideia</p>
             <h2 className="mt-1 text-lg font-semibold">Descreve. Aprova. Recebe o vídeo.</h2>
             <p className="mt-2 text-[13px] leading-relaxed text-muted">
-              Escreve a ideia à esquerda. O director propõe um storyboard, tu aprovas o custo e o
-              worker renderiza um MP4 verificado no teu computador.
+              Escreve a ideia no chat. O Muse propõe um plano, tu aprovas o custo e o
+              vídeo é gerado aqui.
             </p>
             <p className="mt-4 font-mono text-[10px] leading-relaxed text-muted">
               Nada é gerado sem aprovação explícita.
@@ -200,16 +254,15 @@ export function IdeaPreview({ idea, busy }: Props) {
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <div className="w-full max-w-sm rounded-lg border border-border bg-surface p-5">
             <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] tracking-[0.16em] text-accent">
-                {working ? "EM CURSO" : "PLANO"}
+              <span className="text-[11px] text-accent">
+                {working ? "Em curso" : "Plano"}
               </span>
-              <span className="font-mono text-[10px] text-muted">{idea.status}</span>
             </div>
             <p className="mt-2 text-[15px] font-semibold">{stageLabel(idea.stage)}</p>
             <p className="mt-1 text-[12px] leading-relaxed text-muted">
               {working
-                ? "O worker está a preparar o plano. Esta página atualiza sozinha."
-                : "Aprova o custo do plano no painel à direita para continuar."}
+                ? "O Muse está a preparar o plano. Esta página actualiza sozinha."
+                : "Aprova o custo do plano para continuar."}
             </p>
             {percent !== null && (
               <>
@@ -233,10 +286,16 @@ export function IdeaPreview({ idea, busy }: Props) {
           <div className="flex min-h-0 flex-1 items-center justify-center">
             <video
               key={render.sha256}
+              ref={videoRef}
               controls
               playsInline
               preload="metadata"
               src={render.url}
+              onTimeUpdate={(e) => {
+                const ms = e.currentTarget.currentTime * 1000;
+                setTime(ms);
+                timeCb.current?.(ms);
+              }}
               className="max-h-full max-w-full rounded-md border border-border bg-black"
               style={{ aspectRatio: `${render.width} / ${render.height}` }}
             />
@@ -252,13 +311,14 @@ export function IdeaPreview({ idea, busy }: Props) {
         <>
           <div ref={wrapRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
             <div
-              className="relative shrink-0 overflow-hidden rounded-md shadow-[0_0_0_1px_#2e2820,0_24px_60px_rgba(0,0,0,.45)]"
+              className="relative shrink-0 overflow-hidden rounded-md border border-border"
               style={{ width: size.width * scale, height: size.height * scale }}
             >
               <div style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}>
                 <SceneRenderer
                   ref={rendererRef}
                   board={board}
+                  assetUrls={assetUrls}
                   width={size.width}
                   height={size.height}
                 />
@@ -284,7 +344,7 @@ export function IdeaPreview({ idea, busy }: Props) {
 
             {!working && idea.can_approve_assets && (
               <div className="pointer-events-none absolute left-4 top-4 rounded-full border border-accent/40 bg-[#14110c]/90 px-2.5 py-1 font-mono text-[10px] tracking-[0.1em] text-accent">
-                PLANO POR APROVAR
+                Plano por aprovar
               </div>
             )}
           </div>
@@ -347,4 +407,4 @@ export function IdeaPreview({ idea, busy }: Props) {
       )}
     </div>
   );
-}
+});

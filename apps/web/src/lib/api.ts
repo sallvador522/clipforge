@@ -42,8 +42,10 @@ export interface TranscriptionConfig {
   director_mode?: "mock" | "live";
   segmentation_mode?: "mock" | "live";
   image_mode?: "mock" | "live";
+  chat_mode?: "mock" | "live";
   live_transcription_available: boolean;
   live_image_available?: boolean;
+  live_chat_available?: boolean;
 }
 
 /** Real upload with real progress events (XMLHttpRequest; fetch cannot report upload progress). */
@@ -204,6 +206,29 @@ export function subjectPreviewUrl(jobId: string, objectId: string): string {
   return `${API_BASE}/api/jobs/${jobId}/subjects/${encodeURIComponent(objectId)}/preview`;
 }
 
+/** ADR-041 upload trim. Both null clears the trim. */
+export function setTrim(
+  jobId: string,
+  start: number | null,
+  end: number | null,
+): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/trim`, {
+    method: "POST",
+    body: JSON.stringify({ start_s: start, end_s: end }),
+  });
+}
+
+/** ADR-041 upload audio: gain + fades on the preserved original audio. */
+export function setUploadAudio(
+  jobId: string,
+  body: { gain_db: number; fade_in_s: number; fade_out_s: number },
+): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/audio`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function rejectPlan(jobId: string, note?: string): Promise<JobResponse> {
   return requestJson<JobResponse>(`/api/jobs/${jobId}/reject`, {
     method: "POST",
@@ -226,6 +251,228 @@ export function downloadUrl(jobId: string, format: ExportFormat = "original"): s
     : `${API_BASE}/api/jobs/${jobId}/download?format=${format}`;
 }
 
+/** ADR-044 multitrack timeline assembly. Full replacement; server re-validates. */export interface TimelineClipData {
+  clip_id: string;
+  asset_id: string;
+  track: "V1" | "V2" | "A1" | "A2";
+  timeline_start_s: number;
+  source_in_s: number;
+  source_out_s: number;
+}
+
+export interface TimelineData {
+  timeline: { clips: TimelineClipData[] };
+  program_duration_s: number;
+}
+
+export function newClipId(): string {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return "clip_" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function getTimeline(jobId: string): Promise<TimelineData> {
+  return requestJson<TimelineData>(`/api/jobs/${jobId}/timeline`);
+}
+
+export function putTimeline(jobId: string, clips: TimelineClipData[]): Promise<TimelineData> {
+  return requestJson<TimelineData>(`/api/jobs/${jobId}/timeline`, {
+    method: "PUT",
+    body: JSON.stringify({ timeline: { clips } }),
+  });
+}
+
+export type TimelineFormat = "source" | "landscape" | "portrait";
+
+export function renderTimeline(jobId: string, format?: TimelineFormat): Promise<JobResponse> {
+  return requestJson<JobResponse>(`/api/jobs/${jobId}/timeline/render`, {
+    method: "POST",
+    body: JSON.stringify({ format: format ?? "source" }),
+  });
+}
+
+/** Drag-and-drop payload from Recursos rows/cards onto timeline lanes. */
+export const TIMELINE_ASSET_MIME = "application/x-clipforge-asset";
+
+export interface TimelineDragAsset {
+  asset_id: string;
+  kind: string;
+  /** Media seconds (video/audio). Text assets carry 0/unknown. */
+  duration: number;
+  name: string;
+}
+
+export function readTimelineDrag(dataTransfer: DataTransfer): TimelineDragAsset | null {
+  try {
+    const raw = dataTransfer.getData(TIMELINE_ASSET_MIME);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<TimelineDragAsset>;
+    if (typeof parsed.asset_id !== "string" || typeof parsed.kind !== "string") return null;
+    const duration = typeof parsed.duration === "number" && Number.isFinite(parsed.duration)
+      ? parsed.duration
+      : 0;
+    return {
+      asset_id: parsed.asset_id,
+      kind: parsed.kind,
+      duration,
+      name: typeof parsed.name === "string" ? parsed.name : parsed.asset_id,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function checkHealth(): Promise<TranscriptionConfig> {
   return requestJson<TranscriptionConfig>("/health");
+}
+
+/** Conversational Muse turn. Side-effect free: the server never creates
+ * jobs/ideas or calls providers here. Actionable intents return
+ * needs_confirmation + pending_text (+ pending_tool_calls for edit-track
+ * tools); the Studio executes via the existing voice/ideas/tools endpoints
+ * only after the user presses Executar. */
+export interface ChatToolCall {
+  tool: string;
+  params: Record<string, unknown>;
+}
+
+export interface ChatInterview {
+  needed: string[];
+  answered: {
+    style?: "cinematic" | "documentary" | "product" | "bold";
+    duration_s?: number;
+    aspect?: "9:16" | "16:9";
+  };
+  /** Original topic sentence echoed by the server; chips never replace it. */
+  brief?: string | null;
+  options: {
+    styles?: { id: string; label: string }[];
+    durations?: number[];
+    aspects?: string[];
+  };
+}
+
+export interface ChatData {
+  intent: "smalltalk" | "help" | "status" | "cancel" | "clarify" | "edit_proposal" | "idea_proposal" | "idea_interview" | string;
+  reply: string;
+  needs_confirmation: boolean;
+  pending_text: string | null;
+  pending_kind: "edit" | "idea" | "tools" | null;
+  pending_tool_calls?: ChatToolCall[];
+  select_text_id?: string | null;
+  /** ADR-053: "mock" = router local (sem custo); "live" = Muse Spark reescreveu a resposta (1 slot `chat` no ledger). */
+  chat_mode?: "mock" | "live";
+  chat_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_usd: number } | null;
+  /** Resolved director-interview options: only present on a complete proposal. */
+  pending_idea_options?: {
+    style: "cinematic" | "documentary" | "product" | "bold";
+    duration_seconds: number;
+    aspect_ratio: "9:16" | "16:9";
+  } | null;
+  interview?: ChatInterview | null;
+}
+
+export function sendChat(
+  message: string,
+  jobId?: string | null,
+  projectId?: string | null,
+  selectedTextId?: string | null,
+  interview?: {
+    style?: "cinematic" | "documentary" | "product" | "bold";
+    duration_s?: number;
+    aspect?: "9:16" | "16:9";
+    brief?: string;
+  } | null,
+  ideaId?: string | null,
+  history?: { role: "user" | "muse"; text: string }[] | null,
+): Promise<ChatData> {
+  return requestJson<ChatData>("/api/chat", {
+    method: "POST",
+    body: JSON.stringify({
+      message,
+      ...(jobId ? { job_id: jobId } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(ideaId ? { idea_id: ideaId } : {}),
+      ...(selectedTextId ? { selected_text_id: selectedTextId } : {}),
+      ...(interview && Object.keys(interview).length > 0 ? { interview } : {}),
+      ...(history && history.length > 0 ? { history: history.slice(-12) } : {}),
+    }),
+  });
+}
+
+/** ADR-047 selectable text overlays: full replacement, server re-validates. */
+export interface ClipTextData {
+  overlay_id: string;
+  text: string;
+  style: string;
+  start_s: number;
+  duration_s: number;
+  x: number;
+  y: number;
+  scale: number;
+  color: string;
+  weight: string;
+}
+
+export function getClipTexts(jobId: string): Promise<{ texts: ClipTextData[] }> {
+  return requestJson<{ texts: ClipTextData[] }>(`/api/jobs/${jobId}/texts`);
+}
+
+export function putClipTexts(jobId: string, texts: ClipTextData[]): Promise<{ texts: ClipTextData[] }> {
+  return requestJson<{ texts: ClipTextData[] }>(`/api/jobs/${jobId}/texts`, {
+    method: "PUT",
+    body: JSON.stringify({ texts }),
+  });
+}
+
+/** ADR-047 local colour grade. Identity = no visible change. */
+export interface ColourData {
+  contrast: number;
+  brightness: number;
+  saturation: number;
+}
+
+export function getColour(jobId: string): Promise<{ colour: ColourData }> {
+  return requestJson<{ colour: ColourData }>(`/api/jobs/${jobId}/colour`);
+}
+
+export function putColour(jobId: string, colour: ColourData): Promise<{ colour: ColourData }> {
+  return requestJson<{ colour: ColourData }>(`/api/jobs/${jobId}/colour`, {
+    method: "PUT",
+    body: JSON.stringify(colour),
+  });
+}
+
+/** ADR-049 burned-in subtitle cover: fixed-geometry bottom-band blur. */
+export function getCaptionCover(jobId: string): Promise<{ caption_cover: boolean }> {
+  return requestJson<{ caption_cover: boolean }>(`/api/jobs/${jobId}/caption-cover`);
+}
+
+export function putCaptionCover(jobId: string, enabled: boolean): Promise<{ caption_cover: boolean }> {
+  return requestJson<{ caption_cover: boolean }>(`/api/jobs/${jobId}/caption-cover`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+/** ADR-047 Muse tools: validated, real execution after confirmation. */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export function listTools(jobId: string): Promise<{ tools: ToolDefinition[] }> {
+  return requestJson<{ tools: ToolDefinition[] }>(`/api/jobs/${jobId}/tools`);
+}
+
+export function executeTool(
+  jobId: string,
+  tool: string,
+  params: Record<string, unknown>,
+): Promise<{ tool: string; result: Record<string, unknown> }> {
+  return requestJson<{ tool: string; result: Record<string, unknown> }>(
+    `/api/jobs/${jobId}/tools/execute`,
+    { method: "POST", body: JSON.stringify({ tool, params }) },
+  );
 }

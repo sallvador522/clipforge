@@ -127,8 +127,15 @@ def transcribe_upload(
     providers,
     mock_fixture_id: str | None,
     budget: LiveCallBudget | None = None,
+    asr_mode: str = "PUSH_TO_TALK",
 ) -> tuple[TranscriptResult, str]:
     """Validate, convert (temp), and transcribe exactly once. Returns (result, transcribe_mode)."""
+    if asr_mode not in ("PUSH_TO_TALK", "ENDPOINTING"):
+        raise AudioValidationError(
+            "unsupported_asr_mode",
+            "Transcription mode must be PUSH_TO_TALK or ENDPOINTING.",
+            status_code=422,
+        )
     suffix = Path(filename or "").suffix.lower()
     if suffix not in AUDIO_EXTENSIONS:
         raise AudioValidationError(
@@ -173,7 +180,7 @@ def transcribe_upload(
             authorization = LiveCallAuthorization(budget, "transcription") if budget is not None else None
             try:
                 result = providers.transcription.transcribe_audio(
-                    wav_path, language_bias=LANGUAGE_BIAS, authorization=authorization
+                    wav_path, language_bias=LANGUAGE_BIAS, mode=asr_mode, authorization=authorization
                 )
             except LiveBudgetExceeded as exc:
                 raise AudioValidationError("live_budget_exhausted", str(exc), status_code=429) from exc

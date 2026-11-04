@@ -21,6 +21,8 @@ from clipforge_jobs.models import JobRecord, JobStateEntry, JobStatus, utc_now
 
 # User/API transitions only. Worker stage updates are recorded by update().
 ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
+    JobStatus.QUEUED: {JobStatus.QUEUED},
+    JobStatus.COMPLETED: {JobStatus.QUEUED},
     JobStatus.AWAITING_APPROVAL: {JobStatus.QUEUED, JobStatus.REJECTED},
     JobStatus.AWAITING_CLARIFICATION: {JobStatus.QUEUED, JobStatus.REJECTED},
     JobStatus.AWAITING_CONSENT: {JobStatus.QUEUED},

@@ -10,14 +10,16 @@ from clipforge_contracts.idea import (
     scene_count_for,
     storyboard_hash,
 )
-from clipforge_contracts.storyboard import AnimationPrimitive
+from clipforge_contracts.storyboard import AnimationPrimitive, OverlaySpec
 from clipforge_director.idea_director import (
     MAX_PLATES,
     MockIdeaDirector,
     build_assets,
     idea_modes,
+    options_instructions,
     validate_board_for_options,
     validate_board_targets,
+    validate_overlay_assets,
 )
 from clipforge_director.pricing import (
     DEFAULT_CAP_USD,
@@ -52,6 +54,16 @@ def test_brief_hash_is_stable_and_covers_options():
     assert first != brief_hash(BRIEF, options.model_copy(update={"fps": 30}))
     assert first != brief_hash("Outra ideia completamente diferente.", options)
     assert len(first) == 64
+
+
+def test_options_instructions_demand_exact_duration_sum():
+    # Regression: "aim for about X seconds" let the live director return
+    # 25000 ms for a 20 s project (and 75000 ms for 60 s) — paid, then
+    # rejected. The instruction must state the exact required sum.
+    for duration in (20, 25, 60):
+        instructions = options_instructions(IdeaOptions(duration_seconds=duration))
+        assert str(duration * 1000) in instructions
+        assert "MUST sum to exactly" in instructions
 
 
 def test_mock_director_builds_a_valid_board_for_each_option_set():
@@ -110,10 +122,11 @@ def test_validate_board_rejects_options_it_does_not_match():
     board = MockIdeaDirector().create_storyboard(BRIEF, options)
     validate_board_for_options(board, BRIEF, options)
 
-    with pytest.raises(ValueError, match="duration"):
-        validate_board_for_options(
-            board, BRIEF, options.model_copy(update={"duration_seconds": 10})
-        )
+    # ADR-036: a different requested duration never rejects the board; the
+    # delivered scene durations define the final video length.
+    validate_board_for_options(
+        board, BRIEF, options.model_copy(update={"duration_seconds": 10})
+    )
     with pytest.raises(ValueError, match="aspect ratio"):
         validate_board_for_options(
             board, BRIEF, options.model_copy(update={"aspect_ratio": "16:9"})
@@ -122,6 +135,42 @@ def test_validate_board_rejects_options_it_does_not_match():
         validate_board_for_options(board, BRIEF, options.model_copy(update={"fps": 30}))
     with pytest.raises(ValueError, match="user_request"):
         validate_board_for_options(board, "Outro pedido diferente.", options)
+
+
+def test_overlay_contract_and_missing_assets():
+    options = IdeaOptions(duration_seconds=20)
+    board = MockIdeaDirector().create_storyboard(BRIEF, options)
+    total_ms = sum(s.duration_ms for s in board.scenes)
+
+    text = OverlaySpec(overlay_id="overlay_1", kind="text", text="Segue", start_ms=0, end_ms=1000)
+    assert text.kind == "text"
+    with pytest.raises(ValueError, match="needs text"):
+        OverlaySpec(overlay_id="overlay_2", kind="text", text="", start_ms=0, end_ms=1000)
+    with pytest.raises(ValueError, match="asset_id"):
+        OverlaySpec(overlay_id="overlay_3", kind="image", start_ms=0, end_ms=1000)
+    image = OverlaySpec(
+        overlay_id="overlay_4", kind="image", asset_id="asset_scene_1", start_ms=0, end_ms=1000
+    )
+
+    board = board.model_copy(update={"overlays": [text, image]})
+    assert validate_overlay_assets(board, {"asset_scene_1"}) == []
+    assert validate_overlay_assets(board, set()) == ["overlay_4"]
+    assert validate_overlay_assets(board, {"other"}) == ["overlay_4"]
+
+    bad = board.model_copy(
+        update={
+            "overlays": [
+                OverlaySpec(
+                    overlay_id="overlay_x", kind="text", text="x",
+                    start_ms=0, end_ms=total_ms + 5000,
+                )
+            ]
+        }
+    )
+    from clipforge_contracts.storyboard import Storyboard
+
+    with pytest.raises(ValueError, match="overruns"):
+        Storyboard.model_validate(bad.model_dump(mode="json"))
 
 
 def test_storyboard_hash_is_deterministic_and_sensitive():

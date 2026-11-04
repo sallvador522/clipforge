@@ -17,12 +17,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from clipforge_contracts import (
     BackgroundResult,
+    ClipTextOverlay,
+    ColourGrade,
     DirectorAudit,
     EditingPlan,
     ProfessionalEditingPlan,
     RenderResult,
     SegmentationResult,
     SubjectDetectionConsent,
+    Timeline,
     TranscriptResult,
 )
 from clipforge_contracts.edl import EditHistoryEntry
@@ -111,12 +114,42 @@ class JobRecord(BaseModel):
     confirmed_transcript: str | None = None
     transcript_is_mock: bool = False
     transcription_session_id: str | None = None
+    # ADR-041 upload trim (seconds into the ORIGINAL source). Materialized by
+    # the worker into a trimmed working copy before segmentation/rendering;
+    # the original file is never modified.
+    trim_start_s: float | None = None
+    trim_end_s: float | None = None
+    trimmed_relative_path: str | None = None
+    trimmed_sha256: str | None = None
+    # Original duration at first trim (absolute reference for later edits).
+    original_duration_s: float | None = None
+    # ADR-041 upload audio: gain in dB plus fades, applied to the preserved
+    # original audio at render (no re-generation, no extra tracks).
+    audio_gain_db: float = 0.0
+    audio_fade_in_s: float = 0.0
+    audio_fade_out_s: float = 0.0
     edit_history: list[EditHistoryEntry] = Field(default_factory=list)
     state_history: list[JobStateEntry] = Field(default_factory=list)
     approval_granted: bool = False
     selected_subject_ids: list[str] = Field(default_factory=list)
     clarification_answer: str | None = Field(default=None, max_length=300)
     clarification_count: int = Field(default=0, ge=0)
+    # ADR-044 multitrack assembly: explicit user arrangement of project assets
+    # on V1/V2/A1/A2. Draft until the user renders it; the director never
+    # invents timeline content.
+    timeline: Timeline | None = None
+    timeline_render_requested: bool = False
+    # ADR-051 output canvas: "source" preserves the primary clip (default),
+    # "landscape"/"portrait" force 1280x720 / 720x128 weights; the user chooses.
+    timeline_format: str = "source"
+    # ADR-047 selectable text overlays: real project data, persisted here,
+    # edited in the Studio / via Muse tools, burned into the timeline render.
+    clip_texts: list[ClipTextOverlay] = Field(default_factory=list)
+    # ADR-047 local colour grade applied by the timeline composition.
+    colour: ColourGrade = Field(default_factory=ColourGrade)
+    # ADR-049 burned-in subtitle cover: when the source already carries
+    # burned-in subtitles, blur the caption band before burning ours.
+    caption_cover: bool = False
     result: JobResult | None = None
     error: JobError | None = None
     attempts: int = 0

@@ -29,8 +29,12 @@ from clipforge_contracts.idea import (
     storyboard_hash,
 )
 from clipforge_contracts.storyboard import Storyboard
+from clipforge_director.creative import apply_storyboard_patch
 from clipforge_director.idea_director import (
     build_assets,
+    create_live_refinement_director,
+    create_refinement_live,
+    creative_effort,
     idea_modes,
     validate_board_for_options,
     validate_board_targets,
@@ -85,8 +89,18 @@ class RenderBody(BaseModel):
     storyboard_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class DirectBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instruction: str = Field(min_length=3, max_length=1000)
+    approved_cost_usd: float = Field(default=0.0, ge=0.0, le=5.0)
+
+
 def create_ideas_router(
-    storage_root: str | Path, *, transcription_mode: str = "mock"
+    storage_root: str | Path,
+    *,
+    transcription_mode: str = "mock",
+    refinement_provider_factory=None,
 ) -> APIRouter:
     store = IdeaStore(storage_root)
     router = APIRouter(prefix="/api/ideas", tags=["ideas"])
@@ -156,6 +170,12 @@ def create_ideas_router(
                 record.idea.storyboard.model_dump(mode="json") if record.idea.storyboard else None
             ),
             "storyboard_hash": record.idea.storyboard_hash,
+            "pending_patch": (
+                record.idea.pending_patch.model_dump(mode="json")
+                if record.idea.pending_patch
+                else None
+            ),
+            "pending_clarification_question": record.idea.pending_clarification_question,
             "approvals": [approval.model_dump(mode="json") for approval in record.idea.approvals],
             "assets": assets,
             "render": _render_payload(record, base),
@@ -184,6 +204,67 @@ def create_ideas_router(
             "can_download": delivered is not None and record.status == IdeaStatus.COMPLETED,
             "can_cancel": record.status in (IdeaStatus.QUEUED, IdeaStatus.PROCESSING),
         }
+
+    def _adopt_board(record, board, *, post_completion: bool):
+        """Persist a validated board + rebuilt assets. Returns an error or None.
+
+        Post-completion, only previously generated image prompts may survive:
+        an edit that would need new paid images is refused (ADR-034/036).
+        """
+        new_assets = build_assets(board, record.idea.options)
+        if post_completion and record.idea.options.use_generated_images:
+            previous_hashes = {
+                asset.prompt_hash
+                for asset in record.idea.assets
+                if asset.status in (AssetStatus.GENERATED, AssetStatus.SKIPPED)
+            }
+            introduced = [
+                asset.asset_id
+                for asset in new_assets
+                if asset.prompt_hash not in previous_hashes
+            ]
+            if introduced:
+                return _error(
+                    422,
+                    "storyboard_new_images",
+                    "Esta edição pedia imagens novas "
+                    f"({', '.join(introduced)}); edições após conclusão só "
+                    "podem reutilizar imagens já geradas. Cria um novo vídeo "
+                    "para gerar imagens novas.",
+                )
+            previous_by_hash = {}
+            for asset in record.idea.assets:
+                previous_by_hash.setdefault(asset.prompt_hash, asset)
+            for asset in new_assets:
+                previous = previous_by_hash.get(asset.prompt_hash)
+                if previous is None:
+                    continue
+                if previous.status == AssetStatus.GENERATED:
+                    asset.status = AssetStatus.GENERATED
+                    asset.filename = previous.filename
+                    asset.sha256 = previous.sha256
+                    asset.width = previous.width
+                    asset.height = previous.height
+                    asset.provider_name = previous.provider_name
+                    asset.is_mock = previous.is_mock
+                    asset.request_id = previous.request_id
+                    asset.cost_usd = previous.cost_usd
+                    asset.error = None
+                    asset.generated_at = previous.generated_at
+                else:
+                    asset.status = AssetStatus.SKIPPED
+        record.idea.storyboard = board
+        record.idea.storyboard_hash = storyboard_hash(board)
+        record.idea.assets = new_assets
+        modes = idea_modes()
+        record.idea.estimate = estimate_from_storyboard(
+            board,
+            record.idea.options,
+            director_mode=modes["director"],
+            image_mode=modes["image"],
+            effort=modes["effort"],
+        )
+        return None
 
     # -------------------------------------------------------------- config
     @router.get("/config", response_model=None)
@@ -335,11 +416,20 @@ def create_ideas_router(
         record, error = _load(idea_id)
         if error:
             return error
-        if record.stage != "awaiting_plan_approval":
+        pre_approval = (
+            record.status == IdeaStatus.AWAITING_APPROVAL
+            and record.stage == "awaiting_plan_approval"
+        )
+        # Post-completion edits (1-2: text + scene removal) reuse the same
+        # validated PATCH. No new image prompts are allowed here, so the edit
+        # stays free: only previously approved prompts may survive.
+        post_completion = record.status in (IdeaStatus.COMPLETED, IdeaStatus.FAILED)
+        if not pre_approval and not post_completion:
             return _error(
                 409,
                 "idea_stage_conflict",
-                f"O storyboard só pode ser editado antes da aprovação final (estado atual: {record.stage}).",
+                f"O storyboard só pode ser editado antes da aprovação final ou "
+                f"depois de concluído/falhado (estado atual: {record.status.value}/{record.stage}).",
             )
         if record.idea.storyboard_hash != body.expected_hash:
             return _error(
@@ -353,17 +443,134 @@ def create_ideas_router(
             validate_board_targets(board)
         except Exception as exc:  # noqa: BLE001 - surfaced as a stable API error
             return _error(422, "storyboard_invalid", f"Storyboard inválido: {exc}")
-        record.idea.storyboard = board
-        record.idea.storyboard_hash = storyboard_hash(board)
-        record.idea.assets = build_assets(board, record.idea.options)
+        adopt_error = _adopt_board(record, board, post_completion=post_completion)
+        if adopt_error:
+            return adopt_error
+        store.save(record)
+        return _payload(record, request)
+
+    # --------------------------------------------- voice/text refinement
+    @router.post("/{idea_id}/direct", response_model=None)
+    async def direct_refinement(
+        idea_id: str, body: DirectBody, request: Request
+    ) -> dict | JSONResponse:
+        """One live refinement call -> a pending patch for user approval.
+
+        The director never applies anything: the patch waits in
+        pending_patch until /direct/apply. Live only (ADR-036); there is no
+        mock refinement path and no automatic retry.
+        """
+        record, error = _load(idea_id)
+        if error:
+            return error
+        board = record.idea.storyboard
+        if board is None:
+            return _error(409, "idea_stage_conflict", "Ainda não existe storyboard para ajustar.")
+        editable = (
+            record.status == IdeaStatus.AWAITING_APPROVAL
+            and record.stage == "awaiting_plan_approval"
+        ) or record.status in (IdeaStatus.COMPLETED, IdeaStatus.FAILED)
+        if not editable:
+            return _error(
+                409,
+                "idea_stage_conflict",
+                f"O ajuste só é possível com o plano em revisão ou concluído "
+                f"(estado atual: {record.status.value}/{record.stage}).",
+            )
         modes = idea_modes()
-        record.idea.estimate = estimate_from_storyboard(
-            board,
-            record.idea.options,
-            director_mode=modes["director"],
-            image_mode=modes["image"],
-            effort=modes["effort"],
+        if modes["director"] != "live" and refinement_provider_factory is None:
+            return _error(
+                409,
+                "refinement_requires_live",
+                "O ajuste por voz/texto usa o Director real. Activa "
+                "CLIPFORGE_CREATIVE_DIRECTOR_MODE=live para o usar.",
+            )
+        price = storyboard_price_usd(modes["effort"])
+        if modes["director"] == "live" and body.approved_cost_usd + 1e-9 < price:
+            return _error(
+                409,
+                "cost_cap_exceeded",
+                f"O ajuste custa até ${price:.4f}; aprovado ${body.approved_cost_usd:.4f}.",
+            )
+        if record.idea.spent_usd + price > cap_usd() + 1e-9:
+            return _error(
+                409,
+                "cost_cap_exceeded",
+                f"Gasto acumulado (${record.idea.spent_usd:.4f}) + ajuste (${price:.4f}) "
+                f"excede o limite por vídeo (${cap_usd():.2f}).",
+            )
+        instruction = body.instruction.strip()
+        clarification_context = record.idea.pending_clarification_question
+        try:
+            if refinement_provider_factory is not None:
+                provider = refinement_provider_factory()
+                patch = provider.create_patch(
+                    board,
+                    instruction,
+                    authorization=object(),
+                    clarification_context=clarification_context,
+                )
+                cost = float(getattr(provider, "last_cost_usd", 0.0) or 0.0)
+            else:
+                provider = create_live_refinement_director(effort=creative_effort())
+                patch, cost, _request_id = create_refinement_live(
+                    provider,
+                    board,
+                    instruction,
+                    store.root,
+                    clarification_context=clarification_context,
+                )
+        except Exception as exc:  # noqa: BLE001 - one attempt, surfaced honestly
+            return _error(502, "refinement_failed", f"{type(exc).__name__}: {exc}")
+        record.idea.spent_usd = round(record.idea.spent_usd + cost, 6)
+        if patch.outcome == "clarification":
+            record.idea.pending_patch = None
+            record.idea.pending_patch_instruction = None
+            record.idea.pending_clarification_question = patch.clarification_question
+        else:
+            record.idea.pending_patch = patch
+            record.idea.pending_patch_instruction = instruction
+            record.idea.pending_clarification_question = None
+        store.save(record)
+        return _payload(record, request)
+
+    @router.post("/{idea_id}/direct/apply", response_model=None)
+    async def apply_refinement(idea_id: str, request: Request) -> dict | JSONResponse:
+        record, error = _load(idea_id)
+        if error:
+            return error
+        patch = record.idea.pending_patch
+        board = record.idea.storyboard
+        if patch is None or board is None:
+            return _error(409, "refinement_not_pending", "Não há ajuste pendente para aplicar.")
+        post_completion = record.status in (IdeaStatus.COMPLETED, IdeaStatus.FAILED)
+        try:
+            new_board = apply_storyboard_patch(board, patch)
+            validate_board_targets(new_board)
+        except Exception as exc:  # noqa: BLE001
+            return _error(422, "storyboard_invalid", f"Ajuste inválido: {exc}")
+        adopt_error = _adopt_board(record, new_board, post_completion=post_completion)
+        if adopt_error:
+            return adopt_error
+        record.idea.pending_patch = None
+        record.idea.pending_patch_instruction = None
+        record.history.append(
+            IdeaStateEntry(
+                status=record.status,
+                stage=record.stage,
+                note=f"Ajuste aplicado: {patch.summary}"[:300],
+            )
         )
+        store.save(record)
+        return _payload(record, request)
+
+    @router.post("/{idea_id}/direct/reject", response_model=None)
+    async def reject_refinement(idea_id: str, request: Request) -> dict | JSONResponse:
+        record, error = _load(idea_id)
+        if error:
+            return error
+        record.idea.pending_patch = None
+        record.idea.pending_patch_instruction = None
         store.save(record)
         return _payload(record, request)
 
@@ -551,8 +758,9 @@ def create_ideas_router(
             "width": options.width,
             "height": options.height,
             "fps": options.fps,
-            "duration_seconds": options.duration_seconds,
-            "frame_count": options.frame_count,
+            # ADR-036: the delivered board defines the real duration.
+            "duration_seconds": record.idea.storyboard.duration_seconds,
+            "frame_count": record.idea.storyboard.total_frames,
         }
 
     # ---------------------------------------------------------------- assets

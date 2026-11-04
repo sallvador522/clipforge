@@ -160,6 +160,30 @@ class MockProfessionalEditingDirector:
                 subject_description=subject_description,
             )
 
+        if any(k in combined for k in ("fundo", "background", "replace", "substitu")) and _matches(
+            combined, "gradiente", "gradient", "minimalista", "minimalist", "animad", "geometric"
+        ):
+            return self._replace_programmatic_plan(
+                transcript,
+                request_id,
+                prompt="minimalist animated blue gradient studio with soft geometric shapes",
+                backdrop={
+                    "gradient_top": "#0B1E3A",
+                    "gradient_bottom": "#2E6BE6",
+                    "shapes": [
+                        {"kind": "ring", "color": "#7FB0FF", "size": 0.16, "speed": 0.4, "phase": 0.0},
+                        {"kind": "circle", "color": "#FFD9A0", "size": 0.07, "speed": 0.6, "phase": 1.2},
+                        {"kind": "bar", "color": "#FFFFFF", "size": 0.10, "speed": 0.35, "phase": 2.1},
+                    ],
+                    "motion": "subtle",
+                },
+                interpretation=(
+                    "Place the subject over a locally rendered animated blue-gradient "
+                    "studio with soft geometric shapes while keeping them sharp."
+                ),
+                subject_description=subject_description,
+            )
+
         if _matches(combined, "replace the background", "substitui o fundo", "substituir o fundo", "studio", "estÃºdio", "estudio"):
             return self._replace_plan(
                 transcript,
@@ -361,6 +385,106 @@ class MockProfessionalEditingDirector:
                 "Isolation prevents background bleed on the subject edge.",
                 "Compositing is non-destructive; the original file is preserved.",
                 generation_note,
+            ],
+            approval_status=ApprovalStatus.REQUIRED,
+        )
+
+    def _replace_programmatic_plan(
+        self,
+        transcript: TranscriptResult,
+        request_id: str,
+        *,
+        prompt: str,
+        backdrop: dict,
+        interpretation: str,
+        subject_description: str | None = None,
+    ) -> ProfessionalEditingPlan:
+        """Deterministic local animated backdrop: zero AI generation cost."""
+        from clipforge_contracts.capabilities import ProgrammaticBackdrop
+
+        spec = ProgrammaticBackdrop.model_validate(backdrop)
+        ops = [
+            DirectorOperation(
+                operation_id="op_01_isolate",
+                capability_id="subject.isolate",
+                title="Isolate the primary subject",
+                explanation="I isolate the subject so the new background does not bleed into them.",
+                params=IsolateSubjectParams(),
+                expected_output="Per-frame subject alpha masks (mock masks in this build).",
+            ),
+            DirectorOperation(
+                operation_id="op_02_replace",
+                capability_id="background.replace",
+                title="Replace the background with an animated gradient",
+                explanation=(
+                    f"I replace the background with a locally rendered animated backdrop: {prompt}. "
+                    "No image is generated; every frame is drawn deterministically."
+                ),
+                params=ReplaceBackgroundParams(
+                    prompt=prompt,
+                    asset_source="programmatic",
+                    composition="rule_of_thirds",
+                    backdrop=spec,
+                ),
+                dependencies=["op_01_isolate"],
+                expected_output="Frames with the subject composited over the animated gradient.",
+            ),
+            DirectorOperation(
+                operation_id="op_03_audio",
+                capability_id="audio.preserve",
+                title="Preserve original audio",
+                explanation="Your original audio is kept untouched and muxed back into the export.",
+                params=PreserveAudioParams(),
+                expected_output="Original audio stream preserved.",
+            ),
+            DirectorOperation(
+                operation_id="op_04_render",
+                capability_id="video.render_mp4",
+                title="Render the edit",
+                explanation="I render the composite to a verified MP4 on the local CPU.",
+                params=RenderMp4Params(),
+                dependencies=["op_01_isolate", "op_02_replace", "op_03_audio"],
+                expected_output="H.264/AAC MP4 with the original audio.",
+            ),
+            DirectorOperation(
+                operation_id="op_05_verify",
+                capability_id="output.verify",
+                title="Verify the output file",
+                explanation="I verify the actual file before calling the edit complete.",
+                params=VerifyOutputParams(),
+                dependencies=["op_04_render"],
+                expected_output="Verified render facts (streams, duration, frames, audio).",
+            ),
+        ]
+        return ProfessionalEditingPlan(
+            request_id=request_id,
+            raw_instruction=transcript.text,
+            interpreted_intention=interpretation,
+            subject=self._base_subject(subject_description),
+            target=OutputTarget(aspect_ratio=OutputAspect.SOURCE),
+            operations=ops,
+            required_providers=["background_generation", "segmentation"],
+            estimated_stages=[
+                DirectorStage.PLAN_READY,
+                DirectorStage.WAITING_FOR_APPROVAL,
+                DirectorStage.EXECUTING,
+                DirectorStage.VERIFYING,
+                DirectorStage.COMPLETED,
+            ],
+            expected_results=[
+                "Subject remains sharp over the animated gradient.",
+                "No image-generation cost: the backdrop is rendered locally per frame.",
+                "Audio is preserved and the MP4 is verified.",
+            ],
+            verification_requirements=_verification_requirements(),
+            summary_explanation=(
+                f"{interpretation} The animated backdrop is rendered locally per frame — "
+                "no Muse Image call, no extra cost."
+            ),
+            explanations=[
+                "Isolation prevents background bleed on the subject edge.",
+                "A deterministic per-frame backdrop keeps preview and export identical.",
+                "Audio is copied from the source, not regenerated.",
             ],
             approval_status=ApprovalStatus.REQUIRED,
         )

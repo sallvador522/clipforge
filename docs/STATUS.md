@@ -183,3 +183,91 @@ Stage model no prompt, motion budget validado, 9 easings + 5 primitivas novas, t
 ## Multiplane foreground — Fase C pronta e provada (2026-11-03)
 
 Fundo + frente por cena (banda 62% inferior, parallax diferencial), validado e com prompt próprio. Smoke mock ponta-a-ponta: MP4 120/120 verificado, prova diferencial de camadas. Tests: 45 ideia + suite 384. Docs: ADR-032, TASKS 7.5. Agressão zero ao mock/edição existente.
+
+## Studio premium em PT-AO, chat com o Muse (2026-11-04)
+
+Redesign hallmark só-frontend: 3 regiões, tabs Projeto/Recursos, chat com histórico da sessão e cartões inline, TopBar mínima, copy PT-AO sem jargão. Typecheck + build limpos, zero erros de consola, fluxo ideia verificado em mock. Sem commits.
+
+## Reorganização do editor em layout profissional (2026-11-04, ADR-043)
+
+Shell `[rail 44px + Recursos 256px] | palco | [Propriedades / Muse 360px]`; Timeline full-width com toolbar (ferramentas honestas, pill `Cena principal`, zoom 0.75–3x), ruler `00:00/15f`, headers V1/T1/FX/OV/A1 ou V1/A1, playhead accent. Novos `EditorRail.tsx` + `PropertiesPanel.tsx`; `MediaPanel`/`Viewer`/`Timeline`/`AssistantPanel`/`TopBar` restyle; marca, tokens e copy intactos, sem azul da referência, sem capacidades novas. `tsc` + `next build` limpos; upload real `studio-clip.mp4` → 10 thumbnails + picos, 0 erros consola; 1440/1280/1024 sem overflow (docH == viewport), 390 empilhado. Sem chamadas pagas (upload sem `ready`, worker não reclama). Screenshots em `editor-redesign/`.
+
+## Montagem multitrack real (2026-11-04, ADR-044, pós-MVP)
+
+Saída deliberada do MVP aprovada pelo utilizador: arrastar assets dos Recursos para V1/V2/A1/A2, blocos com mover/aparar/remover, botão `Montar` com render FFmpeg/OpenCV real (z-order V2>V1, 1280x720@30, mix áudio) e MP4 verificado para download. Teto 15 min (baixado de 30 a pedido; probe/uploads/assets/áudio; 720p/30fps mantidos). Contrato `timeline.py`, `PUT` total validado, `POST /timeline/render` auditado, trim handles incluídos. 16 testes novos (incl. regressão do preflight CORS — o `PUT` faltava nos métodos permitidos e o browser reportava API inalcançável no drop) + e2e browser em stack mock isolada (drop→bloco→mover→Montar→`Concluído`/`editado · verificado`→Exportar, 0 erros consola). Diretoria se mantém cega à timeline nesta etapa — snapshot só de leitura e operações do diretor ficam para as próximas etapas (ADR-044).
+
+## Recursos com gerados + faixa de cenas na timeline (2026-11-04)
+
+Publicação automática de plates/SRT/MP4 como assets "Gerado" no projecto da ideia (idempotente, sem falhar o render); ideia ligada ao projecto na criação; timeline com faixa de cenas clicável (só leitura, seek real no player). Smoke mock: 5 assets, MP4 120/120 verificado, seek 2.51s/0.01s, zero erros de consola. Tests: 4 novos; suite 388. Docs: ADR-033, TASKS 7.6.
+
+## Edição de cenas 1-2: texto + eliminação (2026-11-04)
+
+`PATCH /storyboard` aceite após conclusão/falha com a mesma validação e guarda `expected_hash`; edições que pedissem imagens novas são rejeitadas (`storyboard_new_images`), gerados idênticos preservados — custo $0.00. Eliminar redistribui a duração e escala os passos (sem cauda estática); última cena protegida. UI PT-AO no painel (revisão + bloco "Cenas" no concluído); timeline continua a navegar. Tests: 4 novos em `test_idea_api.py`; suite 392; `tsc` limpo. Sem renders do agente; teste manual pelo utilizador. Docs: ADR-034, TASKS 7.7. Adicionar cenas/elementos (chamada paga) continua pendente de desenho aprovado.
+
+## Duração à escolha, trava dos 20 s removida (2026-11-04)
+
+Pills 15/20/25/30/60 s no composer quando vai criar ideia; automático lê o texto ("25 segundos", "30s", "1 minuto") e vence o default, pill tocada vence a deteção; valor aplicado ao `POST /api/ideas`. Motivação: board live de 25000 ms chumbou contra projeto de 20 s (`storyboard_failed`, 1 chamada paga perdida). Sem mudança de contrato/preços. Test: 25 s soma 25000 ms; deteção 10/10 no código compilado; `tsc` + `build` limpos. Docs: ADR-035, TASKS 7.8.
+
+## Dura��o do Director + refinamento por voz (2026-11-04, ADR-036)
+
+Boards j� n�o s�o rejeitados por dura��o: `duration_seconds` deriva da soma das cenas (regress�o 75000 ms coberta), tetos de 60 s removidos, e o refinamento por voz/texto existe no trilho idea: instru��o -> patch tipado do Director real (tipografia, anima��o, texto, cenas, tom) -> aprova��o -> board actualizado -> preview imediata, re-render expl�cito. Live apenas, sem caminho mock novo; **validado ao vivo em 2026-11-04 (ADR-038)** - reteste HTTP 200 ($0.000410, dentro do teto $1). Suite 407 testes, `tsc` + build limpos.
+
+## Edição de timeline no trilho idea (2026-11-04, ADR-039)
+
+Trim (1–15 s), split (playhead ou meio) e reorder (botões + arrasto na V1) sobre o storyboard, via PATCH + re-render explícito, sem custo. Multitrack, transições editáveis e trim do upload ficam fora de âmbito (declarado). `tsc` + build limpos, helpers verificados em execução, 3 testes API novos, suite 407, zero chamadas pagas.
+
+## Transições editáveis + multitrack de sobreposição (2026-11-04, ADR-040)
+
+Transição de saída por cena (corte/fundido/dissolver/cortina/zoom, 400 ms) executada pelo motor; camada OV com overlays de texto globais (máx 3), faixa própria na timeline e CRUD no painel; 4 operações de voz no patch. Ligações de vídeo sobrepostas, durações de transição editáveis e trim do upload continuam fora. `tsc` + build limpos, 4 testes novos, suite 411, zero chamadas pagas.
+
+## Trim + áudio do upload, overlay de imagem, duração de transição (2026-11-04, ADR-041)
+
+Overlay de imagem reutilizando plates geradas (falha fechada `overlay_asset_missing`, preview=export); `transition_ms` 200–1000 por cena (motor+UI+voz); trim do clipe (e2e real: 1s → corte 0.2–0.8 +6 dB + fades, MP4 0.6s verificado com áudio, original intacto); trim/split/reorder manuais e2e via PATCH. Suite 414, `tsc` + build limpos, zero chamadas pagas.
+
+## Voz para a timeline, upload manual permanente (2026-11-04, ADR-042)
+
+Trim, split e reorder por voz no trilho idea (`set_scene_duration`, `split_scene`, `move_scene`; wire lite 2.871 bytes; aplicador com as mesmas regras do editor manual). Upload trim/áudio ficam manuais — registo inalterado. Suite 416, `tsc` + build limpos, zero chamadas pagas.
+
+## Timeline honesta estilo profissional (2026-11-04, ADR-037)
+
+Trilho de clipe resolvido: em idea mode a timeline ja nao mostra "importa um clipe"/"sem clipe" — rende V1 cenas + T1 texto + FX animacoes (posicionadas por start/duration reais) + A1 honesto, tudo so-leitura com click-to-seek; em clip mode V1/A1 mantem thumbnails e picos reais com badge de verificado. Sem trim/drag/multitrack: edicao continua no painel Cenas e no refinamento por voz. `tsc` + build limpos, suite 401, zero chamadas pagas.
+
+## Muse conversacional com execução por aprovação (2026-11-04, ADR-045)
+
+`POST /api/chat` side-effect free (router determinístico: smalltalk/help/status/cancel/clarify/edit_proposal/idea_proposal; nunca cria jobs/ideas, nunca toca no ledger, nunca chama providers). Studio chat-first: texto/voz → `/api/chat` → resposta do Muse; intenções acionáveis guardam `pendingChat` com cartão `Posso executar?` (Executar/Ajustar/Cancelar) — execução só via `voice`/`ideas` existentes (consentimento/aprovação intactos). `olá` responde sem criar nada. Suite 437 (5 novos `test_chat_api.py`), `tsc` + `next build` limpos, e2e browser em stack isolada (`qa-chat.mjs`: olá→resposta sem Executar, proposta→cartão, Executar→ideia com aprovação de custo, 0 erros consola). Ledger inalterado (`22/24/8/16`), zero chamadas pagas. Implementado sobre o working tree partilhado com outra sessão ativa (41 ficheiros dirty pré-existentes); verificação isolada em `storage/_chat_qa` + cópia web em `$TEMP/clipforge-web-qa` (portas 8001/3001).
+
+## Texto selecionável, cor local e ferramentas reais do Muse (2026-11-04, ADR-047, hackathon final-rescue)
+
+Rescue P0/P1 do editor: textos passam a dados reais do projeto (contrato + JobRecord + PUT/GET /texts + /colour), queimados no Montar/Export pelo worker (PIL fade+rise só na janela; grade contraste/brilho/saturação por frame), capacidades text.overlay + colour.adjust available_local. Muse com 10 ferramentas reais validadas (POST /tools/execute após confirmação) + propostas PT no chat com select_text_id e regra de ambiguidade. Studio: guarda de seleção no clique (o clique simples estava quebrado), edição inline, Propriedades com cor/peso, cor com Aplicar, persistência backend. Testes: test_clip_texts.py (11) + test_texts_render_e2e.py (compose 90f 1280x720 com áudio + tool-edit + re-render); suite 455; tsc + build limpos; qa-rescue.mjs em stack isolada (8001/3001, mock): adicionar→persistir→selecionar→Propriedades→inline→cor→Muse Executar→Montar→verificado, 0 erros consola. Entregáveis reais em Videos/Video: ClipForge_Final_PropertiesTest.mp4 + ClipForge_Final_Editing.mp4 (6 s, 1280x720, h264+aac, contact sheets). Zero chamadas pagas na missão; live Muse reasoning = NOT VERIFIED. Re-verificado em 2026-11-04: suite 449 passed, tsc + build limpos, qa-rescue.mjs OK (0 erros), entregaveis regenerados e validados (ffprobe 1280x720 h264+aac 6.0 s), ledger 22/24/8/16 ($0.00/$5.00). Veredicto: READY WITH LIMITATIONS, ver relatorio §K.
+
+## Entrevista do director + anexo + legendas (2026-11-04, ADR-048)
+
+Chat pergunta estilo/duracao/formato com chips antes de propor a ideia (stateless, brief preservado); anexo de video no composer com retorno honesto; fundo anunciado via director (SAM 3.1 + Muse Image, sem bypass); tool captions.create (timing uniforme declarado, tudo editavel). Testes: test_chat_interview_captions.py (15); suite 464; tsc + build limpos; qa-chat2.mjs em stack isolada (8003/3003, mock): entrevista→ideia com opcoes, anexo real, legendas 1 execucao, fundo SAM, 0 erros consola. Zero chamadas pagas; ledger 22/24/8/16.
+
+## Legendas reais com turnos ENDPOINTING + cover de queimadas (2026-11-04, ADR-049)
+
+SAM nao ouve (visao apenas); Spark adivinhar tempos seria fabricacao. Docs oficiais confirmam turns {turnId,startMs,endMs} em ENDPOINTING. Provider estendido + TranscriptTurn validado; 2 chamadas pagas aprovadas ($0.00190): 1a falhou na nossa validacao (turnId 0, corrigido sem retry automatico), 2a devolveu 1 turno real 0-19.02s do Facebook_2 (EN). Tools captions.create_from_turns (9 linhas temporizadas) + captions.cover (blur fixo); E2E real: upload 19.61s → Montar worker → MP4 19.6s 1280x720 h264+aac verificado em Videos/Video/ClipForge_Facebook2_Legendas_Timed.mp4 (588 frames, texto centrado na faixa). Suite 479; tsc + build limpos; qa-chat2.mjs com cover (1 execucao, 0 erros). Ledger transcricao 24/25.
+
+## Traducao PT com Spark + pergunta de idioma (2026-11-04, ADR-050)
+
+Muse pergunta o idioma nas propostas (nao assume); tool captions.translate ledger-autorizada (~$0.0001, fail-closed). Traducao live: 2 tentativas diagnosticadas (truncacao por reasoning, corrigido com effort minimal + cap 1500), 9 linhas PT com tempos reais → Videos/Video/ClipForge_Facebook2_Legendas_PT.mp4 (19.6s 360x640 verificado, contact sheet). Custo total missao legendas ~$0.002. Suite 484; ledger director 25/25 (fase cheia).
+
+## Magic Background — fundo programático animado, full-stack mock (2026-11-04, ADR-052)
+
+Isola sujeito (mock SAM) + fundo gradiente azul animado gerado localmente por frame (sem Muse Image, sem custo); publica o MP4 como asset; formato preservado por omissão; legendas com auto-fit + verify/redo. Testes programáticos (6) + canvas (4); suite 497; tsc + build limpos; qa-magicbg.mjs PASS (chat→review→select→approve→download real, 0 erros); deliverable Videos/Video/ClipForge_MagicBackground_Programmatic.mp4 (5 s 640x360 h264+aac verificado). Live SAM validado 2x sem retries (recorte 5 s: sujeito 0 125/125, \.025; Facebook_2 completo 19.6 s/490 frames: sujeito 0 490/490, \.098) -> Videos/Video/ClipForge_MagicBackground_Facebook2_Live.mp4 (360x640@25fps h264+aac, fundo animado 73.6% + sujeito real). **Live SAM executado e validado ($0.025, sem retries): Videos/Video/ClipForge_MagicBackground_LiveSAM.mp4 (máscaras reais, sujeito 0 125/125, fundo animado 73.6%).** Zero chamadas pagas além da SAM aprovada.
+
+## Formato original por omissao + legendas que cabem sempre (2026-11-04, ADR-051)
+
+Montar ja nao converte tudo para 1280x720: canvas/fps derivam do primeiro V2 (senao V1), fallback 1280x720@30 so sem video; `POST /timeline/render {format}` (source default) + seletor Original/16:9/9:16 no Studio. Burn-in com auto-fit (wrap + shrink ate 12px, bloco dentro do frame) e `verify_caption_legibility` com redo (reduz escala, re-renderiza 1x) no fluxo de entrega. Facebook_2 recomposto: Videos/Video/ClipForge_Facebook2_Legendas_PT.mp4 360x640@25fps, 490 frames, verificado por pixels. Suite 490 (1 flaky de lock Windows, passa isolado); qa-rescue + qa-chat2 PASS, 0 erros. Gotcha FastAPI 0.162: modelos Pydantic aninhados como body opcional viram query params — body models ao nivel do modulo. Zero chamadas pagas.
+
+## Chat ao vivo com Muse Spark (2026-11-04, ADR-053)
+
+`CLIPFORGE_CHAT_MODE=mock|live` (default mock); live = Muse Spark reescreve só o `reply` (contrato Chat Completions verificado, contributor/minimal/cap 600), router determinístico continua a decidir intent + proposta (aprovação/consentimento intactos). 1 POST + 1 slot `chat` no ledger por mensagem, sem retries, fail-closed sem chave; `/health` com `chat_mode`, Studio mostra `Ao vivo · Muse Spark`. Estimativa ~$0.0001/turno (teto ~$0.00032). Suite 503 passed; `tsc` limpo; zero chamadas pagas feitas — o utilizador testa na stack ligada com a própria conta.
+
+## Final hackathon E2E rescue (2026-11-04)
+
+Auditoria completa utilizador→download: 509 testes backend, `tsc`+build limpos, 5 suites browser reais PASS com 0 erros de consola (`qa-final-e2e` novo: upload UI com nome acentuado→download original SHA-256 idêntico→422 em `.exe`→reload→zoom→Montar→Exportar ffprobe; rescue/chat/chat2/magicbg). Corrigido P1: assets sem acção de download (cartão de sessão + linhas da biblioteca, endpoint real com Content-Disposition). `qa-chat.mjs` actualizado para a entrevista ADR-048. Entregáveis novos em Videos/Video: `ClipForge_E2E_PropertiesEditing.mp4`, `ClipForge_E2E_ExistingVideoEdit.mp4`, `ClipForge_E2E_Timeline.mp4` (h264+aac verificados). Zero chamadas pagas; ledger intacto 24/27/8/16/17. Live Meta e voz = NOT EXECUTED nesta missão. Relatório: `docs/HACKATHON_FINAL_E2E_REPORT.md`. Veredicto: READY WITH LIMITATIONS.
+
+## Director conversacional com contexto real (2026-11-04, ADR-054)
+
+O chat ja nao trata perguntas como ordens de edicao: `chat_context` junta ProjectStore/JobStore/IdeaStore em snapshot pequeno + historia resentida (ate 12 turnos) e responde a "quantos videos tenho?", "o que eu tenho?", "o que foi feito?" e follow-ups meta sem pending. Instrucoes de edicao reais continuam a passar por Executar (sem side effects ate confirmacao). Suite de chat: 36/36 (inclui barreira anti-gibberish: texto sem verbo nem alvo vira clarify sem Executar); suite completa 509 passed; `tsc` + `next build` limpos; sem chamadas pagas novas.

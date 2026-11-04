@@ -89,6 +89,16 @@ export interface StoryboardStep {
   ease?: string;
 }
 
+export interface TextStyleData {
+  family: "sans" | "serif" | "mono";
+  weight: number;
+  size_scale: number;
+  color: string;
+  align: "left" | "center" | "right";
+  valign: "top" | "middle" | "lower";
+  letter_spacing_em: number;
+}
+
 export interface StoryboardScene {
   scene_id: string;
   duration_ms: number;
@@ -96,10 +106,37 @@ export interface StoryboardScene {
   visual_description: string;
   image_generation_prompt: string;
   on_screen_text: string[];
+  text_style?: TextStyleData;
+  backdrop_hue_deg?: number | null;
   animation_sequence: StoryboardStep[];
   transition_in: string;
   transition_out: string;
+  transition_ms?: number;
   scientific_claims: string[];
+}
+
+export interface OverlayData {
+  overlay_id: string;
+  kind?: "text" | "image";
+  text: string;
+  asset_id?: string | null;
+  start_ms: number;
+  end_ms: number;
+  style?: TextStyleData;
+}
+
+export interface StoryboardPatchOperation {
+  op: string;
+  scene_id?: string;
+  [key: string]: unknown;
+}
+
+export interface StoryboardPatchData {
+  instruction: string;
+  outcome: "apply" | "clarification";
+  summary: string;
+  clarification_question: string | null;
+  operations: StoryboardPatchOperation[];
 }
 
 export interface StoryboardData {
@@ -121,10 +158,12 @@ export interface StoryboardData {
     scene_ids: string[];
     description: string;
     orientation: "portrait" | "landscape";
+    role?: "background" | "foreground";
     style_tags: string[];
   }[];
   source_references: string[];
   music_and_sound_cues: string[];
+  overlays?: OverlayData[];
 }
 
 export interface IdeaPayload {
@@ -137,6 +176,8 @@ export interface IdeaPayload {
   estimate: CostEstimateData | null;
   storyboard: StoryboardData | null;
   storyboard_hash: string | null;
+  pending_patch: StoryboardPatchData | null;
+  pending_clarification_question: string | null;
   approvals: IdeaApprovalData[];
   assets: IdeaAssetData[];
   render: IdeaRenderData | null;

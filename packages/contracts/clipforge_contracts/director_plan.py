@@ -340,7 +340,12 @@ class ProfessionalEditingPlan(BaseModel):
                 params = operation.params
                 assert isinstance(params, ReplaceBackgroundParams)
                 operations.append(
-                    ReplaceBackgroundOperation(prompt=params.prompt, asset_id=params.asset_id)
+                    ReplaceBackgroundOperation(
+                        prompt=params.prompt,
+                        asset_id=params.asset_id,
+                        asset_source=params.asset_source,
+                        backdrop=params.backdrop.model_dump(mode="json") if params.backdrop else None,
+                    )
                 )
 
         if not any(op.type in {"blur_background", "replace_background"} for op in operations):

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SegmentationSubject(BaseModel):
@@ -27,6 +27,30 @@ class SegmentationSubject(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class TranscriptTurn(BaseModel):
+    """One model-detected speech turn (ENDPOINTING/DIARIZATION only).
+
+    Official shape: {turnId, startMs, endMs, transcript, speaker?}.
+    PUSH_TO_TALK returns no turns. Word-level timestamps do not exist in
+    any mode — turns are whole utterances, the honest granularity for
+    timed captions. turn_id is the model's opaque per-response key
+    (observed 0-indexed live); never assume order or 1-indexing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    turn_id: int = Field(ge=0)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=2000)
+    speaker: str | None = Field(default=None, max_length=8)
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> "TranscriptTurn":
+        if self.end_ms < self.start_ms:
+            raise ValueError("Turn end_ms precedes start_ms.")
+        return self
+
+
 class TranscriptResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1)
@@ -36,6 +60,7 @@ class TranscriptResult(BaseModel):
     is_mock: bool
     session_id: str | None = None
     audio_duration_ms: int | None = Field(default=None, ge=0)
+    turns: list[TranscriptTurn] = Field(default_factory=list)
 
 
 class SegmentationResult(BaseModel):
@@ -64,7 +89,7 @@ class RenderResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     output_relative_path: str
-    mode: Literal["blur_background", "replace_background"]
+    mode: Literal["blur_background", "replace_background", "timeline_assemble"]
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     fps: float = Field(gt=0)

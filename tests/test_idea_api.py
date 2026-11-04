@@ -206,6 +206,144 @@ def test_patch_accepts_foreground_plate_and_rebuilds_assets(env):
     assert roles == {"asset_scene_1": "background", "asset_scene_1_fg": "foreground"}
 
 
+def _scale_steps(scene, new_ms):
+    """Mirror ideas.ts scaleStepsToDuration for server-acceptance tests."""
+    factor = new_ms / scene["duration_ms"]
+    steps = []
+    for step in scene["animation_sequence"]:
+        start = min(round(step["start_ms"] * factor), max(0, new_ms - 100))
+        dur = min(max(100, round(step["duration_ms"] * factor)), max(100, new_ms - start))
+        steps.append({**step, "start_ms": start, "duration_ms": dur})
+    return steps
+
+
+def test_patch_trim_changes_duration_and_derives_total(env):
+    client, _, processor = env
+    planned = _plan(client, processor)
+    idea_id = planned["idea_id"]
+
+    board = planned["storyboard"]
+    scene = board["scenes"][0]
+    new_ms = scene["duration_ms"] + 2000
+    assert new_ms <= 15000
+    scene["animation_sequence"] = _scale_steps(scene, new_ms)
+    scene["duration_ms"] = new_ms
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": planned["storyboard_hash"]},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    total_ms = sum(s["duration_ms"] for s in updated["storyboard"]["scenes"])
+    assert updated["storyboard"]["duration_seconds"] == round(total_ms / 1000)
+    assert updated["storyboard"]["scenes"][0]["duration_ms"] == new_ms
+
+
+def test_patch_split_and_reorder_accepted(env):
+    client, _, processor = env
+    planned = _plan(client, processor)
+    idea_id = planned["idea_id"]
+
+    board = planned["storyboard"]
+    before = len(board["scenes"])
+    original = board["scenes"][0]
+    cut = original["duration_ms"] // 2
+    first = {**original, "duration_ms": cut}
+    first["animation_sequence"] = _scale_steps(original, cut)
+    second = {**original, "scene_id": "scene_9", "duration_ms": original["duration_ms"] - cut}
+    second["animation_sequence"] = _scale_steps(original, second["duration_ms"])
+    board["scenes"] = [first, second, *board["scenes"][1:]]
+    board["asset_plan"] = [
+        {**spec, "scene_ids": [sid for sid in spec["scene_ids"]]}
+        for spec in board["asset_plan"]
+    ] + [
+        {**spec, "asset_id": f"{spec['asset_id']}_b", "scene_ids": ["scene_9"]}
+        for spec in planned["storyboard"]["asset_plan"]
+        if "scene_1" in spec["scene_ids"]
+    ]
+    # Reorder: last scene first (order is free; durations/steps untouched).
+    board["scenes"] = board["scenes"][::-1]
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": planned["storyboard_hash"]},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert [s["scene_id"] for s in updated["storyboard"]["scenes"]][0] == board["scenes"][0]["scene_id"]
+    assert len(updated["storyboard"]["scenes"]) == before + 1
+
+
+def test_patch_rejects_scene_below_minimum(env):
+    client, _, processor = env
+    planned = _plan(client, processor)
+    idea_id = planned["idea_id"]
+
+    board = planned["storyboard"]
+    board["scenes"][0]["duration_ms"] = 500
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": planned["storyboard_hash"]},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "storyboard_invalid"
+
+
+def test_patch_transition_change_accepted(env):
+    client, _, processor = env
+    planned = _plan(client, processor)
+    idea_id = planned["idea_id"]
+
+    board = planned["storyboard"]
+    board["scenes"][0]["transition_out"] = "wipe"
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": planned["storyboard_hash"]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["storyboard"]["scenes"][0]["transition_out"] == "wipe"
+
+
+def test_patch_overlay_accepted_and_bounds_rejected(env):
+    client, _, processor = env
+    planned = _plan(client, processor)
+    idea_id = planned["idea_id"]
+    total_ms = sum(s["duration_ms"] for s in planned["storyboard"]["scenes"])
+
+    board = planned["storyboard"]
+    board["overlays"] = [
+        {"overlay_id": "overlay_1", "text": "Segue o canal", "start_ms": 500, "end_ms": 4000}
+    ]
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": planned["storyboard_hash"]},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert [o["overlay_id"] for o in updated["storyboard"]["overlays"]] == ["overlay_1"]
+
+    board = updated["storyboard"]
+    board["overlays"] = [
+        {"overlay_id": "overlay_2", "text": "Longe demais", "start_ms": 0, "end_ms": total_ms + 5000}
+    ]
+    bad = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": updated["storyboard_hash"]},
+    )
+    assert bad.status_code == 422
+    assert bad.json()["error"]["code"] == "storyboard_invalid"
+
+    board = updated["storyboard"]
+    board["overlays"] = [
+        {"overlay_id": f"overlay_{i}", "text": f"O{i}", "start_ms": 0, "end_ms": 1000}
+        for i in range(1, 5)
+    ]
+    many = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": updated["storyboard_hash"]},
+    )
+    assert many.status_code == 422
+
+
 def test_reject_stops_the_job(env):
     client, _, _ = env
     idea = _create(client)
@@ -265,3 +403,178 @@ def test_live_estimate_is_reported_without_calling_a_provider(env, monkeypatch):
     assert idea["estimate"]["storyboard_usd"] == pytest.approx(0.002)
     assert idea["estimate"]["images_usd"] == pytest.approx(0.04)
     assert idea["status"] == "awaiting_approval"
+
+
+def test_custom_duration_idea_plans_with_matching_sum(env):
+    client, _, processor = env
+    idea = _create(client, {**OPTIONS, "duration_seconds": 25})
+    assert idea["estimate"]["image_count"] == 4
+    idea_id = idea["idea_id"]
+
+    approved = client.post(
+        f"/api/ideas/{idea_id}/approve-storyboard", json={"max_cost_usd": 0}
+    )
+    assert approved.status_code == 202, approved.text
+    assert processor.run_once() is True
+
+    planned = client.get(f"/api/ideas/{idea_id}").json()
+    assert planned["stage"] == "awaiting_plan_approval"
+    assert planned["storyboard"]["duration_seconds"] == 25
+    assert sum(scene["duration_ms"] for scene in planned["storyboard"]["scenes"]) == 25000
+
+
+def test_patch_guarded_while_rendering(env):
+    client, _, processor = env
+    planned = _plan(client, processor)
+    idea_id = planned["idea_id"]
+
+    approved = client.post(
+        f"/api/ideas/{idea_id}/approve-assets",
+        json={"asset_ids": [], "max_cost_usd": 0, "programmatic_only": True},
+    )
+    assert approved.status_code == 202
+
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": planned["storyboard"], "expected_hash": planned["storyboard_hash"]},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "idea_stage_conflict"
+
+
+def _complete_with_generated(client, store, planned):
+    """Simulate a verified render: all plates GENERATED, job completed.
+
+    Re-rendering itself needs a browser capture, so tests promote the record
+    directly and exercise only the post-completion PATCH contract.
+    """
+    from clipforge_contracts.idea import AssetStatus, IdeaStatus
+
+    record = store.get(planned["idea_id"])
+    for asset in record.idea.assets:
+        asset.status = AssetStatus.GENERATED
+        asset.filename = f"{asset.asset_id}.png"
+        asset.sha256 = "0" * 64
+        asset.width = 720
+        asset.height = 1280
+        asset.provider_name = "mock"
+        asset.is_mock = True
+        asset.cost_usd = 0.0
+        asset.error = None
+    store.transition(record, status=IdeaStatus.COMPLETED, stage="completed", note="test")
+    return client.get(f"/api/ideas/{planned['idea_id']}").json()
+
+
+def test_post_completion_text_edit_preserves_generated_assets(env):
+    client, store, processor = env
+    planned = _plan(client, processor)
+    completed = _complete_with_generated(client, store, planned)
+    idea_id = completed["idea_id"]
+    assert completed["can_render"] is True
+
+    before = {
+        asset["asset_id"]: (asset["width"], asset["height"], asset["cost_usd"])
+        for asset in completed["assets"]
+    }
+    assert len(before) == 4
+
+    board = completed["storyboard"]
+    board["scenes"][0]["on_screen_text"][0] = "Um novo título, mesmo movimento"
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": completed["storyboard_hash"]},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert updated["storyboard_hash"] != completed["storyboard_hash"]
+    assert updated["storyboard"]["scenes"][0]["on_screen_text"][0] == (
+        "Um novo título, mesmo movimento"
+    )
+    # Free edit: identical prompts keep their generated files, no new spend.
+    assert updated["spent_usd"] == 0.0
+    for asset in updated["assets"]:
+        assert asset["status"] == "generated"
+        assert (asset["width"], asset["height"], asset["cost_usd"]) == before[asset["asset_id"]]
+        assert asset["url"] is not None
+    internal = store.get(idea_id)
+    assert all(asset.filename == f"{asset.asset_id}.png" for asset in internal.idea.assets)
+    assert updated["can_render"] is True
+
+
+def test_post_completion_patch_rejects_new_images(env):
+    client, store, processor = env
+    planned = _plan(client, processor)
+    completed = _complete_with_generated(client, store, planned)
+    idea_id = completed["idea_id"]
+
+    board = completed["storyboard"]
+    board["asset_plan"].append(
+        {
+            "asset_id": "asset_extra",
+            "scene_ids": ["scene_1"],
+            "description": "Uma imagem totalmente nova que custaria dinheiro",
+            "orientation": "portrait",
+            "role": "foreground",
+        }
+    )
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": completed["storyboard_hash"]},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "storyboard_new_images"
+
+    current = client.get(f"/api/ideas/{idea_id}").json()
+    assert current["storyboard_hash"] == completed["storyboard_hash"]
+
+
+def test_post_completion_delete_scene_redistributes_duration(env):
+    client, store, processor = env
+    planned = _plan(client, processor)
+    completed = _complete_with_generated(client, store, planned)
+    idea_id = completed["idea_id"]
+    assert len(completed["storyboard"]["scenes"]) == 4
+
+    board = completed["storyboard"]
+    victim = board["scenes"][-1]
+    removed = victim["duration_ms"]
+    assert victim["scene_id"] == "scene_4"
+    kept = board["scenes"][:-1]
+    total = sum(scene["duration_ms"] for scene in kept)
+    assigned = 0
+    for index, scene in enumerate(kept):
+        extra = removed - assigned if index == len(kept) - 1 else round(removed * scene["duration_ms"] / total)
+        assigned += extra
+        new_duration = scene["duration_ms"] + extra
+        factor = new_duration / scene["duration_ms"]
+        for step in scene["animation_sequence"]:
+            start = round(step["start_ms"] * factor)
+            scaled = max(100, round(step["duration_ms"] * factor))
+            step["start_ms"] = start
+            step["duration_ms"] = min(scaled, new_duration - start)
+        scene["duration_ms"] = new_duration
+    board["scenes"] = kept
+    board["asset_plan"] = [
+        {**spec, "scene_ids": [sid for sid in spec["scene_ids"] if sid != "scene_4"]}
+        for spec in board["asset_plan"]
+    ]
+    board["asset_plan"] = [spec for spec in board["asset_plan"] if spec["scene_ids"]]
+
+    response = client.patch(
+        f"/api/ideas/{idea_id}/storyboard",
+        json={"storyboard": board, "expected_hash": completed["storyboard_hash"]},
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert [scene["scene_id"] for scene in updated["storyboard"]["scenes"]] == [
+        "scene_1",
+        "scene_2",
+        "scene_3",
+    ]
+    assert sum(scene["duration_ms"] for scene in updated["storyboard"]["scenes"]) == (
+        updated["storyboard"]["duration_seconds"] * 1000
+    )
+    for asset in updated["assets"]:
+        assert "scene_4" not in asset["scene_ids"]
+        assert asset["status"] == "generated"
+    assert len(updated["assets"]) == 3

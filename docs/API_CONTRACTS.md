@@ -4,7 +4,7 @@ All contracts below are **internal ClipForge contracts**. Three Meta schemas are
 
 ## Provider Mode
 
-`CLIPFORGE_AI_MODE=mock` (default). Mock mode makes zero external requests and needs no credentials. Three providers can be enabled live independently: `CLIPFORGE_TRANSCRIBE_MODE=live`, `CLIPFORGE_DIRECTOR_MODE=live` and `CLIPFORGE_SEGMENTATION_MODE=live`; all require a server-side `MODEL_API_KEY`. Background generation and the legacy planner remain mocked. `CLIPFORGE_AI_MODE=live` itself is not supported. There is no silent fallback. SAM live was live-validated on one prepared clip on 2026-11-01.
+`CLIPFORGE_AI_MODE=mock` (default). Mock mode makes zero external requests and needs no credentials. Three providers can be enabled live independently: `CLIPFORGE_TRANSCRIBE_MODE=live`, `CLIPFORGE_DIRECTOR_MODE=live` and `CLIPFORGE_SEGMENTATION_MODE=live`; all require a server-side `MODEL_API_KEY`. The conversational chat rewrite can also run live independently (`CLIPFORGE_CHAT_MODE=live`, ADR-053; mock default, router still decides intent). Background generation and the legacy planner remain mocked. `CLIPFORGE_AI_MODE=live` itself is not supported. There is no silent fallback. SAM live was live-validated on one prepared clip on 2026-11-01.
 
 ## EditingPlan (packages/contracts, Pydantic, schema_version "1.0")
 
@@ -31,7 +31,7 @@ Every generated plan is validated against this schema. Model/provider output is 
 
 ## Transcription API and Provider (ADR-008, Milestone 6A)
 
-Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_SEGMENTATION_MODE=mock` (default) or `live` selects the SAM provider independently (ADR-019); it was live-validated on one prepared clip on 2026-11-01. `CLIPFORGE_AI_MODE=mock` stays the default; background generation and the legacy planner remain mocked. Dev launchers force all three live functions to mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1` is explicitly set (ADR-017). Live-call caps default to 2 transcription + 2 director + 2 segmentation per phase (`storage/live-call-ledger.json`); local testing can raise them with `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT`, `CLIPFORGE_LIVE_DIRECTOR_LIMIT` and `CLIPFORGE_LIVE_SEGMENTATION_LIMIT` (positive integers, ADR-015/ADR-019). Raising a limit does not reset usage. The ledger is fail-closed; live providers require a one-shot authorization before their POST.
+Configuration: `CLIPFORGE_TRANSCRIBE_MODE=mock` (default) or `live`; live additionally requires `MODEL_API_KEY` (server-side). `CLIPFORGE_DIRECTOR_MODE=mock` (default) or `live` selects the director independently (ADR-014). `CLIPFORGE_SEGMENTATION_MODE=mock` (default) or `live` selects the SAM provider independently (ADR-019); it was live-validated on one prepared clip on 2026-11-01. `CLIPFORGE_AI_MODE=mock` stays the default; background generation and the legacy planner remain mocked. Dev launchers force all three live functions to mock unless `CLIPFORGE_DEV_ALLOW_LIVE=1` is explicitly set (ADR-017). Live-call caps default to 2 transcription + 2 director + 2 segmentation + 2 image + 2 chat per phase (`storage/live-call-ledger.json`); local testing can raise them with `CLIPFORGE_LIVE_TRANSCRIPTION_LIMIT`, `CLIPFORGE_LIVE_DIRECTOR_LIMIT`, `CLIPFORGE_LIVE_SEGMENTATION_LIMIT`, `CLIPFORGE_LIVE_IMAGE_LIMIT` and `CLIPFORGE_LIVE_CHAT_LIMIT` (positive integers, ADR-015/ADR-019/ADR-053). Raising a limit does not reset usage. The ledger is fail-closed; live providers require a one-shot authorization before their POST.
 
 `POST /api/transcribe` — multipart:
 - `file`: the browser recording (`.webm`, `.ogg`, `.oga`, `.wav`, `.m4a`, `.mp4`, `.mp3`), max 25 MB, max 60 s, must contain an audio stream.
@@ -46,6 +46,8 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 `POST /api/jobs/{job_id}/voice` now accepts exactly one of:
 - `audio_fixture_id` (legacy mock path), or
 - `transcript` (the reviewed/confirmed text, 1–500 chars) with optional `transcription_session_id`. The planner consumes the confirmed text; no transcription is repeated.
+
+`POST /api/chat` (ADR-045, live ADR-053, contextual ADR-054) — conversational Muse turn, **side-effect free**: body `{message 1..1000, job_id?, project_id?, idea_id?, selected_text_id?, interview?, history≤24}` returns `{intent, reply, needs_confirmation, pending_text, pending_kind}`. Mock (default): deterministic contextual router (`smalltalk`/`help`/`status`/`cancel`/`clarify`/`edit_tools`/`edit_proposal`/`idea_interview`/`idea_proposal`/`question`). Live (`CLIPFORGE_CHAT_MODE=live` + `MODEL_API_KEY`): the same router/context stays authoritative; Muse Spark phrases the resolved turn from the real project/job/idea snapshot + short history (verified Chat Completions, contributor/minimal/cap 900). Questions about persisted facts are answered from context before proposals and never become pending; real edit instructions continue via Executar with approval/consent unchanged. Response adds `chat_mode` (+ `chat_usage` when live). Live failures are explicit: 503 `chat_not_configured`, 429 `live_budget_exhausted`/`chat_rate_limited`, 502 `chat_live_failed`. Empty message 422.
 
 ## Mask Contract (ADR-005) — canonical internal segmentation format
 
@@ -63,7 +65,7 @@ Muse Voice Transcribe (verified against official docs): `POST https://api.meta.a
 
 | Endpoint | Status | Purpose |
 |---|---|---|
-| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, image_mode, subject_detection_disclosure_version, live_transcription_available, live_image_available, live_call_limits, live_calls_used, storage_root}` |
+| `GET /health` | live | `{status, ai_mode, transcribe_mode, director_mode, segmentation_mode, image_mode, chat_mode, subject_detection_disclosure_version, live_transcription_available, live_image_available, live_chat_available, live_call_limits, live_calls_used, storage_root}` |
 | `POST /api/uploads` | live | Multipart video upload; validated (extension allowlist, size cap, ffprobe: video stream, ≤720p, ≤10.5 s, ≤30 FPS); creates a `queued` job (stage `awaiting_voice`); 201 |
 | `POST /api/jobs/{job_id}/voice` | live | Body with exactly one of `{audio_fixture_id}` or `{transcript, transcription_session_id?}`, plus optional `subject_detection_consent: boolean`. Consent at voice time is optional and pre-binds the job when `true`. Otherwise the worker runs the Director first and, only if the plan isolates a subject, pauses the job at `awaiting_consent` for explicit consent via `/consent`. 409 if not queued/awaiting. |
 | `GET /api/jobs/{job_id}` | live | Job status: `queued`, `processing`, `awaiting_consent`, `awaiting_approval`, `awaiting_clarification`, `rejected`, `unsupported`, `completed`, `failed`, plus `stage` progress detail |

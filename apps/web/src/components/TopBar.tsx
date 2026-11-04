@@ -1,81 +1,87 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "./ui/button";
-import type { ExportFormat } from "@/lib/api";
-
-type SocialFormat = Exclude<ExportFormat, "original">;
 
 interface Props {
   projectName: string;
   apiError: string | null;
-  jobStatus: string | null;
-  selectedFormat: SocialFormat;
-  onSelectFormat: (format: SocialFormat) => void;
+  statusText: string | null;
+  statusTone: "idle" | "working" | "attention" | "done";
   canExport: boolean;
   exporting: boolean;
   onExport: () => void;
   exportError: string | null;
+  onRenameProject: (title: string) => void;
 }
 
-const FORMATS: { format: SocialFormat; label: string }[] = [
-  { format: "youtube", label: "YouTube 16:9" },
-  { format: "reels", label: "Reels 9:16" },
-];
+const TONE_DOT: Record<Props["statusTone"], string> = {
+  idle: "bg-muted",
+  working: "bg-accent",
+  attention: "bg-danger",
+  done: "bg-success",
+};
 
 export function TopBar({
-  projectName, apiError, jobStatus, selectedFormat, onSelectFormat,
-  canExport, exporting, onExport, exportError,
+  projectName, apiError, statusText, statusTone,
+  canExport, exporting, onExport, exportError, onRenameProject,
 }: Props) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  function commit() {
+    if (draft.trim()) onRenameProject(draft.trim());
+    setEditing(false);
+  }
+
   return (
-    <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface px-4 py-1">
-      <div className="flex shrink-0 items-center gap-2.5">
+    <header className="flex h-11 shrink-0 items-center gap-3 bg-transparent px-4">
+      <div className="flex shrink-0 items-center gap-2">
         <span aria-hidden className="flex h-6 w-6 items-center justify-center rounded-[6px] bg-accent">
           <svg width="10" height="12" viewBox="0 0 10 12" fill="none" aria-hidden>
             <path d="M1 1.5v9l8-4.5-8-4.5Z" fill="#14110C" />
           </svg>
         </span>
-        <span className="text-sm font-extrabold tracking-wide">CLIPFORGE</span>
-        <span className="hidden font-mono text-[11px] text-muted xl:inline">CINEMATIC AI EDITING STUDIO</span>
+        <span className="text-[13px] font-extrabold tracking-wide">CLIPFORGE</span>
       </div>
 
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="max-w-32 truncate text-sm font-medium md:max-w-40" title={projectName}>{projectName}</span>
-        <span className="hidden items-center gap-1.5 whitespace-nowrap font-mono text-[11px] text-muted lg:flex">
-          <span className={`h-1.5 w-1.5 rounded-full ${jobStatus === "failed" ? "bg-danger" : jobStatus === "completed" ? "bg-success" : jobStatus ? "bg-accent" : "bg-muted"}`} />
-          {apiError ? "API offline" : jobStatus ? `Job ${jobStatus}` : "Local project — not saved to cloud"}
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        {editing ? (
+          <input
+            value={draft}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+            onBlur={commit}
+            maxLength={80}
+            aria-label="Nome do projecto"
+            className="w-40 rounded-[6px] border border-border bg-raised px-1.5 py-0.5 text-[13px] outline-none focus:border-accent md:w-48"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setDraft(projectName); setEditing(true); }}
+            title="Mudar o nome do projecto"
+            className="max-w-40 truncate text-left text-[13px] font-medium hover:text-accent focus-visible:outline-2 focus-visible:outline-accent md:max-w-48"
+          >
+            {projectName}
+          </button>
+        )}
+        <span className="hidden items-center gap-1.5 whitespace-nowrap text-[11px] text-muted md:flex">
+          <span className={`h-1.5 w-1.5 rounded-full ${apiError ? "bg-danger" : TONE_DOT[statusTone]}`} />
+          {apiError ? "Sem ligação à API" : (statusText ?? "Pronto")}
         </span>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2">
-        <div role="radiogroup" aria-label="Formato de exportação" className="flex items-center gap-1 rounded-full border border-border bg-raised p-1">
-          {FORMATS.map((opt) => {
-            const active = selectedFormat === opt.format;
-            return (
-              <button
-                key={opt.format}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => onSelectFormat(opt.format)}
-                className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[12px] font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
-                  active ? "bg-accent text-[#14110C]" : "text-muted hover:text-foreground"
-                }`}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="relative">
-          <Button onClick={onExport} disabled={!canExport || exporting} className="h-8 shrink-0 whitespace-nowrap px-3.5 text-[13px]">
-            {exporting ? "Exportando…" : selectedFormat === "reels" ? "Baixar Reels" : "Baixar YouTube"}
-          </Button>
-          {exportError && (
-            <p className="absolute right-0 top-full z-10 mt-1 w-64 rounded-md border border-danger/40 bg-surface p-2 text-xs text-danger" role="alert">
-              {exportError}
-            </p>
-          )}
-        </div>
+      <div className="relative shrink-0">
+        <Button onClick={onExport} disabled={!canExport || exporting} className="h-8 shrink-0 whitespace-nowrap rounded-[6px] px-3.5 text-[12px]">
+          {exporting ? "A exportar…" : "Exportar"}
+        </Button>
+        {exportError && (
+          <p className="absolute right-0 top-full z-10 mt-1 w-64 rounded-md border border-danger/40 bg-surface p-2 text-xs text-danger" role="alert">
+            {exportError}
+          </p>
+        )}
       </div>
     </header>
   );

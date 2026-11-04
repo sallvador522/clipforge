@@ -214,3 +214,68 @@ def test_stereo_or_wrong_rate_rejected(tmp_path):
         fh.writeframes(b"\x00\x00" * 2000)
     with pytest.raises(InvalidAudioError):
         provider(lambda r: httpx.Response(200, json={})).transcribe_audio(stereo)
+
+
+def test_endpointing_sends_mode_and_parses_turns(tmp_path):
+    wav = write_wav(tmp_path / "recording.wav")
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["parts"] = parse_multipart(request.read(), request.headers["content-type"])
+        return httpx.Response(200, json={
+            "sessionId": "srv-session-456",
+            "transcript": "Ola mundo. Segunda frase aqui.",
+            "audioDurationMs": 3680,
+            "turns": [
+                {"turnId": 1, "startMs": 120, "endMs": 1500, "transcript": "Ola mundo."},
+                {"turnId": 2, "startMs": 2000, "endMs": 3500, "transcript": "Segunda frase aqui.", "speaker": "A"},
+            ],
+        })
+
+    result = provider(handler).transcribe_audio(wav, mode="ENDPOINTING")
+
+    request_json = json.loads(captured["parts"]["request"][2])
+    assert request_json["mode"] == "ENDPOINTING"
+    assert len(result.turns) == 2
+    assert (result.turns[0].turn_id, result.turns[0].start_ms, result.turns[0].end_ms) == (1, 120, 1500)
+    assert result.turns[0].text == "Ola mundo."
+    assert result.turns[1].speaker == "A"
+
+
+def test_push_to_talk_with_turns_is_rejected(tmp_path):
+    wav = write_wav(tmp_path / "recording.wav")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "sessionId": "s", "transcript": "ok", "audioDurationMs": 500,
+            "turns": [{"turnId": 1, "startMs": 0, "endMs": 100, "transcript": "ok"}],
+        })
+
+    with pytest.raises(TranscriptionAPIError):
+        provider(handler).transcribe_audio(wav, mode="PUSH_TO_TALK")
+
+
+def test_malformed_turn_is_rejected(tmp_path):
+    wav = write_wav(tmp_path / "recording.wav")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "sessionId": "s", "transcript": "ok", "audioDurationMs": 500,
+            "turns": [{"turnId": 1, "startMs": 900, "endMs": 100, "transcript": "backwards"}],
+        })
+
+    with pytest.raises(TranscriptionAPIError):
+        provider(handler).transcribe_audio(wav, mode="ENDPOINTING")
+
+
+def test_unsupported_mode_fails_before_network(tmp_path):
+    wav = write_wav(tmp_path / "recording.wav")
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"transcript": "x"})
+
+    with pytest.raises(ValueError):
+        provider(handler).transcribe_audio(wav, mode="WORD_LEVEL")
+    assert calls["n"] == 0

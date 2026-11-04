@@ -39,6 +39,7 @@ from clipforge_director.idea_director import (
     idea_modes,
     validate_board_for_options,
     validate_board_targets,
+    validate_overlay_assets,
 )
 from clipforge_director.ledger import LiveCallAuthorization
 from clipforge_director.pricing import asset_cost_usd, cap_usd, estimate_from_storyboard
@@ -208,7 +209,7 @@ class IdeaProcessor:
         if self.store.cancel_requested(record.idea_id) or record.cancel_requested:
             self._fail(record, "cancelled_by_user", "Plano cancelado pelo utilizador.")
             return
-        note = f"Plano pronto ({len(board.scenes)} cenas"
+        note = f"Plano pronto ({len(board.scenes)} cenas, {board.duration_seconds}s"
         if request_id:
             note += f", request {request_id}"
         note += ")"
@@ -404,6 +405,21 @@ class IdeaProcessor:
                 "Cria um novo plano — repetir o render reproduziria o mesmo vídeo estático.",
             )
             return
+        # ADR-041: image overlays must reference generated plates. The UI only
+        # offers generated plates, but the API cannot trust that: fail closed
+        # instead of rendering a missing image (or silently dropping the layer).
+        generated_ids = {
+            asset.asset_id for asset in record.idea.assets
+            if asset.status == AssetStatus.GENERATED
+        }
+        missing = validate_overlay_assets(board, generated_ids)
+        if missing:
+            self._fail(
+                record,
+                "overlay_asset_missing",
+                f"Sobreposições {missing} referem plates não geradas; gera as imagens ou remove a sobreposição.",
+            )
+            return
         version_number = len(record.idea.versions) + 1
         output_dir = self.store.render_dir(record.idea_id, version_number)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -429,7 +445,8 @@ class IdeaProcessor:
         self.store.save(record)
         self.store.write_progress(
             record.idea_id,
-            IdeaProgress(stage="rendering", current=0, total=record.idea.options.frame_count),
+            # ADR-036: progress follows the delivered board, not the request.
+            IdeaProgress(stage="rendering", current=0, total=board.total_frames),
         )
 
         asset_urls = {
@@ -496,6 +513,21 @@ class IdeaProcessor:
         self.store.clear_progress(record.idea_id)
         self.store.clear_cancel(record.idea_id)
         self.store.save(record)
+        # Publishing is auxiliary: plates, subtitles and the verified MP4
+        # become project assets. It never fails the job.
+        try:
+            from clipforge_worker.idea_publish import publish_idea_outputs
+
+            publish_idea_outputs(
+                self.store.root,
+                idea_id=record.idea_id,
+                project_id=record.project_id,
+                idea=record.idea,
+                board=board,
+                mp4_path=output_dir / "out.mp4",
+            )
+        except Exception as exc:  # noqa: BLE001 - logged inside, never fatal
+            logger.warning("idea_publish_failed idea_id=%s error=%s", record.idea_id, exc)
         if request.keep_frames is False:
             shutil.rmtree(output_dir / "frames", ignore_errors=True)
         logger.info(

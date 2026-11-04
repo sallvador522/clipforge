@@ -9,7 +9,7 @@ from pathlib import Path
 
 from clipforge_jobs.models import SourceInfo
 
-MAX_DURATION_SECONDS = 10.5  # MVP is 10 s clips; small container tolerance allowed
+MAX_DURATION_SECONDS = 900.0  # ADR-044: post-MVP programs up to 15 min; container tolerance included
 MAX_WIDTH = 1280
 MAX_HEIGHT = 720
 MAX_FPS = 30.5
@@ -69,7 +69,7 @@ def probe_video(path: str | Path) -> SourceInfo:
         )
     if duration > MAX_DURATION_SECONDS:
         raise UploadValidationError(
-            "duration_too_long", f"Video is {duration:.2f}s; MVP maximum is 10 seconds."
+            "duration_too_long", f"Video is {duration:.2f}s; maximum is 15 minutes."
         )
     if fps > MAX_FPS:
         raise UploadValidationError("fps_too_high", f"Video is {fps:.1f} FPS; MVP maximum is 30 FPS.")

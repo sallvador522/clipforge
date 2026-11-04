@@ -38,6 +38,12 @@ export interface JobResponse {
   attempts: number;
   created_at: string;
   updated_at: string;
+  trim_start_s: number | null;
+  trim_end_s: number | null;
+  audio_gain_db: number;
+  audio_fade_in_s: number;
+  audio_fade_out_s: number;
+  original_duration_s: number | null;
 }
 
 export interface ProjectData {
@@ -212,8 +218,7 @@ export interface PlanReviewData {
   no_subjects: boolean;
 }
 
-export interface JobResultData {
-  transcript: TranscriptData | null;
+export interface JobResultData {  transcript: TranscriptData | null;
   plan: PlanData | null;
   director_plan: DirectorPlanData | null;
   segmentation: {
@@ -236,4 +241,20 @@ export interface JobResultData {
   requires_approval: boolean;
   requires_clarification: boolean;
   render_status: string;
+}
+
+export type TimelineTrack = "V1" | "V2" | "A1" | "A2";
+
+export interface TimelineClipData {
+  clip_id: string;
+  asset_id: string;
+  track: TimelineTrack;
+  timeline_start_s: number;
+  source_in_s: number;
+  source_out_s: number;
+}
+
+export interface TimelineData {
+  timeline: { clips: TimelineClipData[] };
+  program_duration_s: number;
 }

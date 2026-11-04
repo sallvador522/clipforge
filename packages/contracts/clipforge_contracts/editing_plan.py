@@ -32,6 +32,16 @@ class ReplaceBackgroundOperation(BaseModel):
     type: Literal["replace_background"] = "replace_background"
     prompt: str = Field(min_length=1)
     asset_id: str | None = None
+    asset_source: Literal["local_asset", "mock_generated", "programmatic"] = "local_asset"
+    backdrop: dict | None = None
+
+    @model_validator(mode="after")
+    def _backdrop_matches_source(self) -> "ReplaceBackgroundOperation":
+        if self.asset_source == "programmatic" and not isinstance(self.backdrop, dict):
+            raise ValueError("A programmatic backdrop spec dict is required with asset_source='programmatic'.")
+        if self.asset_source in ("local_asset", "mock_generated") and self.backdrop is not None:
+            raise ValueError("A backdrop spec is only allowed with asset_source='programmatic'.")
+        return self
 
 
 Operation = Annotated[

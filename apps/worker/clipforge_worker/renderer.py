@@ -38,9 +38,18 @@ class RenderRequest:
     output_relative_path: str
     mode: str  # "blur_background" | "replace_background"
     background_path: str | Path | None = None
+    # ADR-052 programmatic backdrop: validated spec dict (or contract). When
+    # present in replace_background mode, every frame background is rendered
+    # deterministically from (t, W, H, spec) instead of loading a static file.
+    background_spec: dict | None = None
     blur_strength: float = 0.8
     feather_radius: int = 5  # px Gaussian feather on alpha edges (edge smoothing)
     expect_audio: bool = True
+    # ADR-041 upload audio: gain in dB + fades on the preserved original audio.
+    # All zero keeps the legacy path (codec copy when possible) bit-identical.
+    audio_gain_db: float = 0.0
+    audio_fade_in_s: float = 0.0
+    audio_fade_out_s: float = 0.0
 
 
 def _probe(path: Path, count_frames: bool = False) -> dict:
@@ -140,8 +149,14 @@ def render_video(request: RenderRequest, on_stage: Callable[[str], None] | None 
     width, height, fps = manifest.video_width, manifest.video_height, manifest.fps
 
     background_image: np.ndarray | None = None
+    programmatic_spec: dict | None = None
     if request.mode == "replace_background":
-        background_image = _load_background(request.background_path, width, height)
+        if request.background_spec is not None:
+            from clipforge_worker.programmatic_bg import spec_from_contract
+
+            programmatic_spec = spec_from_contract(request.background_spec)
+        else:
+            background_image = _load_background(request.background_path, width, height)
 
     capture = cv2.VideoCapture(str(source))
     if not capture.isOpened():
@@ -157,8 +172,23 @@ def render_video(request: RenderRequest, on_stage: Callable[[str], None] | None 
     audio_codec = _audio_codec(source) if request.expect_audio else None
     audio_args: list[str] = []
     if audio_codec:
-        # AAC/MP3 copy losslessly into MP4; other codecs are re-encoded to AAC (still the original audio).
-        audio_args = ["-map", "1:a:0", "-c:a", "copy" if audio_codec in ("aac", "mp3") else "aac"]
+        filters: list[str] = []
+        if abs(request.audio_gain_db) > 1e-9:
+            filters.append(f"volume={request.audio_gain_db:.2f}dB")
+        duration_s = manifest.frame_count / fps if fps > 0 else 0.0
+        if request.audio_fade_in_s > 0:
+            filters.append(f"afade=t=in:st=0:d={request.audio_fade_in_s:.3f}")
+        if request.audio_fade_out_s > 0 and duration_s > 0:
+            filters.append(
+                f"afade=t=out:st={max(0.0, duration_s - request.audio_fade_out_s):.3f}"
+                f":d={request.audio_fade_out_s:.3f}"
+            )
+        if filters:
+            # Any filter forces an AAC re-encode of the same original audio.
+            audio_args = ["-map", "1:a:0", "-c:a", "aac", "-af", ",".join(filters)]
+        else:
+            # AAC/MP3 copy losslessly into MP4; other codecs are re-encoded to AAC (still the original audio).
+            audio_args = ["-map", "1:a:0", "-c:a", "copy" if audio_codec in ("aac", "mp3") else "aac"]
 
     cmd = [
         "ffmpeg", "-y",
@@ -193,6 +223,11 @@ def render_video(request: RenderRequest, on_stage: Callable[[str], None] | None 
             if request.mode == "blur_background":
                 sigma = 5 + request.blur_strength * 45
                 processed_bg = cv2.GaussianBlur(frame, (0, 0), sigmaX=sigma)
+            elif programmatic_spec is not None:
+                from clipforge_worker.programmatic_bg import render_frame as render_backdrop_frame
+
+                t = frames_written / fps if fps > 0 else 0.0
+                processed_bg = render_backdrop_frame(t, width, height, programmatic_spec)
             else:
                 processed_bg = background_image
             composited = _composite(frame, mask, processed_bg, request.feather_radius)

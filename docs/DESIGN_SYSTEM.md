@@ -15,16 +15,21 @@ Editorial cinematic editing studio. The video preview is the composition; voice 
 - Minimal interface: voice control first, everything else subordinate. Avoid generic SaaS dashboard layouts and excessive cards.
 - Fake waveforms and fake loading percentages are forbidden. Loading states must reflect real job state from the backend.
 
-## Editor Workspace (Milestone 5.1 redesign)
+## Editor Workspace (Milestone 5.1 redesign, reorganizado ADR-043)
 
-Full-viewport professional workstation, five areas, no hero/marketing chrome inside the app:
+Full-viewport professional workstation, cinco zonas mais rail, sem hero/marketing chrome dentro da app:
 
 ```
-┌ TopBar (48px): logo · project name · save/state · resolution/duration (mono) · Export ┐
-├ Media (248px) ┬ Viewer (flexible, largest area) ┬ Assistant (328px) ┤
-├ Timeline (~132px, full width): ruler · filmstrip · audio peaks · playhead ┤
+┌ TopBar (44px): logo · projecto · estado · Export ┐
+├ rail (44px) + Recursos (256px) ┬ Viewer (flexível, maior área) ┬ Propriedades / Muse (360px) ┤
+├ Timeline (~133px, full width): toolbar · ruler · faixas com headers · playhead ┤
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+- Painéis em superfícies flat separadas por hairlines (`#2E2820`), raios pequenos (8px painéis, 6px controlos), grid 8px. Sem sombras decorativas.
+- A esquerda tem um icon-rail de 44px (só Recursos ativo; resto disabled honesto) e o painel Recursos com cabeçalho `Recursos | list/grid | sort | Import`, dropzone densa e Biblioteca com filtros/search.
+- A direita divide-se em Propriedades (contextual: cena ativa, factos do clipe, cartões de aprovação) e Muse (chat + composer sempre acessíveis). Vazio honesto, nada inventado.
+- O microfone continua o elemento bold (disco signal-orange, level real). Todo o resto quieto e disciplinado.
 
 - Panels are flat surfaces separated by hairline borders (`#2E2820`), small radii (8px panels, 6px controls), 8px spacing grid. No nested decorative cards.
 - The microphone is the single bold element (signal-orange disc, real level ring). Everything else stays quiet and disciplined.

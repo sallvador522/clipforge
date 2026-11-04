@@ -12,7 +12,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CapabilityStatus(str, Enum):
@@ -69,13 +69,52 @@ class BlurBackgroundParams(BaseModel):
     feather_px: int = Field(default=5, ge=0, le=21)
 
 
+class ProgrammaticShape(BaseModel):
+    """One animated vector shape on the procedural backdrop.
+
+    All motion is a deterministic function of time (seconds); the same
+    timestamp always renders the same pixels in preview and export.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["circle", "ring", "bar", "line"] = "circle"
+    color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    size: float = Field(default=0.12, ge=0.02, le=0.6)
+    speed: float = Field(default=0.5, ge=0.0, le=3.0)
+    phase: float = Field(default=0.0, ge=0.0, le=6.2832)
+
+
+class ProgrammaticBackdrop(BaseModel):
+    """A fully local, deterministic animated background.
+
+    No AI call, no image generation: gradients + vector shapes rendered per
+    frame by the worker with real OpenCV/PIL. The Studio preview shows the
+    verified render, so preview and export share the exact composition.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    gradient_top: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    gradient_bottom: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    shapes: list[ProgrammaticShape] = Field(default_factory=list, max_length=6)
+    motion: Literal["subtle", "moderate"] = "subtle"
+
+
 class ReplaceBackgroundParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["replace_background"] = "replace_background"
     prompt: str = Field(min_length=1, max_length=240)
-    asset_source: Literal["local_asset", "mock_generated"] = "local_asset"
+    asset_source: Literal["local_asset", "mock_generated", "programmatic"] = "local_asset"
     asset_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,80}$")
     composition: Literal["centered", "rule_of_thirds"] = "centered"
+    backdrop: ProgrammaticBackdrop | None = None
+
+    @model_validator(mode="after")
+    def _backdrop_matches_source(self) -> "ReplaceBackgroundParams":
+        if self.asset_source == "programmatic" and self.backdrop is None:
+            raise ValueError("A programmatic backdrop spec is required with asset_source='programmatic'.")
+        if self.asset_source in ("local_asset", "mock_generated") and self.backdrop is not None:
+            raise ValueError("A backdrop spec is only allowed with asset_source='programmatic'.")
+        return self
 
 
 class PreserveAudioParams(BaseModel):
@@ -99,6 +138,34 @@ class VerifyOutputParams(BaseModel):
     ] = ("duration", "streams", "frame_count", "audio_presence", "resolution")
 
 
+class TextOverlayParams(BaseModel):
+    """ADR-047 selectable text element. Validated tool/director params; the
+    worker burns the persisted overlay into the timeline composition."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["text_overlay"] = "text_overlay"
+    overlay_id: str = Field(pattern=r"^txt_[a-z0-9]{4,32}$")
+    text: str = Field(min_length=1, max_length=140)
+    style: Literal["rise", "reveal", "pop", "kinetic", "tracking"] = "rise"
+    start_s: float = Field(default=0.0, ge=0.0)
+    duration_s: float = Field(default=2.5, ge=0.5, le=8.0)
+    x: float = Field(default=0.5, ge=0.08, le=0.92)
+    y: float = Field(default=0.78, ge=0.1, le=0.9)
+    scale: float = Field(default=1.0, ge=0.7, le=1.6)
+    color: str = Field(default="#FFFFFF", pattern=r"^#[0-9a-fA-F]{6}$")
+    weight: Literal["normal", "bold"] = "bold"
+
+
+class ColourAdjustParams(BaseModel):
+    """ADR-047 local colour grade. Real per-frame OpenCV adjustment."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["colour_adjust"] = "colour_adjust"
+    contrast: float = Field(default=1.0, ge=0.5, le=1.5)
+    brightness: float = Field(default=0.0, ge=-0.3, le=0.3)
+    saturation: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
 OperationParams = (
     IsolateSubjectParams
     | BlurBackgroundParams
@@ -106,6 +173,8 @@ OperationParams = (
     | PreserveAudioParams
     | RenderMp4Params
     | VerifyOutputParams
+    | TextOverlayParams
+    | ColourAdjustParams
 )
 
 PARAM_MODELS: dict[str, type[BaseModel]] = {
@@ -115,6 +184,8 @@ PARAM_MODELS: dict[str, type[BaseModel]] = {
     "preserve_audio": PreserveAudioParams,
     "render_mp4": RenderMp4Params,
     "verify_output": VerifyOutputParams,
+    "text_overlay": TextOverlayParams,
+    "colour_adjust": ColourAdjustParams,
 }
 
 CAPABILITY_BY_PARAM_TYPE: dict[str, str] = {
@@ -124,6 +195,8 @@ CAPABILITY_BY_PARAM_TYPE: dict[str, str] = {
     "preserve_audio": "audio.preserve",
     "render_mp4": "video.render_mp4",
     "verify_output": "output.verify",
+    "text_overlay": "text.overlay",
+    "colour_adjust": "colour.adjust",
 }
 
 
@@ -189,8 +262,11 @@ CAPABILITIES: dict[str, Capability] = {
     "background.replace": _capability(
         "background.replace",
         "Background replacement",
-        "Composites the isolated subject over a background generated by the configured "
-        "provider: Muse Image when live, or a deterministic local/mock asset otherwise. "
+        "Composites the isolated subject over a replacement background: a "
+        "deterministic local programmatic backdrop (animated gradient + vector "
+        "shapes, no AI call) when asset_source is programmatic, else a background "
+        "generated by the configured provider (Muse Image when live, or a "
+        "deterministic local/mock asset otherwise). "
         "The composite itself runs locally.",
         "ReplaceBackgroundParams",
         "CompositedVideoFrames",
@@ -232,6 +308,38 @@ CAPABILITIES: dict[str, Capability] = {
         "ffprobe frame counting, duration, resolution and audio stream equality.",
         handler=_VERIFY_HANDLER,
         dependencies=("video.render_mp4",),
+    ),
+    # ADR-047 selectable text overlays: real project elements persisted on the
+    # job, edited in the Studio / via Muse tools, burned into the timeline
+    # composition by the worker. Entrance animation in the export is a
+    # fade + rise (240 ms); per-style preview choreography stays richer.
+    "text.overlay": _capability(
+        "text.overlay",
+        "Text overlay",
+        "Selectable text element with content, size, colour, weight, position "
+        "and timing. Persisted on the job and burned into the timeline MP4 by "
+        "the worker with real PIL/OpenCV rendering.",
+        "TextOverlayParams",
+        "CompositedVideoFrames",
+        CapabilityStatus.AVAILABLE_LOCAL,
+        "Pixel-diff QA proves the text is present in the exported frames; "
+        "ffprobe verifies the MP4.",
+        handler="clipforge_worker.timeline_render:compose_timeline",
+    ),
+    # ADR-047 local colour grade: real per-frame OpenCV contrast/brightness/
+    # saturation applied by the timeline composition. Local image processing,
+    # never described as AI.
+    "colour.adjust": _capability(
+        "colour.adjust",
+        "Colour adjustment",
+        "Local contrast/brightness/saturation grade applied per frame before "
+        "text burn-in. Operated by the user in Properties or by Muse tools.",
+        "ColourAdjustParams",
+        "GradedVideoFrames",
+        CapabilityStatus.AVAILABLE_LOCAL,
+        "Frame statistics shift in the expected direction; ffprobe verifies "
+        "the MP4.",
+        handler="clipforge_worker.timeline_render:compose_timeline",
     ),
     # Planned: documented for the director, never executable.
     "background.generate": _capability(
@@ -378,6 +486,8 @@ EDL_ROLE: dict[str, str] = {
     "subject.isolate": "prepare",
     "background.blur": "transform",
     "background.replace": "transform",
+    "text.overlay": "transform",
+    "colour.adjust": "transform",
     "audio.preserve": "finalize",
     "video.render_mp4": "finalize",
     "output.verify": "finalize",

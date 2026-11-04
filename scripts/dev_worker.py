@@ -39,8 +39,9 @@ def enforce_dev_safety() -> None:
     os.environ["CLIPFORGE_DIRECTOR_MODE"] = "mock"
     os.environ["CLIPFORGE_SEGMENTATION_MODE"] = "mock"
     os.environ["CLIPFORGE_IMAGE_MODE"] = "mock"
+    os.environ["CLIPFORGE_CHAT_MODE"] = "mock"
     print(
-        "Dev safety: transcription/director/segmentation/image forced to mock. "
+        "Dev safety: transcription/director/segmentation/image/chat forced to mock. "
         "Set CLIPFORGE_DEV_ALLOW_LIVE=1 to opt in to live."
     )
 

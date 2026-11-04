@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { ClipTextLayer } from "./ClipTextLayer";
+import type { ClipTextOverlay } from "@/lib/textOverlays";
 import { formatTime } from "./MediaPanel";
 
 export type ViewMode = "before" | "compare" | "after";
@@ -29,12 +31,20 @@ interface Props {
   selectionVisible: boolean;
   onToggleSubject: (objectId: string) => void;
   displayFormat: "reels" | "youtube";
+  onFormatChange: (format: "reels" | "youtube") => void;
+  /** Fase 1 preview-only clip texts (anime.js overlay, not burned into MP4). */
+  clipTexts?: ClipTextOverlay[];
+  selectedTextId?: string | null;
+  onSelectText?: (id: string | null) => void;
+  onMoveText?: (id: string, x: number, y: number) => void;
+  onCommitText?: (id: string, text: string) => void;
 }
 
 export function Viewer({
   originalUrl, editedUrl, resultReady, primaryRef, currentTime, duration, playing,
   onTogglePlay, onSeek, onTimeUpdate, onPlayState, onFileDrop,
-  subjects, selectionVisible, onToggleSubject, displayFormat,
+  subjects, selectionVisible, onToggleSubject, displayFormat, onFormatChange,
+  clipTexts, selectedTextId, onSelectText, onMoveText, onCommitText,
 }: Props) {
   const [mode, setMode] = useState<ViewMode>("compare");
   const [split, setSplit] = useState(50);
@@ -63,10 +73,10 @@ export function Viewer({
   }
 
   return (
-    <section id="viewer" aria-label="Viewer" className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#0B0906]">
+    <section id="viewer" aria-label="Pré-visualização" className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <div
         ref={stageRef}
-        className="relative flex min-h-0 flex-1 items-center justify-center bg-black"
+        className="relative flex min-h-0 flex-1 items-center justify-center p-4 md:p-6"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
@@ -74,88 +84,93 @@ export function Viewer({
           if (f) onFileDrop(f);
         }}
       >
-        {!originalUrl ? (
-          <div className="px-6 text-center">
-            <p className="text-lg font-semibold">Import a clip to start editing</p>
-            <p className="mt-1.5 text-sm text-muted">Drop a video anywhere on this stage, or use the Media panel.</p>
-            <p className="mt-3 font-mono text-[11px] text-muted">Up to 10 seconds · 720p · your original is always preserved</p>
-          </div>
-        ) : (
-          // Social-format frame: the stage letterboxes to the selected export
-          // aspect (9:16 vertical, 16:9 horizontal) and the video is contained
-          // whole inside it — a normal, undistorted size simulation. The
-          // export itself cover-crops to the format on the backend.
-          <div
-            className="relative max-h-full max-w-full overflow-hidden bg-black"
-            style={
-              displayFormat === "reels"
-                ? { aspectRatio: "9 / 16", height: "100%" }
-                : { aspectRatio: "16 / 9", width: "100%", maxHeight: "100%" }
-            }
-          >
-            <video
-              ref={primaryRef}
-              src={originalUrl ?? undefined}
-              className="absolute inset-0 h-full w-full object-contain"
-              playsInline
-              preload="auto"
-              onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime, e.currentTarget.duration || 0)}
-              onLoadedMetadata={(e) => onTimeUpdate(e.currentTarget.currentTime, e.currentTarget.duration || 0)}
-              onPlay={() => onPlayState(true)}
-              onPause={() => onPlayState(false)}
-              aria-label="Original video"
-            />
-            {/* The edited render stays mounted once verified so mode switches
-                never abort an in-flight blob fetch (console-safe). */}
-            {resultReady && editedUrl && (
+        {/* Format card: always visible, sized by the chosen format (9:16 tall,
+            16:9 wide). The video fills it undistorted; empty it invites import.
+            The export itself cover-crops to the format on the backend. */}
+        <div
+          className="relative max-h-full max-w-full overflow-hidden rounded-lg border border-border/70 bg-black"
+          style={
+            displayFormat === "reels"
+              ? { aspectRatio: "9 / 16", height: "100%" }
+              : { aspectRatio: "16 / 9", width: "100%", maxHeight: "100%" }
+          }
+        >
+          {!originalUrl ? (
+            <div className="absolute inset-0">
+              <span className="sr-only">Palco vazio. Importa um clipe no painel Recursos ou larga um vídeo aqui.</span>
+            </div>
+          ) : (
+            <>
               <video
-                ref={overlayRef}
-                src={editedUrl}
-                muted
+                ref={primaryRef}
+                src={originalUrl ?? undefined}
+                className="absolute inset-0 h-full w-full object-contain"
                 playsInline
                 preload="auto"
-                aria-label="Edited video"
-                className="pointer-events-none absolute inset-0 h-full w-full object-contain"
-                style={{
-                  clipPath: mode === "compare" ? `inset(0 0 0 ${split}%)` : undefined,
-                  visibility: mode === "before" ? "hidden" : "visible",
-                }}
+                onTimeUpdate={(e) => onTimeUpdate(e.currentTarget.currentTime, e.currentTarget.duration || 0)}
+                onLoadedMetadata={(e) => onTimeUpdate(e.currentTarget.currentTime, e.currentTarget.duration || 0)}
+                onPlay={() => onPlayState(true)}
+                onPause={() => onPlayState(false)}
+                aria-label="Vídeo original"
               />
-            )}
-            {mode === "compare" && (
-              <span className="pointer-events-none absolute left-3 top-3 rounded bg-black/70 px-2 py-0.5 font-mono text-[11px]">ORIGINAL</span>
-            )}
-            {mode === "compare" && resultReady && (
-              <span className="pointer-events-none absolute right-3 top-3 rounded bg-black/70 px-2 py-0.5 font-mono text-[11px] text-accent">EDITED</span>
-            )}
-            {selectionVisible && subjects && subjects.length > 0 && (
-              <div className="absolute bottom-3 left-3 flex max-w-[70%] flex-wrap gap-1.5" role="group" aria-label="Select subjects on the preview">
-                {subjects.map((subject) => (
-                  <button
-                    key={subject.object_id}
-                    type="button"
-                    data-testid={`preview-subject-${subject.object_id}`}
-                    aria-pressed={subject.selected}
-                    aria-label={`Select subject ${subject.object_id} on preview`}
-                    onClick={() => onToggleSubject(subject.object_id)}
-                    className={`flex items-center gap-1.5 rounded-md border bg-black/75 py-1 pl-1 pr-2 backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
-                      subject.selected ? "border-accent" : "border-border hover:border-muted"
-                    }`}
-                  >
-                    <img
-                      src={subject.previewUrl}
-                      alt=""
-                      aria-hidden
-                      className="h-8 w-8 rounded object-cover"
-                      loading="lazy"
-                    />
-                    <span className={`font-mono text-[10px] ${subject.selected ? "font-semibold text-accent" : "text-muted"}`}>
-                      {subject.selected ? "✓ " : ""}Subject {subject.object_id}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
+              {/* The edited render stays mounted once verified so mode switches
+                  never abort an in-flight blob fetch (console-safe). */}
+              {resultReady && editedUrl && (
+                <video
+                  ref={overlayRef}
+                  src={editedUrl}
+                  muted
+                  playsInline
+                  preload="auto"
+                  aria-label="Vídeo editado"
+                  className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                  style={{
+                    clipPath: mode === "compare" ? `inset(0 0 0 ${split}%)` : undefined,
+                    visibility: mode === "before" ? "hidden" : "visible",
+                  }}
+                />
+              )}
+            </>
+          )}
+          {selectionVisible && subjects && subjects.length > 0 && (
+            <div className="absolute bottom-3 left-3 flex max-w-[70%] flex-wrap gap-1.5" role="group" aria-label="Select subjects on the preview">
+              {subjects.map((subject) => (
+                <button
+                  key={subject.object_id}
+                  type="button"
+                  data-testid={`preview-subject-${subject.object_id}`}
+                  aria-pressed={subject.selected}
+                  aria-label={`Seleccionar pessoa ${subject.object_id} na pré-visualização`}
+                  onClick={() => onToggleSubject(subject.object_id)}
+                  className={`flex items-center gap-1.5 rounded-md border bg-black/75 py-1 pl-1 pr-2 backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                    subject.selected ? "border-accent" : "border-border hover:border-muted"
+                  }`}
+                >
+                  <img
+                    src={subject.previewUrl}
+                    alt=""
+                    aria-hidden
+                    className="h-8 w-8 rounded object-cover"
+                    loading="lazy"
+                  />
+                  <span className={`text-[10px] ${subject.selected ? "font-semibold text-accent" : "text-muted"}`} title={subject.object_id}>
+                    {subject.selected ? "✓ " : ""}Pessoa {subject.object_id.slice(0, 8)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {clipTexts && clipTexts.length > 0 && onSelectText && onMoveText && (
+            <ClipTextLayer
+              texts={clipTexts}
+              currentTime={currentTime}
+              selectedId={selectedTextId ?? null}
+              onSelect={onSelectText}
+              onMove={onMoveText}
+              onCommitText={onCommitText}
+            />
+          )}
+          {originalUrl && (
             <AnimatePresence mode="wait">
               <motion.span
                 key={mode + String(resultReady)}
@@ -165,21 +180,30 @@ export function Viewer({
                 transition={{ duration: 0.18 }}
                 className="pointer-events-none absolute bottom-3 right-3 rounded bg-black/70 px-2 py-0.5 font-mono text-[11px] text-muted"
               >
-                {mode === "after" ? "Edited render (verified)" : mode === "compare" && resultReady ? "Before / after" : "Original source"}
+                {clipTexts && clipTexts.length > 0
+                  ? "Texto · sai no MP4 (Montar)"
+                  : mode === "after"
+                    ? "Versão final (verificada)"
+                    : mode === "compare" && resultReady
+                      ? "Antes / depois"
+                      : "Origem"}
               </motion.span>
             </AnimatePresence>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      <div className="shrink-0 border-t border-border bg-surface px-3 py-2">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="shrink-0 px-5 py-2.5">
+        <div className="relative flex min-h-8 items-center gap-x-2">
+          <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
+            <span className="text-accent">{formatTime(currentTime)}</span> <span className="text-muted">/ {formatTime(duration)}</span>
+          </span>
           <button
             type="button"
             onClick={onTogglePlay}
             disabled={!originalUrl}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-raised text-foreground transition-colors hover:bg-border disabled:opacity-30"
-            aria-label={playing ? "Pause" : "Play"}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-foreground transition-colors hover:bg-raised disabled:opacity-30 focus-visible:outline-2 focus-visible:outline-accent sm:absolute sm:left-1/2 sm:-translate-x-1/2 z-10"
+            aria-label={playing ? "Pausa" : "Reproduzir"}
           >
             {playing ? (
               <svg width="11" height="12" viewBox="0 0 11 12" aria-hidden><rect x="1" y="1" width="3" height="10" fill="currentColor" /><rect x="7" y="1" width="3" height="10" fill="currentColor" /></svg>
@@ -187,50 +211,42 @@ export function Viewer({
               <svg width="11" height="12" viewBox="0 0 11 12" aria-hidden><path d="M1 1.5v9l9-4.5-9-4.5Z" fill="currentColor" /></svg>
             )}
           </button>
-          <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums">
-            {formatTime(currentTime)} <span className="text-muted">/ {formatTime(duration)}</span>
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(duration, 0.01)}
-            step={0.01}
-            value={Math.min(currentTime, duration || 0)}
-            disabled={!originalUrl}
-            onChange={(e) => onSeek(Number(e.target.value))}
-            className="min-w-0 flex-1"
-            aria-label="Seek"
-          />
-          <div className="flex shrink-0 overflow-hidden rounded-md border border-border" role="tablist" aria-label="View mode">
-            {(["before", "compare", "after"] as ViewMode[]).map((m) => (
-              <button
-                key={m}
-                role="tab"
-                aria-selected={mode === m}
-                disabled={!originalUrl || (m !== "before" && !resultReady)}
-                onClick={() => setMode(m)}
-                className={`px-2 py-1.5 font-mono text-[11px] capitalize transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
-                  mode === m ? "bg-accent font-semibold text-[#14110C]" : "text-muted hover:text-foreground disabled:opacity-30"
-                }`}
-              >
-                {m}
-              </button>
-            ))}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <div className="flex overflow-hidden rounded-[6px] border border-border" role="radiogroup" aria-label="Formato">
+              {([
+                { key: "reels", label: "9:16" },
+                { key: "youtube", label: "16:9" },
+              ] as const).map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={displayFormat === f.key}
+                  onClick={() => onFormatChange(f.key)}
+                  className={`px-2.5 py-1.5 font-mono text-[11px] transition-colors focus-visible:outline-2 focus-visible:outline-accent ${
+                    displayFormat === f.key ? "bg-raised font-semibold text-foreground" : "text-muted hover:text-foreground"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              disabled={!originalUrl}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-foreground disabled:opacity-30 focus-visible:outline-2 focus-visible:outline-accent"
+              aria-label="Ecrã inteiro"
+              title="Ecrã inteiro"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            disabled={!originalUrl}
-            className="hidden h-8 shrink-0 items-center rounded-md px-2 font-mono text-[11px] text-muted transition-colors hover:text-foreground disabled:opacity-30 xl:flex"
-            aria-label="Fullscreen preview"
-          >
-            Fullscreen
-          </button>
         </div>
         {mode === "compare" && resultReady && (
-          <label className="mt-2 flex items-center gap-3 font-mono text-[11px] text-muted">
-            Compare split
-            <input type="range" min={0} max={100} value={split} onChange={(e) => setSplit(Number(e.target.value))} className="flex-1" aria-label="Compare split position" />
+          <label className="mt-1 flex items-center gap-3 text-[11px] text-muted">
+            Divisória
+            <input type="range" min={0} max={100} value={split} onChange={(e) => setSplit(Number(e.target.value))} className="flex-1" aria-label="Posição da divisória" />
             <span className="tabular-nums">{split}%</span>
           </label>
         )}

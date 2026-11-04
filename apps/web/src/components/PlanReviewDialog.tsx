@@ -20,12 +20,36 @@ interface Props {
 }
 
 function capabilityLabel(capability: PlanCapabilityData | undefined): string {
-  if (!capability) return "UNKNOWN";
-  if (capability.status === "available_mock") return "MOCK";
-  if (capability.status === "available_local") return "LOCAL";
-  if (capability.status === "available_live") return "LIVE";
-  if (capability.status === "planned") return "PLANNED";
-  return "UNAVAILABLE";
+  if (!capability) return "desconhecida";
+  if (capability.status === "available_mock") return "Simulação";
+  if (capability.status === "available_local") return "Local";
+  if (capability.status === "available_live") return "Direto";
+  if (capability.status === "planned") return "Em breve";
+  return "Indisponível";
+}
+
+function describeStrategy(strategy: string): string {
+  const map: Record<string, string> = {
+    largest_subject: "Assunto principal",
+    named_subject: "Pessoa indicada",
+    foreground: "Primeiro plano",
+  };
+  return map[strategy] ?? strategy.replace(/_/g, " ");
+}
+
+function describeOutcome(outcome: string): string {
+  const map: Record<string, string> = {
+    plan_ready: "Pronto a aprovar",
+    needs_clarification: "Precisa de resposta",
+    unsupported: "Não suportado",
+  };
+  return map[outcome] ?? outcome;
+}
+
+function describeApproval(status: string): string {
+  if (status === "required") return "Precisa de aprovação";
+  if (status === "not_required") return "Sem aprovação";
+  return status;
 }
 
 function formatParam(value: unknown): string {
@@ -74,9 +98,9 @@ export function PlanReviewDialog({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
         <div className="w-full max-w-md rounded-lg border border-border bg-surface p-5">
-          <p className="text-sm font-semibold">Plan unavailable</p>
-          <p className="mt-1 text-[13px] text-muted">{review.error?.message ?? "The API has no persisted plan for this job."}</p>
-          <Button className="mt-4" onClick={onClose}>Close</Button>
+          <p className="text-sm font-semibold">Plano indisponível</p>
+          <p className="mt-1 text-[13px] text-muted">{review.error?.message ?? "Não há plano guardado para este trabalho."}</p>
+          <Button className="mt-4" onClick={onClose}>Fechar</Button>
         </div>
       </div>
     );
@@ -87,14 +111,14 @@ export function PlanReviewDialog({
       <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-t-xl border border-border bg-surface shadow-2xl sm:rounded-lg">
         <header className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-border bg-surface px-4 py-3">
           <div>
-            <p className="font-mono text-[10px] tracking-wider text-accent">DIRECTOR PLAN — REVIEW BEFORE EXECUTION</p>
-            <h2 id="plan-review-title" className="mt-1 text-lg font-semibold">What ClipForge intends to do</h2>
-            <p className="mt-1 text-[12px] text-muted">No video changes have been made yet. Your original is intact.</p>
+            <p className="text-[11px] text-accent">Plano do Muse — revê antes de avançar</p>
+            <h2 id="plan-review-title" className="mt-1 text-lg font-semibold">O que o Muse vai fazer</h2>
+            <p className="mt-1 text-[12px] text-muted">Ainda não foi alterado nada. O teu original está intacto.</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close plan review"
+            aria-label="Fechar revisão do plano"
             className="rounded-md border border-border px-2 py-1 font-mono text-[11px] text-muted hover:border-muted hover:text-foreground"
           >
             ESC
@@ -102,60 +126,60 @@ export function PlanReviewDialog({
         </header>
 
         <div className="space-y-5 px-4 py-4">
-          <section aria-label="Plan summary" className="rounded-md border border-border bg-raised p-3">
+          <section aria-label="Resumo do plano" className="rounded-md border border-border bg-raised p-3">
             <p className="text-[13px] font-medium">{plan.interpreted_intention}</p>
             <p className="mt-1 text-[13px] leading-relaxed text-muted">{plan.summary_explanation}</p>
-            <dl className="mt-3 grid gap-2 font-mono text-[11px] sm:grid-cols-2">
+            <dl className="mt-3 grid gap-2 text-[12px] sm:grid-cols-2">
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Director subject intent</dt>
+                <dt className="text-muted">Assunto</dt>
                 <dd className="truncate text-right" title={plan.subject.description}>{plan.subject.description}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Director strategy</dt>
-                <dd className="text-right">{plan.subject.strategy.replaceAll("_", " ")}</dd>
+                <dt className="text-muted">Estratégia</dt>
+                <dd className="text-right">{describeStrategy(plan.subject.strategy)}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Outcome</dt>
-                <dd className="text-right">{plan.outcome}</dd>
+                <dt className="text-muted">Resultado</dt>
+                <dd className="text-right">{describeOutcome(plan.outcome)}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Capability approval</dt>
-                <dd className="text-right">{plan.approval_status}</dd>
+                <dt className="text-muted">Aprovação</dt>
+                <dd className="text-right">{describeApproval(plan.approval_status)}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Output</dt>
+                <dt className="text-muted">Formato</dt>
                 <dd className="text-right">{plan.target.format} · {plan.target.resolution} · {plan.target.aspect_ratio}</dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-muted">Audio</dt>
-                <dd className="text-right">{plan.target.preserve_audio ? "preserved" : "not requested"}</dd>
+                <dt className="text-muted">Áudio</dt>
+                <dd className="text-right">{plan.target.preserve_audio ? "mantido" : "não pedido"}</dd>
               </div>
             </dl>
           </section>
 
           {hasDetection && (
-            <section aria-label="Detected people" className="rounded-md border border-accent/40 bg-accent/5 p-3">
+            <section aria-label="Pessoas detectadas" className="rounded-md border border-accent/40 bg-accent/5 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-mono text-[10px] tracking-wider text-accent">
-                    DETECTED PEOPLE — SELECT WHO STAYS SHARP
+                    Pessoas detectadas — escolhe quem fica nítido
                   </p>
                   <p className="mt-1 text-[12px] text-muted">
                     {review.segmentation?.is_mock
-                      ? "Simulated detection for mock mode. Not real SAM inference."
-                      : `SAM 3.1 segmentation via ${review.segmentation?.provider ?? "meta-sam"}.`}
+                      ? "Simulação: detecção de demonstração, sem análise real."
+                      : "Detecção real de pessoas."}
                   </p>
                 </div>
                 <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[9px] text-muted">
-                  {review.segmentation?.frame_count ?? 0} frames · {review.segmentation?.width ?? 0}×{review.segmentation?.height ?? 0}
+                  {review.segmentation?.frame_count ?? 0} fotogramas
                 </span>
               </div>
 
               {noSubjects ? (
                 <div className="mt-3 rounded border border-danger/40 bg-danger/10 p-2.5" role="alert">
-                  <p className="text-[13px] font-medium text-danger">No people detected</p>
+                  <p className="text-[13px] font-medium text-danger">Nenhuma pessoa detectada</p>
                   <p className="mt-1 text-[12px] text-muted">
-                    There is no subject to keep sharp, so this edit cannot be approved. Try a clip with a visible person.
+                    Não há quem manter nítido — esta edição não pode avançar. Tenta um clipe com uma pessoa visível.
                   </p>
                 </div>
               ) : (
@@ -176,19 +200,19 @@ export function PlanReviewDialog({
                           <div className="relative aspect-video bg-black/40">
                             <img
                               src={subjectPreviewUrl(review.job_id, subject.object_id)}
-                              alt={`Preview of detected subject ${subject.object_id}`}
+                              alt={`Pré-visualização da pessoa detectada ${subject.object_id}`}
                               className="h-full w-full object-contain"
                               loading="lazy"
                             />
                             <span className={`absolute right-2 top-2 rounded border px-1.5 py-0.5 font-mono text-[9px] ${selected ? "border-accent bg-accent text-[#14110C]" : "border-border bg-black/70 text-muted"}`}>
-                              {selected ? "KEEP SHARP" : "SELECT"}
+                              {selected ? "Manter" : "Escolher"}
                             </span>
                           </div>
                           <div className="flex items-center justify-between gap-2 px-2.5 py-2">
                             <div>
-                              <p className="text-[12px] font-medium">Subject {subject.object_id}</p>
+                              <p className="text-[12px] font-medium">Pessoa {subject.object_id.slice(0, 8)}</p>
                               <p className="font-mono text-[9px] text-muted">
-                                frames {subject.first_frame ?? "?"}–{subject.last_frame ?? "?"} · {subject.frames_detected} detected
+                                fotogramas {subject.first_frame ?? "?"}–{subject.last_frame ?? "?"} · {subject.frames_detected} com detecção
                               </p>
                             </div>
                             <span className="font-mono text-[9px] text-muted">{subject.label}</span>
@@ -198,18 +222,18 @@ export function PlanReviewDialog({
                     })}
                   </div>
                   <p className="mt-2 font-mono text-[10px] text-muted">
-                    Selection uses stable SAM object IDs within this clip. It is not identity recognition.
-                    {needsSelection ? " Select at least one person to approve." : ""}
+                    A selecção identifica pessoas neste vídeo, não reconhece identidades.
+                    {needsSelection ? " Selecciona pelo menos uma pessoa para aprovar." : ""}
                   </p>
                 </>
               )}
             </section>
           )}
 
-          <section aria-label="Proposed operations">
+          <section aria-label="Passos propostos">
             <div className="flex items-baseline justify-between">
-              <h3 className="font-mono text-[11px] tracking-wider text-muted">OPERATIONS — {plan.operations.length}</h3>
-              <p className="font-mono text-[10px] text-muted">order matters</p>
+              <h3 className="text-[11px] font-medium text-muted">Passos ({plan.operations.length})</h3>
+              <p className="text-[10px] text-muted">por ordem</p>
             </div>
             <ol className="mt-2 space-y-2">
               {plan.operations.map((operation, index) => {
@@ -225,11 +249,11 @@ export function PlanReviewDialog({
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-[13px] font-medium">{operation.title}</p>
-                          <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${label === "LIVE" ? "border-success/50 text-success" : label === "UNAVAILABLE" || label === "PLANNED" ? "border-danger/50 text-danger" : "border-accent/40 text-accent"}`}>
+                          <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${label === "Direto" ? "border-success/50 text-success" : label === "Indisponível" || label === "Em breve" ? "border-danger/50 text-danger" : "border-accent/40 text-accent"}`}>
                             {label}
                           </span>
-                          {capability?.simulated && <span className="font-mono text-[9px] text-muted">SIMULATED</span>}
-                          {capability?.requires_approval && <span className="font-mono text-[9px] text-accent">APPROVAL</span>}
+                          {capability?.simulated && <span className="text-[10px] text-muted">Simulação</span>}
+                          {capability?.requires_approval && <span className="text-[10px] text-accent">Precisa de aprovação</span>}
                         </div>
                         <p className="mt-1 font-mono text-[10px] text-muted">{operation.capability_id}</p>
                         <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{operation.explanation}</p>
@@ -252,30 +276,24 @@ export function PlanReviewDialog({
             </ol>
           </section>
 
-          <section aria-label="Verification" className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-md border border-border p-3">
-              <p className="font-mono text-[10px] tracking-wider text-muted">REQUIRED PROVIDERS</p>
-              <p className="mt-1 text-[12px]">{plan.required_providers.join(", ") || "local only"}</p>
-            </div>
-            <div className="rounded-md border border-border p-3">
-              <p className="font-mono text-[10px] tracking-wider text-muted">VERIFICATION</p>
-              <p className="mt-1 text-[12px]">{plan.verification_requirements.map((v) => v.check).join(" · ") || "standard output checks"}</p>
-            </div>
+          <section aria-label="Verificação" className="rounded-md border border-border p-3">
+            <p className="text-[11px] text-muted">Verificação</p>
+            <p className="mt-1 text-[12px]">O resultado é verificado antes de ser entregue.</p>
           </section>
 
           {plan.unsupported_capabilities.length > 0 && (
             <section className="rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-              <p className="text-[13px] font-medium text-danger">Unavailable capability</p>
-              <p className="mt-1 text-[13px]">This build cannot perform: {plan.unsupported_capabilities.join(", ")}.</p>
+              <p className="text-[13px] font-medium text-danger">Função indisponível</p>
+              <p className="mt-1 text-[13px]">Esta versão não faz: {plan.unsupported_capabilities.join(", ")}.</p>
               <p className="mt-1 text-[12px] text-muted">{plan.summary_explanation}</p>
             </section>
           )}
 
           {awaitingClarification && (
             <section className="rounded-md border border-accent/40 bg-accent/10 p-3" role="status">
-              <p className="font-mono text-[10px] tracking-wider text-accent">CLARIFICATION NEEDED — ROUND {review.clarification_count + 1}</p>
-              <p className="mt-1 text-[15px]">{review.clarification_question ?? plan.clarification_questions[0] ?? "Tell ClipForge who should stay sharp."}</p>
-              <label htmlFor="clarification-answer" className="mt-3 block font-mono text-[10px] text-muted">YOUR ANSWER</label>
+              <p className="font-mono text-[10px] tracking-wider text-accent">Preciso de uma resposta</p>
+              <p className="mt-1 text-[15px]">{review.clarification_question ?? plan.clarification_questions[0] ?? "Diz ao Muse quem deve ficar nítido"}</p>
+              <label htmlFor="clarification-answer" className="mt-3 block font-mono text-[10px] text-muted">A tua resposta</label>
               <textarea
                 id="clarification-answer"
                 value={answer}
@@ -284,19 +302,19 @@ export function PlanReviewDialog({
                 maxLength={300}
                 disabled={submitting !== null}
                 className="mt-1 w-full resize-none rounded-md border border-border bg-raised p-2 text-sm outline-none focus:border-accent disabled:opacity-60"
-                placeholder="e.g. the man on the left, keep both people sharp…"
+                placeholder="ex.: o senhor da esquerda; manter as duas pessoas nítidas…"
               />
               <Button className="mt-2" onClick={() => onClarify(answer.trim())} disabled={!answer.trim() || submitting !== null}>
-                {submitting === "clarify" ? "Rebuilding plan…" : "Answer & rebuild plan"}
+                {submitting === "clarify" ? "A reconstruir…" : "Responder e reconstruir"}
               </Button>
-              <p className="mt-2 font-mono text-[10px] text-muted">No rendering happens until you approve the revised plan.</p>
+              <p className="mt-2 font-mono text-[10px] text-muted">Nada é gerado sem a tua aprovação do novo plano.</p>
             </section>
           )}
 
           {rejected && (
             <section className="rounded-md border border-danger/40 bg-danger/10 p-3" role="alert">
-              <p className="text-[13px] font-medium text-danger">Plan rejected</p>
-              <p className="mt-1 text-[13px]">No rendering was started. Your original video is untouched.</p>
+              <p className="text-[13px] font-medium text-danger">Plano rejeitado</p>
+              <p className="mt-1 text-[13px]">Nada foi gerado. O teu original está intacto.</p>
             </section>
           )}
 
@@ -311,31 +329,31 @@ export function PlanReviewDialog({
           <p className="font-mono text-[10px] text-muted">
             {awaitingApproval
               ? noSubjects
-                ? "No people detected — approval is unavailable."
+                ? "Sem pessoas detectadas: não é possível aprovar."
                 : needsSelection
-                  ? "Select at least one detected person."
+                  ? "Selecciona pelo menos uma pessoa detectada."
                   : hasDetection
-                    ? `${selectedSubjects.length} subject${selectedSubjects.length === 1 ? "" : "s"} selected. Review is required before rendering.`
-                    : "Review is required before any video changes."
+                    ? `${selectedSubjects.length} pessoa${selectedSubjects.length === 1 ? "" : "s"} seleccionada${selectedSubjects.length === 1 ? "" : "s"}. Revê antes de gerar.`
+                    : "Revê antes de alterar o vídeo."
               : unsupported
-                ? "No supported edit plan is available."
+                ? "Não há plano suportado."
                 : rejected
-                  ? "Rejected — original preserved."
-                  : "Answer the clarification to continue."}
+                  ? "Rejeitado — original intacto."
+                  : "Responde para continuar."}
           </p>
           <div className="flex gap-2">
             {awaitingApproval && (
               <>
                 <Button variant="ghost" onClick={onReject} disabled={submitting !== null}>
-                  {submitting === "reject" ? "Rejecting…" : "Reject plan"}
+                  {submitting === "reject" ? "A rejeitar…" : "Rejeitar plano"}
                 </Button>
                 <Button onClick={onApprove} disabled={submitting !== null || !canApprove}>
-                  {submitting === "approve" ? "Approving…" : hasDetection ? "Approve selected & render" : "Approve & render"}
+                  {submitting === "approve" ? "A aprovar…" : hasDetection ? "Aprovar selecção e gerar" : "Aprovar e gerar"}
                 </Button>
               </>
             )}
             {!awaitingApproval && (
-              <Button variant="secondary" onClick={onClose}>Close</Button>
+              <Button variant="secondary" onClick={onClose}>Fechar</Button>
             )}
           </div>
         </footer>

@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from clipforge_contracts.idea import IdeaJobRecord, IdeaState, IdeaStatus
+from clipforge_contracts.idea import AssetStatus, IdeaJobRecord, IdeaState, IdeaStatus
 from clipforge_jobs.idea_store import IdeaNotFoundError, IdeaStore, new_idea_id
 from clipforge_worker.idea_processor import IdeaProcessor
 from clipforge_worker.idea_renderer import (
@@ -226,8 +226,7 @@ def test_asset_paths_cannot_escape_the_idea_directory(env):
     assert store.asset_path(record.idea_id, "asset_scene_1").parent.name == "assets"
 
 
-def test_frame_times_sample_centres_and_avoid_boundaries():
-    # 24 fps, 20 s: frame 0 starts at 20 ms (not 0), frame 120 lands at
+def test_frame_times_sample_centres_and_avoid_boundaries():    # 24 fps, 20 s: frame 0 starts at 20 ms (not 0), frame 120 lands at
     # 5020 ms (not the 5000 ms scene boundary that captured a flash frame).
     assert frame_time_ms(0, 24, 20000) == 20
     assert frame_time_ms(120, 24, 20000) == 5020
@@ -298,3 +297,158 @@ def test_render_fails_fast_on_a_static_board(env):
     failed = store.get(record.idea_id)
     assert failed.status == IdeaStatus.FAILED
     assert failed.error is not None and failed.error.code == "storyboard_static"
+
+
+def _mock_plate(path: Path, hue: int = 20) -> None:
+    frame = np.full((128, 72, 3), (30, hue, 160), dtype=np.uint8)
+    assert cv2.imwrite(str(path), frame)
+
+
+def _make_mp4(path: Path, frames: int = 12, fps: int = 12) -> None:
+    frames_dir = path.parent / "src_frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(frames):
+        frame = np.full((36, 64, 3), (index * 15 + 20, 40, 90), dtype=np.uint8)
+        cv2.imwrite(str(frames_dir / f"frame_{index:05d}.png"), frame)
+    encode(frames_dir, path, fps=fps, width=64, height=36)
+
+
+def test_build_idea_srt_has_one_cue_per_scene():
+    from clipforge_contracts.idea import IdeaOptions
+    from clipforge_director.idea_director import MockIdeaDirector
+    from clipforge_worker.idea_publish import build_idea_srt
+
+    board = MockIdeaDirector().create_storyboard(
+        BRIEF, IdeaOptions(duration_seconds=5, use_generated_images=False)
+    )
+    raw = build_idea_srt(board).decode("utf-8")
+    assert raw.count("-->") == 2
+    assert "00:00:00,000 --> 00:00:02,500" in raw
+    assert "00:00:02,500 --> 00:00:05,000" in raw
+    assert all(line.strip() for line in raw.splitlines() if line.strip() and "-->" not in line and not line.strip().isdigit())
+
+
+def test_probe_video_unrestricted_reads_beyond_mvp_caps(tmp_path):
+    if not _has_ffmpeg():
+        pytest.skip("ffmpeg is not available")
+    from clipforge_worker.idea_publish import probe_video_unrestricted
+
+    out = tmp_path / "long.mp4"
+    _make_mp4(out, frames=24, fps=8)
+    meta = probe_video_unrestricted(out)
+    assert meta["width"] == 64 and meta["height"] == 36
+    assert meta["duration_seconds"] == pytest.approx(3.0)
+
+
+def _publish_fixture(tmp_path, monkeypatch):
+    from clipforge_contracts.idea import IdeaAsset, IdeaOptions
+    from clipforge_contracts.storyboard import AssetSpec
+    from clipforge_director.idea_director import MockIdeaDirector
+    from clipforge_jobs.project_store import ProjectStore
+
+    monkeypatch.setenv("CLIPFORGE_CREATIVE_DIRECTOR_MODE", "mock")
+    monkeypatch.setenv("CLIPFORGE_IDEA_IMAGE_MODE", "mock")
+    store = IdeaStore(tmp_path / "storage")
+    projects = ProjectStore(tmp_path / "storage")
+    project = projects.create_project("Projeto de teste")
+    options = IdeaOptions(duration_seconds=5, use_generated_images=True)
+    board = MockIdeaDirector().create_storyboard(BRIEF, options)
+    plan = list(board.asset_plan)
+    plan.append(
+        AssetSpec(
+            asset_id="asset_scene_1_fg",
+            scene_ids=["scene_1"],
+            description="Foreground band",
+            orientation="portrait",
+            role="foreground",
+        )
+    )
+    board = board.model_copy(update={"asset_plan": plan})
+
+    record = _queued_record()
+    record.idea.options = options
+    record.idea.storyboard = board
+    record.project_id = project.project_id
+    assets = []
+    for spec in plan:
+        path = store.asset_path(record.idea_id, spec.asset_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _mock_plate(path)
+        assets.append(
+            IdeaAsset(
+                asset_id=spec.asset_id,
+                scene_ids=list(spec.scene_ids),
+                prompt="plate",
+                prompt_hash="0" * 64,
+                orientation="portrait",
+                status=AssetStatus.GENERATED,
+            )
+        )
+    record.idea.assets = assets
+    store.create(record)
+    mp4 = tmp_path / "render.mp4"
+    if _has_ffmpeg():
+        _make_mp4(mp4)
+    return store, projects, record, board, mp4
+
+
+def test_publish_registers_plates_srt_and_mp4(tmp_path, monkeypatch):
+    if not _has_ffmpeg():
+        pytest.skip("ffmpeg is not available (mp4 probe needs it)")
+    from clipforge_jobs.project_store import ProjectStore
+    from clipforge_worker.idea_publish import publish_idea_outputs
+
+    store, projects, record, board, mp4 = _publish_fixture(tmp_path, monkeypatch)
+    created = publish_idea_outputs(
+        store.root,
+        idea_id=record.idea_id,
+        project_id=record.project_id,
+        idea=record.idea,
+        board=board,
+        mp4_path=mp4,
+    )
+    # 3 plates (2 cenários + 1 frente) + legendas + mp4 verificado.
+    assert len(created) == 5
+    from clipforge_contracts.project import AssetRecord
+
+    kinds: dict[str, int] = {}
+    seen: set[str] = set()
+    for asset_file in projects.assets_dir(record.project_id).glob("*/asset.json"):
+        entry = AssetRecord.model_validate_json(asset_file.read_text(encoding="utf-8"))
+        assert entry.asset_id in created
+        seen.add(entry.asset_id)
+        assert entry.provenance.value == "generated"
+        kinds[entry.kind.value] = kinds.get(entry.kind.value, 0) + 1
+        assert (asset_file.parent / entry.stored_filename).is_file()
+    assert seen == set(created)
+    assert kinds == {"image": 3, "text": 1, "video": 1}
+    assert len(list(projects.assets_dir(record.project_id).glob("*/asset.json"))) == 5
+
+    # Second run is a no-op (idempotent per idea).
+    again = publish_idea_outputs(
+        store.root,
+        idea_id=record.idea_id,
+        project_id=record.project_id,
+        idea=record.idea,
+        board=board,
+        mp4_path=mp4,
+    )
+    assert again == created
+    assert len(list(projects.assets_dir(record.project_id).glob("*/asset.json"))) == 5
+
+
+def test_publish_skips_without_project(tmp_path, monkeypatch):
+    from clipforge_worker.idea_publish import publish_idea_outputs
+
+    store, _, record, board, mp4 = _publish_fixture(tmp_path, monkeypatch)
+    assert (
+        publish_idea_outputs(
+            store.root,
+            idea_id=record.idea_id,
+            project_id=None,
+            idea=record.idea,
+            board=board,
+            mp4_path=mp4,
+        )
+        == []
+    )

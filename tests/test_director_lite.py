@@ -128,7 +128,7 @@ def test_lite_wire_schema_pins_capability_param_enums():
         "named_subject",
         "foreground",
     ]
-    assert params["properties"]["asset_source"]["enum"] == ["local_asset", "mock_generated"]
+    assert params["properties"]["asset_source"]["enum"] == ["local_asset", "mock_generated", "programmatic"]
     assert params["properties"]["composition"]["enum"] == ["centered", "rule_of_thirds"]
 
 

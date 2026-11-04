@@ -74,8 +74,10 @@ def test_health_reports_transcription_mode(tmp_path, monkeypatch):
     assert body["image_mode"] == "mock"
     assert body["live_transcription_available"] is False
     assert body["live_image_available"] is False
-    assert body["live_call_limits"] == {"transcription": 2, "director": 2, "segmentation": 2, "image": 2}
-    assert body["live_calls_used"] == {"transcription": 0, "director": 0, "segmentation": 0, "image": 0}
+    assert body["chat_mode"] == "mock"
+    assert body["live_chat_available"] is False
+    assert body["live_call_limits"] == {"transcription": 2, "director": 2, "segmentation": 2, "image": 2, "chat": 2}
+    assert body["live_calls_used"] == {"transcription": 0, "director": 0, "segmentation": 0, "image": 0, "chat": 0}
 
 
 def test_conversion_produces_mono_24k_pcm16(spoken_webm, tmp_path):

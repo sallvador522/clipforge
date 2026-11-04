@@ -32,8 +32,8 @@ export function ConsentDialog({ submitting, error, reason, onAuthorize, onDeclin
     >
       <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-border bg-surface shadow-2xl sm:rounded-lg">
         <header className="border-b border-border px-4 py-3">
-          <p className="font-mono text-[10px] tracking-wider text-accent">
-            PROCESSAMENTO EXTERNO — SAM 3.1
+          <p className="text-[11px] tracking-wide text-accent">
+            Análise externa de vídeo
           </p>
           <h2 id="sam-consent-title" className="mt-1 text-lg font-semibold">
             Autorização para identificar pessoas
@@ -43,7 +43,7 @@ export function ConsentDialog({ submitting, error, reason, onAuthorize, onDeclin
         <div id="sam-consent-copy" className="space-y-4 px-4 py-4">
           {reason && (
             <p className="rounded-md border border-accent/40 bg-accent/10 p-3 text-[14px] leading-relaxed">
-              {reason} To do that, ClipForge needs to identify the people in your video first.
+              {reason} Para isso, o ClipForge precisa de identificar as pessoas no teu vídeo.
             </p>
           )}
           <p className="text-[14px] leading-relaxed">

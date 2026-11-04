@@ -22,7 +22,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clipforge_contracts.storyboard import Storyboard
+from clipforge_contracts.storyboard import Storyboard, StoryboardPatch
 
 ASPECT_DIMENSIONS: dict[str, tuple[int, int]] = {
     "9:16": (720, 1280),
@@ -49,7 +49,8 @@ def scene_count_for(duration_seconds: int) -> int:
 class IdeaOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    duration_seconds: int = Field(default=20, ge=5, le=60)
+    # ADR-036: no fixed ceiling; the director's delivered duration wins.
+    duration_seconds: int = Field(default=20, ge=5)
     aspect_ratio: Literal["9:16", "16:9"] = "9:16"
     fps: int = Field(default=24, ge=12, le=30)
     style_preset: Literal["cinematic", "documentary", "product", "bold"] = "cinematic"
@@ -218,6 +219,11 @@ class IdeaState(BaseModel):
     approvals: list[IdeaApproval] = Field(default_factory=list)
     storyboard: Storyboard | None = None
     storyboard_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # ADR-036 refinement: a director patch waits here for explicit user
+    # approval; it is applied to the storyboard only on /direct/apply.
+    pending_patch: StoryboardPatch | None = None
+    pending_patch_instruction: str | None = Field(default=None, max_length=1000)
+    pending_clarification_question: str | None = Field(default=None, max_length=300)
     assets: list[IdeaAsset] = Field(default_factory=list)
     spent_usd: float = Field(default=0.0, ge=0.0)
     versions: list[RenderVersion] = Field(default_factory=list)

@@ -46,6 +46,14 @@ from clipforge_providers.transcription_meta import (
     TranscriptionRateLimitedError,
     TranscriptionTimeoutError,
 )
+from clipforge_providers.translation_spark import (
+    SparkSubtitleTranslator,
+    TranslationAPIError,
+    TranslationError,
+    TranslationRateLimitedError,
+    TranslationResult,
+    TranslationTimeoutError,
+)
 
 __all__ = [
     "BackgroundGenerationProvider",
@@ -84,5 +92,11 @@ __all__ = [
     "TranscriptionProvider",
     "TranscriptionRateLimitedError",
     "TranscriptionTimeoutError",
+    "TranslationAPIError",
+    "TranslationError",
+    "TranslationRateLimitedError",
+    "TranslationResult",
+    "TranslationTimeoutError",
+    "SparkSubtitleTranslator",
     "get_providers",
 ]

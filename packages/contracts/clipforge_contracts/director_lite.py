@@ -85,8 +85,9 @@ LITE_WIRE_SCHEMA: dict = {
                             "prompt": {"type": "string"},
                             "asset_source": {
                                 "type": "string",
-                                "enum": ["local_asset", "mock_generated"],
+                                "enum": ["local_asset", "mock_generated", "programmatic"],
                             },
+                            "backdrop": {"type": "object"},
                             "composition": {
                                 "type": "string",
                                 "enum": ["centered", "rule_of_thirds"],
@@ -131,14 +132,15 @@ LITE_WIRE_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-LITE_BRIEF = """You are ClipForge's professional video editing director. Turn the confirmed instruction into one executable editing plan. Reason with professional editing knowledge, but plan ONLY these available capabilities: subject.isolate (synthetic placeholder masks, not SAM; params.strategy must be exactly one of largest_subject, named_subject, foreground), background.blur (local render), background.replace (local compositing over a generated background: Muse Image when live or local mock; requires approval), audio.preserve, video.render_mp4, output.verify (ffprobe checks). Everything else is unavailable — name it if asked, never plan it.
+LITE_BRIEF = """You are ClipForge's professional video editing director. Turn the confirmed instruction into one executable editing plan. Reason with professional editing knowledge, but plan ONLY these available capabilities: subject.isolate (synthetic placeholder masks, not SAM; params.strategy must be exactly one of largest_subject, named_subject, foreground), background.blur (local render), background.replace (local compositing: programmatic animated gradient backdrop when the user asks for gradient/minimalist/animated background — set asset_source to "programmatic" with a backdrop spec — else a generated background, Muse Image when live or local mock; requires approval), audio.preserve, video.render_mp4, output.verify (ffprobe checks). Everything else is unavailable — name it if asked, never plan it.
 RULES: smallest plan that fulfils the intent; order isolate, background, audio, render, verify; end every executable plan with output.verify; ambiguous subject or intent means needs_clarification with one focused question and zero operations; unsupported request means unsupported naming the capability with zero operations; explain each operation in one sentence, no chain-of-thought; never emit shell commands, paths, URLs, flags, credentials or arbitrary parameters.
 OUTPUT: exactly one JSON object matching the schema, nothing else. Copy request_id and raw_instruction verbatim. Set approval_status to "required" when background.replace is included, else "not_required"."""
 
 _LITE_REGISTRY_LINES = (
     "subject.isolate [synthetic placeholder masks, not SAM; "
     "params.strategy: largest_subject | named_subject | foreground]; background.blur [local]; "
-    "background.replace [generated background: Muse Image when live or local mock, REQUIRES APPROVAL]; "
+    "background.replace [programmatic animated backdrop (asset_source programmatic + backdrop spec) "
+    "or generated background: Muse Image when live or local mock, REQUIRES APPROVAL]; "
     "audio.preserve [local]; video.render_mp4 [local]; output.verify [local]. "
     "Unavailable (explain, never plan): background.generate (internal step of background.replace; "
     "never plan separately); scene.detect_cuts, "
@@ -213,10 +215,17 @@ def _typed_params(capability_id: str, raw: dict[str, Any]) -> BaseModel:
             feather_px=raw.get("feather_px", 5),
         )
     if capability_id == "background.replace":
+        from clipforge_contracts.capabilities import ProgrammaticBackdrop
+
+        backdrop_raw = raw.get("backdrop")
+        backdrop = None
+        if backdrop_raw is not None:
+            backdrop = ProgrammaticBackdrop.model_validate(backdrop_raw)
         return ReplaceBackgroundParams(
             prompt=raw.get("prompt", ""),
             asset_source=raw.get("asset_source", "local_asset"),
             composition=raw.get("composition", "centered"),
+            backdrop=backdrop,
         )
     if capability_id == "audio.preserve":
         return PreserveAudioParams()

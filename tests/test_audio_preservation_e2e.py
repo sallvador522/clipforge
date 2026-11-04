@@ -247,7 +247,7 @@ def test_worker_refuses_masks_bound_to_another_source(tmp_path, audio_video):
     assert worker.run_once() is True
     failed = client.get(f"/api/jobs/{job_id}").json()
     assert failed["status"] == "failed"
-    assert "do not belong to the original upload" in failed["error"]["message"]
+    assert "do not belong to the render source" in failed["error"]["message"]
     assert not (store.job_dir(job_id) / "output.mp4").exists()
 
 
