@@ -129,6 +129,12 @@ from clipforge_contracts.responses import (
     TranscriptResult,
     TranscriptTurn,
 )
+from clipforge_contracts.video_analysis import (
+    ProviderFileRef,
+    VideoAnalysis,
+    VideoMoment,
+    VideoScene,
+)
 
 __all__ = [
     "ApprovalStatus",
@@ -198,6 +204,10 @@ __all__ = [
     "SubjectStrategy",
     "TranscriptResult",
     "TranscriptTurn",
+    "ProviderFileRef",
+    "VideoAnalysis",
+    "VideoMoment",
+    "VideoScene",
     "Timeline",
     "TimelineClip",
     "ClipTextOverlay",

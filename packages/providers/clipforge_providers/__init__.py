@@ -54,6 +54,19 @@ from clipforge_providers.translation_spark import (
     TranslationResult,
     TranslationTimeoutError,
 )
+from clipforge_providers.video_analysis import (
+    SparkVideoAnalysisProvider,
+    VideoAnalysisAPIError,
+    VideoAnalysisError,
+    VideoAnalysisMissingCredentialsError,
+    VideoAnalysisNotAuthorizedError,
+    VideoAnalysisRateLimitedError,
+    VideoAnalysisTimeoutError,
+    VideoAnalysisUsage,
+    VideoAnalysisValidationError,
+    parse_analysis_sections,
+    prepare_analysis_copy,
+)
 
 __all__ = [
     "BackgroundGenerationProvider",
@@ -98,5 +111,16 @@ __all__ = [
     "TranslationResult",
     "TranslationTimeoutError",
     "SparkSubtitleTranslator",
+    "SparkVideoAnalysisProvider",
+    "VideoAnalysisAPIError",
+    "VideoAnalysisError",
+    "VideoAnalysisMissingCredentialsError",
+    "VideoAnalysisNotAuthorizedError",
+    "VideoAnalysisRateLimitedError",
+    "VideoAnalysisTimeoutError",
+    "VideoAnalysisUsage",
+    "VideoAnalysisValidationError",
     "get_providers",
+    "parse_analysis_sections",
+    "prepare_analysis_copy",
 ]

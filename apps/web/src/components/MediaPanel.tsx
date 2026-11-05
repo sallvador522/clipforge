@@ -197,7 +197,7 @@ export function MediaPanel({
             <span className="mt-3 max-w-[210px] text-[12px] leading-relaxed">
               Arrasta vídeos, fotos e ficheiros áudio para aqui
             </span>
-            <span className="mt-1.5 text-[10px] text-muted/80">ou clica · MP4 / MOV / WebM · máx 15 min · 720p</span>
+            <span className="mt-1.5 text-[10px] text-muted/80">ou clica · MP4 / MOV / WebM · máx 30 min · 720p</span>
           </button>
         ) : (
           <ul className="space-y-2 px-3 py-2.5">

@@ -174,6 +174,9 @@ class MockSegmentationProvider:
         prompt: str = "person",
         authorization=None,
         consent=None,
+        trim_start_s: float | None = None,
+        trim_end_s: float | None = None,
+        expected_source_hash: str | None = None,
     ) -> SegmentationResult:
         if frame_count <= 0 or width <= 0 or height <= 0 or fps <= 0:
             raise ValueError("width, height, frame_count and fps must be positive.")

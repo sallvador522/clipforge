@@ -7,11 +7,13 @@ interface Props {
   submitting: boolean;
   error: string | null;
   reason: string | null;
+  /** ADR-056: trecho vinculado ao consentimento (null = vídeo inteiro). */
+  trimLabel?: string | null;
   onAuthorize: () => void;
   onDecline: () => void;
 }
 
-export function ConsentDialog({ submitting, error, reason, onAuthorize, onDecline }: Props) {
+export function ConsentDialog({ submitting, error, reason, trimLabel, onAuthorize, onDecline }: Props) {
   const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
@@ -55,6 +57,12 @@ export function ConsentDialog({ submitting, error, reason, onAuthorize, onDeclin
             automaticamente após uma hora e tentamos eliminá-la assim que o processamento
             terminar.
           </p>
+          {trimLabel && (
+            <p className="rounded-md border border-accent/40 bg-accent/10 p-3 text-[14px] leading-relaxed" role="note">
+              Esta autorização cobre apenas o trecho {trimLabel} que selecionaste na
+              timeline. O resto do vídeo nunca é enviado.
+            </p>
+          )}
           <p className="text-[14px] leading-relaxed">
             Esta análise acontece antes de apresentarmos o teu plano de edição. Ao
             continuar, autorizas este processamento externo do vídeo.

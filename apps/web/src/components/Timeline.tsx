@@ -67,6 +67,8 @@ interface Props {
     canRender: boolean;
     /** ADR-051 output canvas chosen by the user (default preserves source). */
     format: "source" | "landscape" | "portrait";
+    /** ADR-058 honest host-calibrated ETA note shown next to Montar. */
+    etaNote?: string | null;
     onFormatChange: (format: "source" | "landscape" | "portrait") => void;
     /** Smart drop: the timeline routes by asset kind, never refuses a lane. */
     onAddClip: (t: number, asset: { asset_id: string; kind: string; duration: number; name?: string }) => void;
@@ -89,6 +91,15 @@ interface Props {
   onMoveText?: (id: string, newStart: number) => void;
   onTrimText?: (id: string, edge: "start" | "end", newT: number) => void;
   onRemoveText?: (id: string) => void;
+  /** Trecho selecionado pelo utilizador (segundos absolutos no original). */
+  segment?: { start_s: number; end_s: number } | null;
+  onMarkSegmentStart?: (time: number) => void;
+  onMarkSegmentEnd?: (time: number) => void;
+  onClearSegment?: () => void;
+  /** ADR-062 drop no vazio: cria job a partir do asset (sem job não há assembly). */
+  onEmptyDrop?: (t: number, asset: { asset_id: string; kind: string; duration: number; name?: string }) => void;
+  emptyDropping?: boolean;
+  emptyError?: string | null;
 }
 
 const THUMB_COUNT = 10;
@@ -212,12 +223,13 @@ function ClipFilmstrip({ projectId, assetId, sourceIn, duration }: { projectId: 
     </span>
   );
 }
-export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes, activeSceneId, onSeekScene, trackLabel, editedReady, onReorderScene, overlays, trim, assembly, assetNames, sessionAssetId, projectId, clipTexts, selectedTextId, onSelectText, onSeekText, onMoveText, onTrimText, onRemoveText }: Props) {
+export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes, activeSceneId, onSeekScene, trackLabel, editedReady, onReorderScene, overlays, trim, assembly, assetNames, sessionAssetId, projectId, clipTexts, selectedTextId, onSelectText, onSeekText, onMoveText, onTrimText, onRemoveText, segment, onMarkSegmentStart, onMarkSegmentEnd, onClearSegment, onEmptyDrop, emptyDropping, emptyError }: Props) {
   const [thumbs, setThumbs] = useState<string[]>([]);
   const [peaks, setPeaks] = useState<number[] | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [dropHint, setDropHint] = useState<{ track: TimelineTrack; t: number } | null>(null);
+  const [emptyHover, setEmptyHover] = useState(false);
   const [selectedClip, setSelectedClip] = useState<string | null>(null);
   const [dragGhost, setDragGhost] = useState<{ clipId: string; start: number; inn: number; out: number } | null>(null);
   const blockDrag = useRef<{ clipId: string; mode: "move" | "trim-l" | "trim-r"; startX: number; origStart: number; origIn: number; origOut: number } | null>(null);
@@ -347,8 +359,8 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
   }
 
   const playheadPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
-  // Adaptive ruler: at most ~140 ticks even for 15-min programs.
-  const STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  // Adaptive ruler: at most ~140 ticks even for 30-min programs.
+  const STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
   const tickEvery = STEPS.find((s) => duration / s <= 140) ?? 600;
   const ticks: number[] = [];
   for (let t = 0; t <= Math.max(duration, 0) + 0.001; t += tickEvery) ticks.push(t);
@@ -381,8 +393,29 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
       .replace("gradient_shift", "hue");
   }
 
+  // ---- ADR-044 assembly interactions (clip mode with assembly only) ----
+  // Program length drives the ruler band + seeking scale.
+  const prog = Math.max(assembly?.programDuration ?? duration, 0.01);
+
   const ruler = (
     <div className="relative h-5 shrink-0 border-b border-border/60">
+      {segment && segment.end_s > segment.start_s && prog > 0 && (() => {
+        // Band in program coordinates (single-clip mapping mirrors the toolbar).
+        const clips = assembly?.clips ?? [];
+        const single = clips.length === 1 ? clips[0] : null;
+        const p0 = single ? single.timeline_start_s + (segment.start_s - single.source_in_s) : segment.start_s;
+        const p1 = single ? single.timeline_start_s + (segment.end_s - single.source_in_s) : segment.end_s;
+        const c0 = Math.min(prog, Math.max(0, p0));
+        const c1 = Math.min(prog, Math.max(0, p1));
+        if (c1 <= c0) return null;
+        return (
+          <div
+            aria-hidden
+            className="absolute inset-y-0 rounded-[3px] bg-accent/25"
+            style={{ left: `${(c0 / prog) * 100}%`, width: `${Math.max(0.5, ((c1 - c0) / prog) * 100)}%` }}
+          />
+        );
+      })()}
       {ticks.map((t, i) => (
         <span key={t} className={`absolute top-1 font-mono text-[9px] tabular-nums text-muted/70 ${i === 0 ? "" : i === ticks.length - 1 ? "-translate-x-full" : "-translate-x-1/2"}`} style={{ left: `${duration ? (t / duration) * 100 : 0}%` }}>
           {rulerLabel(t)}
@@ -399,7 +432,7 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
   );
 
   // ---- ADR-044 assembly interactions (clip mode with assembly only) ----
-  const prog = Math.max(assembly?.programDuration ?? duration, 0.01);
+  // (prog is declared above the ruler so the segment band can use it.)
 
   function laneTime(clientX: number): number | null {
     const el = trackRef.current;
@@ -429,6 +462,32 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
       // Smart drop: the lane is only a hint — Studio routes by asset kind.
       assembly.onAddClip(t, { ...asset, name: asset.name });
     };
+  }
+
+  // ADR-062 empty drop: sem job não há assembly; a V1 aceita o drop na
+  // mesma e o Studio cria o job a partir do asset (sem inventar duração).
+  function emptyTime(clientX: number): number {
+    const el = trackRef.current;
+    const base = Math.max(duration, 0.01);
+    if (!el || base <= 0) return 0;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return 0;
+    return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * base;
+  }
+
+  function emptyOver(e: React.DragEvent) {
+    if (!onEmptyDrop) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setEmptyHover(true);
+  }
+
+  function emptyDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setEmptyHover(false);
+    const asset = readTimelineDrag(e.dataTransfer);
+    if (!onEmptyDrop || !asset) return;
+    onEmptyDrop(emptyTime(e.clientX), { ...asset, name: asset.name });
   }
 
   function ghostFromEvent(
@@ -759,6 +818,57 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
         </ToolButton>
         <span className="mx-1 h-4 w-px bg-border" aria-hidden />
         <span className="hidden font-mono text-[10px] tabular-nums text-muted sm:inline">{formatTime(currentTime)} / {formatTime(duration)}</span>
+        {!ideaMode && duration > 0 && onMarkSegmentStart && onMarkSegmentEnd && (() => {
+          // Trecho selects ORIGINAL source seconds. Valid only when the playhead
+          // maps 1:1 to the session upload: pure session mode, or a single V1/V2
+          // block of the session asset. Otherwise the buttons stay hidden.
+          const clips = assembly?.clips ?? [];
+          const single = clips.length === 1 ? clips[0] : null;
+          const sessionOnly = clips.length === 0;
+          const scoped = single ? single.asset_id === sessionAssetId : sessionOnly;
+          if (!scoped) return null;
+          const toSource = (t: number) => single
+            ? Math.min(single.source_out_s, Math.max(single.source_in_s, single.source_in_s + (t - single.timeline_start_s)))
+            : Math.min(duration, Math.max(0, t));
+          const srcNow = toSource(currentTime);
+          return (
+          <span className="ml-1 hidden items-center gap-1 md:flex" role="group" aria-label="Marcar trecho para o Director">
+            <button
+              type="button"
+              onClick={() => onMarkSegmentStart(toSource(currentTime))}
+              title="Marca o início do trecho no playhead"
+              aria-label="Marcar início do trecho no playhead"
+              className="flex h-7 items-center rounded-[6px] border border-border bg-raised px-2 text-[11px] font-medium hover:border-muted focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              Início
+            </button>
+            <button
+              type="button"
+              onClick={() => onMarkSegmentEnd(toSource(currentTime))}
+              disabled={!segment || srcNow <= segment.start_s}
+              title={segment ? "Marca o fim do trecho no playhead" : "Marca primeiro o início do trecho"}
+              aria-label="Marcar fim do trecho no playhead"
+              className="flex h-7 items-center rounded-[6px] border border-border bg-raised px-2 text-[11px] font-medium hover:border-muted focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
+            >
+              Fim
+            </button>
+            {segment && segment.end_s > segment.start_s && (
+              <span className="flex items-center gap-1 rounded-[6px] border border-accent/50 bg-accent/10 px-1.5 py-1 font-mono text-[10px] tabular-nums text-foreground">
+                Trecho {rulerLabel(segment.start_s)}–{rulerLabel(segment.end_s)}
+                <button
+                  type="button"
+                  onClick={() => onClearSegment?.()}
+                  aria-label="Limpar trecho selecionado"
+                  title="Limpar trecho"
+                  className="flex h-4 w-4 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6 6 18" /></svg>
+                </button>
+              </span>
+            )}
+          </span>
+          );
+        })()}
 
         <span className="ml-auto flex items-center gap-0.5">
           {assembly && (
@@ -786,6 +896,11 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
               {assembly.rendering ? "A montar…" : "Montar"}
             </button>
           )}
+          {assembly?.etaNote && (
+            <span className="mr-1 hidden max-w-44 truncate font-mono text-[10px] tabular-nums text-muted md:inline" title={assembly.etaNote} role="status">
+              {assembly.etaNote}
+            </span>
+          )}
           <ToolButton label="Íman de posiÃ§Ã£o" active>
             <svg {...iconProps}><path d="M6 3v8a6 6 0 0 0 12 0V3M6 3h4v5H6zM14 3h4v5h-4z" /></svg>
           </ToolButton>
@@ -801,6 +916,11 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
       {assembly?.renderError && (
         <p role="alert" className="shrink-0 border-b border-danger/40 bg-danger/10 px-3 py-1 text-[11px] text-danger">
           {assembly.renderError}
+        </p>
+      )}
+      {!assembly && emptyError && (
+        <p role="alert" className="shrink-0 border-b border-danger/40 bg-danger/10 px-3 py-1 text-[11px] text-danger">
+          {emptyError}
         </p>
       )}
 
@@ -955,7 +1075,14 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
                 </>
               ) : (
                 <>
-                  <div className={`relative flex ${H.v1} overflow-hidden rounded bg-black/50`}>
+                  <div
+                    className={`relative flex ${H.v1} overflow-hidden rounded bg-black/50 ${emptyHover ? "outline-2 outline-accent" : ""} ${onEmptyDrop ? "cursor-copy" : ""}`}
+                    onDragOver={onEmptyDrop ? emptyOver : undefined}
+                    onDragLeave={onEmptyDrop ? () => setEmptyHover(false) : undefined}
+                    onDrop={onEmptyDrop ? emptyDrop : undefined}
+                    role={onEmptyDrop ? "group" : undefined}
+                    aria-label={onEmptyDrop ? "Faixa V1 — larga um vídeo aqui para começar" : undefined}
+                  >
                     {thumbs.length > 0 ? (
                       thumbs.map((src, i) => (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -963,7 +1090,11 @@ export function Timeline({ file, duration, currentTime, hasAudio, onSeek, scenes
                       ))
                     ) : (
                       <div className="flex w-full items-center border-y border-dashed border-border/50 px-2 text-[10px] text-muted">
-                        {file ? "A ler fotogramas…" : "Importa um clipe — os fotogramas alinham nesta faixa"}
+                        {emptyDropping
+                          ? "A preparar o teu vídeo…"
+                          : onEmptyDrop
+                            ? "Arrasta um vídeo para aqui para começar — ou importa em Recursos"
+                            : file ? "A ler fotogramas…" : "Importa um clipe — os fotogramas alinham nesta faixa"}
                       </div>
                     )}
                     <span className="absolute left-1 top-1 rounded bg-black/70 px-1 text-[10px] text-foreground">V1 Â· Origem</span>

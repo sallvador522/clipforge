@@ -132,7 +132,8 @@ class JobProcessor:
         """ADR-041: build the trimmed working copy once (idempotent via marker).
 
         The original upload is never modified. Live SAM consent binds the
-        ORIGINAL hash, so trim + live segmentation is refused outright.
+        ORIGINAL hash plus the trim window (ADR-056), so trim + live
+        segmentation proceeds and the worker verifies both before any upload.
         Clearing a previously materialized trim re-probes the original and
         restores source_info.
         """
@@ -153,11 +154,8 @@ class JobProcessor:
                     trimmed_sha256=None,
                 )
             return record
-        if self.providers.segmentation_mode == "live":
-            raise ValueError(
-                "Trim is not supported with live SAM segmentation: consent binds the "
-                "original source hash. Clear the trim or use mock segmentation."
-            )
+        # ADR-056: trim + live SAM proceeds; the worker verifies the bound
+        # original hash and the trim window before any upload.
         job_dir = self.store.job_dir(job_id)
         trimmed_path = job_dir / "trimmed_source.mp4"
         marker_path = job_dir / "trimmed.json"
@@ -422,6 +420,8 @@ class JobProcessor:
                 source_video_hash=source_hash,
                 provider=provider_name,
                 model=model,
+                trim_start_s=record.trim_start_s,
+                trim_end_s=record.trim_end_s,
             )
         except (OSError, ConsentValidationError, ValueError, AttributeError):
             return False
@@ -429,8 +429,8 @@ class JobProcessor:
 
     def _run_segmentation(self, job_id: str, record):
         info = record.source_info
-        # Consent always binds the ORIGINAL upload; segmentation consumes the
-        # effective (possibly trimmed) source.
+        # Consent binds the ORIGINAL upload plus the trim window (ADR-056);
+        # segmentation consumes the effective (possibly trimmed) source.
         original_path = self._canonical_source_path(record)
         source_path = self._effective_source_path(record)
         authorization = None
@@ -452,11 +452,21 @@ class JobProcessor:
                 source_video_hash=source_hash,
                 provider=provider_name,
                 model=model,
+                trim_start_s=record.trim_start_s,
+                trim_end_s=record.trim_end_s,
             )
             consent = record.subject_detection_consent
             authorization = LiveCallAuthorization(
                 LiveCallBudget(self.store.root), "segmentation"
             )
+            # ADR-056: with a trecho, SAM consumes the verified trimmed copy;
+            # otherwise the file must be the consented original itself.
+            if record.trim_start_s is not None:
+                expected_hash = record.trimmed_sha256
+            else:
+                expected_hash = source_hash
+        else:
+            expected_hash = None
         return self.providers.segmentation.segment(
             job_id=job_id,
             source_video_id=record.job_id,
@@ -469,6 +479,9 @@ class JobProcessor:
             prompt="person",
             authorization=authorization,
             consent=consent,
+            trim_start_s=record.trim_start_s,
+            trim_end_s=record.trim_end_s,
+            expected_source_hash=expected_hash,
         )
 
     def _execute_approved_plan(self, job_id: str, record, transcript: TranscriptResult) -> str:

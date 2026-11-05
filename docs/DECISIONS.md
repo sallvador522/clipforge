@@ -606,3 +606,102 @@ except the status note below.)
   - **Sem novas dependencias:** nenhuma. A conversa continua stateless server-side; a memoria e o historico resentido pelo Studio, por sessao.
 - **Evidence:** `tests/test_chat_context.py` (11: count com/sem clipe, follow-up meta, greeting sem pending, edicao real continua pending sem marcar ready, live com snapshot+history preservando intent question, gibberish com clipe vira clarify sem pending, nome de alvo continua a propor, instrucao real continua edit_proposal, pergunta direta com clipe não faz crash 500); chat suites 37 passed; suite completa 514 passed; `tsc` + `next build` limpos. Uma falha transitoria por `output_name` inexistente no render foi corrigida para `output_relative_path` e re-verificada.
 - **Consequences:** o comportamento observado no QA muda de "template de edicao" para diretor contextual; cada turno live continua a custar 1 slot chat, mas agora recebe contexto real; pending gates intactos.
+
+## ADR-057: Muse Spark native video understanding (análise visual real)
+
+- **Status:** Implemented and live-validated (2026-11-04). Offline: httpx MockTransport + ffmpeg local, zero paid calls. Live TEST 1+2 executado com aprovação explícita ($0.10): upload do Facebook_2 + 1 análise Responses com conteúdo visual real confirmado.
+- **Context:** o Muse era cego — respondia por transcript/metadata. O utilizador pediu que o Muse receba o vídeo de verdade, entenda o conteúdo visual e use esse entendimento para dirigir a edição. Contratos oficiais verificados em `dev.meta.ai` a 2026-11-04: Video understanding (`muse-spark-1.3` lê sequência visual + áudio incorporado, Responses via `input_file`+`file_id` ou Chat Completions via `video_url`); File handling (`POST /v1/files`, `purpose=user_data`, `expires_after` 3600s–30d, inline ≤50MB, upload ≤1GiB, teto de equipa 100GiB, `DELETE /v1/files/{id}`); Pricing (Spark Contributor $0.10/$0.20 por 1M tokens in/out; sem preço fixo por vídeo — tokens de vídeo contam como input; medido: ~220 tokens/s a 360×640). Reasoning partilha o teto de output — `reasoning.effort: minimal` + cap 2000 obrigatórios (sem isto, 1200 tokens esgotam em reasoning e a resposta vem vazia; OBSERVED no primeiro teste). Tool calling (Responses `function_call` + `previous_response_id`, Chat Completions `tool_calls`; `tool_choice` só `auto`; nomes com no máximo um ponto); Audio em Spark 1.3 declarado não totalmente suportado (exemplos usam 1.2).
+- **Decision:**
+  - **Contratos:** `VideoAnalysis` (tudo descritivo opcional; `raw_text` obrigatório; sem fabricar campos) + `ProviderFileRef` (file_id vinculado ao sha256 exato do asset) em `packages/contracts/.../video_analysis.py`.
+  - **Provider:** `SparkVideoAnalysisProvider` (mesmo endpoint/auth das integrações verificadas; `POST /v1/responses` com `input_text` + `input_file`, resposta em texto puro sem `response_format` truques nem tools; sem retries). Upload reutiliza o padrão SAM (`purpose=user_data`, `expires_after` 3600s); normalização ffmpeg cria cópia **só-vídeo** (áudio removido por contrato degradado do 1.3; fala continua na ASR verificada, só a pedido).
+  - **Cache e frescura:** `provider_files.json` por asset (file_id reutilizado enquanto o sha256 for igual); `analysis.json` por asset; GET devolve 409 `analysis_stale` se o vídeo mudou; `DELETE asset` tenta `DELETE` remoto best-effort (nunca falha a eliminação local).
+  - **Orçamento:** slot novo `video_analysis` no ledger (default 2, consultivo; env `CLIPFORGE_LIVE_VIDEO_LIMIT`); uma análise = upload (se preciso) + 1 Responses sob **um** slot; teto por análise `ANALYSIS_CEILING_USD = $0.10`, aprovação explícita via `approved_cost_usd` (409 `cost_cap_exceeded` abaixo do teto); modo `CLIPFORGE_VIDEO_MODE=mock|live` (default mock, fixture simulada marcada, zero custo, sem ledger).
+  - **Integração:** `POST /api/projects/{pid}/assets/{aid}/analyze` + `GET .../analysis`; chat responde de cache (`answer_project_question`: pedido de análise sem cache → clarify a apontar o botão; com cache → resumo/momentos; sem cache + pergunta de conteúdo → mesmo clarify); Studio: painel Propriedades do vídeo com botão «Analisar vídeo», confirmação com estimativa, estados honestos (a preparar nunca é fingido — é um único estado «a analisar»; sem percentagens inventadas); `/health` com `video_mode`/`live_video_available`.
+  - **Âmbito deliberado (proposto na spec §9, adiado):** loop multi-turn de tool-calling autónomo fica para follow-up após validação — a análise alimenta o director existente (propostas + Executar com aprovação), sem execução automática.
+- **Evidence:** `tests/test_video_analysis.py` (21: parser leniente/sem-invenção/truncagem, provider mocked: upload+analyse/usage/custo/429/JSON inválido/sem-chave/sem-auth/sem-retry/reasoning-minimal, normalização ffmpeg real sem áudio + rejeição de não-vídeo, endpoint mock zero-custo + aprovação obrigatória + 409 stale + delete limpa sidecars, live com MockTransport: upload 1× + reuse + 2 slots; health limits atualizados); chat context: resposta a análise + fallback a excerto verbatim; suite completa **553 passed**; `tsc` + `next build` limpos.
+- **Evidence (live, aprovado $0.10):** Facebook_2 (19.6 s, 360×640) — `POST .../analyze` → 200, análise real e correcta (split-screen adcopy.ai, apresentador de t-shirt preta e boné, legendas amarelas, CTA webinar Skool); custo medido **$0.000709** (4993 in / 1049 out); `provider_response_id` persistido; file_id reutilizado na 2ª chamada (sem re-upload); servido via GET + chat. 1ª tentativa falhou sem output (reasoning high esgotou 1200 tokens — diagnóstico honesto, sem retry automático; corrigido com `reasoning.effort: minimal` + cap 2000).
+- **Consequences:** vídeo de ~20 s a 360p ≈ 5000 tokens de input (~$0.0005); re-análises do mesmo asset reutilizam o file_id sem novo upload; análises de assets diferentes são chamadas novas; teto $0.10 por análise mantém-se folgado.
+
+## ADR-055: Trecho da timeline como âmbito do Director (segment-scoped SAM)
+
+- **Status:** Implemented and verified (2026-11-04). **Zero paid calls.**
+- **Context:** o utilizador quer marcar uma parte do vídeo na timeline e que o Director trabalhe só nela (ex.: remover o fundo de um trecho). O SAM hospedado aceita no máximo 15.000 frames por chamada (~8:20 a 30 FPS); mandar um vídeo longo inteiro é impossível e caro.
+- **Decision:**
+  - **Seleção:** botões Início/Fim na toolbar da timeline marcam segundos absolutos do original; válidos só com mapeamento 1:1 (modo sessão ou bloco único do asset da sessão); chip + faixa na régua + chip no composer; limpar com ×.
+  - **Contrato:** `ChatSegment{start_s, end_s}` em `ChatRequest` (extra="forbid"), validado contra a duração real (422 fora do vídeo, <0.5s rejeitado).
+  - **Router:** fundo+trecho → estimativa honesta (frames = janela×fps, custo = frames/1000×$0.20) e proposta com `pending_segment`; trecho acima do teto → pede recorte menor sem pending; vídeo longo sem trecho → pede para marcar trecho; vídeo curto sem trecho → fluxo antigo.
+  - **Execução:** Executar com `pending_segment` aplica `POST /jobs/{id}/trim` primeiro e aborta sem submeter se falhar; depois corre o fluxo normal sobre a cópia recortada. Trim+SAM-live continua recusado por design pré-existente (consentimento vincula o hash original) — documentado, não alterado.
+  - **Guardas:** `_guard_pending` limpa `pending_segment`; `sendChat` propaga o trecho; AssistantPanel mostra o trecho no cartão e no composer.
+- **Evidence:** `tests/test_chat_segment.py` (6); browser SEGMENT-E2E (marcar → proposta → Executar → trim aplicado → director em curso, 0 erros consola); suite completa **520 passed**; `tsc` + `next build` limpos.
+- **Consequences:** o Director passa a operar por janelas; execução SAM no segmento em live pendente de re-vinculação do consentimento ao recorte (futuro).
+
+## ADR-056: Consentimento SAM vinculado ao recorte (trecho)
+
+- **Status:** Implemented and verified (2026-11-04). **Zero paid calls** — verificação offline + browser até ao diálogo (recusado, sem chamada SAM).
+- **Context:** o trecho da timeline (ADR-055) permite ao Director propor trabalho SAM numa janela, mas trim + SAM live era recusado: o consentimento vinculava só o hash do original. Sem isto, o fluxo do trecho morria na demo live.
+- **Decision:**
+  - **Contrato:** `SubjectDetectionConsent` ganha `trim_start_s/trim_end_s` (None = vídeo inteiro); validação com código novo `subject_detection_consent_trim_mismatch` quando a janela difere.
+  - **Vinculação:** `_bind_consent_record` regista a janela atual do job (+ hash da cópia recortada quando já materializada, i.e. via `/consent`; via voice ainda não existe e a janela governa).
+  - **Execução:** `set_trim` e `_materialize_trim` aceitam live; o worker verifica hash original + janela antes de qualquer upload; o provider recebe a janela + hash esperado e recusa ficheiro inesperado antes da rede; `submit_consent` inalterado na forma.
+  - **UI:** o diálogo de consentimento mostra "apenas o trecho MM:SS–MM:SS" quando há recorte.
+  - **Estabilidade:** com trim bloqueado após voice (409 pré-existente), a janela não muda depois do consentimento; validações antigas sem janela passam como antes.
+- **Evidence:** `tests/test_consent_trim_rebind.py` (5: códigos de mismatch, trim permitido em live, SAM no recorte com hash verificado, binding com janela+hash, recusa de ficheiro inesperado); suite completa **525 passed**; browser SEGMENT-E2E + diálogo de consentimento com trecho (recusado, ledger intacto); `tsc` + `next build` limpos.
+- **Consequences:** o fluxo todo do trecho funciona em live até ao consentimento; a chamada SAM live real continua por validar com aprovação explícita e custo estimado (≈$0,20/1.000 frames).
+
+## ADR-058: Upload retomavel fatiado + teto de 30 min (producao)
+
+- **Status:** Implemented and verified (2026-11-04). **Zero paid calls.**
+- **Context:** sair do MVP para producao exige uploads de 30 min fiaveis. O POST unico com timeout XHR de 60 s falha em ficheiros grandes sem retomar; a validacao marcava 15 min.
+- **Decision:**
+  - **Protocolo:** `POST /api/uploads/chunked` (declara ficheiro/chunks) -> `PUT .../{id}/{index}` corpo raw (idempotente, 64 MB/chunk) -> `GET .../{id}` (retoma) -> `POST .../{id}/complete` (monta por ordem, verifica tamanho, corre o finalize padrao) -> `DELETE` (aborta e limpa). Nenhum job existe antes do complete; manifest + sweep de orfaos >24 h.
+  - **Teto:** validacao sobe para 1800 s (video e audio de biblioteca); programa multitrack e regua ate 1800 s via `PROGRAM_LIMIT_S`; mensagens sem MVP.
+  - **Frontend:** `uploadVideoChunked` (8 MB/chunk, retry x3 com backoff, timeout 120 s/chunk, progresso em bytes reais); sessao usa-o; erros mapeados em PT.
+  - **Single-shot preservado** (refatorado para o mesmo finalize, sem mudanca de comportamento).
+- **Evidence:** `tests/test_chunked_upload.py` (5: roundtrip byte-identico, resume, formas invalidas, abort, media invalida sem orfaos); browser CHUNKED-UI (init->status->PUT->complete->job, 0 erros); suite completa **558 passed**; `tsc` + build limpos.
+- **Consequences:** retomar funciona por sessao; retomar entre recarregamentos e uploads multi-GB reais ficam para validacao com ficheiros grandes (fora desta unidade).
+
+## ADR-059: Retomar upload entre recarregamentos + ETA adaptativo no Montar
+
+- **Status:** Implemented and verified (2026-11-04). **Zero paid calls.**
+- **Context:** uploads longos interrompidos (reload, queda de rede) reenviavam tudo; o Montar nao dizia quanto falta num programa de 30 min.
+- **Decision:**
+  - **Retomar:** `PendingUpload` em `clipforge.pendingUpload`; ao escolher o mesmo ficheiro (nome+bytes), o Studio retoma do status do servidor (sem re-PUT); ficheiro diferente aborta a sessao antiga; `reset` aborta e limpa; falha mantem o pendente para nova tentativa; status honesto `A retomar envio...`.
+  - **ETA:** EMA local `clipforge.renderRate` (program-seconds por real second), gravada 1x por render verificado; nota `cerca de X (estimativa desta maquina)` durante queued/processing; sem calibracao e apos 30 s, aviso generico honesto. Nenhuma mudanca de contrato backend.
+- **Evidence:** browser PHASEB (resume multi-chunk sem re-PUT + status, nota ETA com conta certa 60 s/0.05 = 20 min, EMA atualizada por render real, 0 erros); suite completa **559 passed**; `tsc` + build limpos.
+- **Consequences:** retomar entre sessoes depende do mesmo ficheiro; ETA e por maquina e melhora a cada render; renders muito longos continuam longos, mas avisados.
+
+## ADR-060: Transcricao do audio-fonte em blocos (limite 10 min do provider)
+
+- **Status:** Implemented and verified (2026-11-04). **Zero paid calls.**
+- **Context:** videos de 30 min excedem o teto do Muse Transcribe (10 min / 32 MB por pedido). Transcrever o audio do clipe inteiro exige fatiar, estimar custo antes, juntar com offsets e falhar sem parcial.
+- **Decision:**
+  - **Pipeline:** extrai WAV mono 16-bit 24 kHz da fonte (ou da janela do trecho), divide em blocos de 9.5 min (`-ss/-t` + verificacao), 1 chamada live por bloco com autorizacao one-shot, juncao com offsets em ms e turn_ids reindexados.
+  - **Aprovacao de custo:** `POST .../source-transcript` sem `confirmed` devolve so a estimativa (blocos, segundos faturados, USD); com `confirmed` corre async via BackgroundTasks (API nunca bloqueia); `GET` faz poll (idle/running/completed/failed).
+  - **Falha fechada:** qualquer bloco que falhe aborta sem transcript parcial; erro com codigo do bloco; mock deterministico etiquetado, custo zero.
+  - **Chat:** `transcreve o audio deste video` propoe com blocos + USD (pending_kind `transcript`); Executar corre e entrega o texto + contagem de turnos; sem audio = clarificacao, sem pending.
+- **Evidence:** `tests/test_source_transcript.py` (8: matematica, offsets, split, estimate sem side effects, loop mock 3 blocos, falha no bloco 2 sem parcial, router com/sem audio); suite completa **559 passed**; `tsc` limpo; smoke leitura no :3000 da stack live (0 erros consola, 0 chamadas).
+- **Consequences:** cada bloco = 1 slot `transcription` no ledger (30 min ~= 4 slots, ~$0,11); legendas a partir do texto entregue e o alinhamento fino ficam para depois.
+
+## ADR-061: Chat segue a selecao dos Recursos + anexo vira asset (nao job)
+
+- **Status:** Implemented and verified (2026-11-04). **Zero paid calls** — router determinístico, intents sem pending, sem ledger, sem providers.
+- **Context:** com um vídeo selecionado na biblioteca e analisado antes, perguntar "sabes sobre oque é o video?" respondia que não tinha o conteúdo: o `/api/chat` nunca recebia a seleção (só job/project_id) e a análise vive presa a (project_id, asset_id, sha256). Pior: anexar um vídeo com um clipe carregado caía em `uploadFileObject`, que recusa quando há job (`if (uploadingRef.current || job) return null`) — e a mensagem de erro culpava o formato.
+- **Decision:**
+  - **Seleção viaja no turno:** `ChatRequest.selected_asset_id` (max 32 chars); o backend só a aceita se o sidecar existir **e** `meta.project_id` for igual ao projeto efetivo — senão ignora em silêncio (nunca 422 que parta o chat, nunca fuga entre projetos). `build_chat_context` marca o asset (`"selected": true`) e expõe `selected_asset_id` no snapshot.
+  - **Ordem de resposta:** 1) asset selecionado com análise → responde dele, nomeando-o; 2) seleção sem análise → clarify a apontar «Analisar vídeo» **naquele** asset (nunca responde sobre outro vídeo); 3) sem seleção, job cujo sha256 bate num asset analisado → responde dele; 4) vários analisados sem desempate → clarify a perguntar qual («A» ou «B»), em vez de escolher em silêncio; 5) um só → como antes.
+  - **Fallback sha256 (mesmo projeto):** re-import/cópia de sessão com bytes idênticos reutiliza o resumo sem re-analisar; nunca atravessa projetos.
+  - **Anexo vira asset:** `handleAttachVideo` com job carregado importa via `uploadAsset` para a biblioteca (não substitui o job), seleciona-o e sugere «Analisar vídeo»; sem job mantém o fluxo antigo (novo job de edição). A mensagem de erro antiga ("verifica o formato") só aparece agora em falha real de importação.
+  - **Prompt honesto:** o snapshot inclui «Vídeo selecionado nos Recursos: X (com/sem análise)» e a ordem de preferência, para o live Spark não inventar outro alvo.
+- **Evidence:** `tests/test_chat_selected_asset.py` (10: +2 regressões 2026-11-05 — conjugações reportadas "analise o video para mim"/"estou a (a)pedir para analisar"/"quero que analises ele" nunca pedem estilo nem Executar, apontam «Analisar vídeo»; "qual video tenho selecionado" nomeia o selecionado sem estilo); `_requests_visual_analysis` com raiz "analis"/"anális" + guarda-redes anti-interview no `/api/chat`; chat suites 26 passed (2026-11-05); suite completa pós-fix **576 passed**; `tsc` limpo (sem alterações web). E2E no browser adiado a pedido — fica como follow-up.
+- **Consequences:** a selecção dos Recursos passa a ser a mira do Muse; pergunta sem análise continua a não inventar conteúdo; o anexo deixa de morrer em silêncio. Pendentes/gates de aprovação intactos.
+
+## ADR-062: Drop no vazio cria job a partir do asset (sem assembly)
+
+- **Status:** Implemented and verified (2026-11-05). **Zero paid calls** — fetch local + chunked upload + timeline local, sem IA.
+- **Context:** com a biblioteca cheia mas sem job/sessão, arrastar o vídeo para a V1 não fazia nada: `Timeline` só tinha `onDragOver/onDrop` quando `assembly != null` (`laneOverAt/laneDropAt` com `if (!assembly) return`), e `Studio` só passava `assembly` quando `job && assembly`. O browser recusava o drop sem feedback.
+- **Decision:**
+  - **V1 droppable no vazio:** `Timeline` aceita `onEmptyDrop/emptyDropping/emptyError`; a faixa V1 vazia faz `preventDefault` + highlight + `readTimelineDrag` e chama `onEmptyDrop(t, asset)`. Texto/áudio no vazio dão mensagem honesta (texto precisa de vídeo; áudio entra depois na A1).
+  - **Studio cria o job:** `handleEmptyDrop` valida kind/duração; com `job && assembly` delega ao `handleSmartDrop`; com `job && !assembly` recarrega a timeline; sem job faz `fetch(assetFileUrl)->File->uploadFileObject` (chunked, sem IA) e o auto-place existente coloca o clipe na V1. O asset original fica intacto; o job usa uma cópia `session_source` (duplicação documentada, bytes iguais).
+  - **Honestidade:** hint vazio passa a "Arrasta um vídeo para aqui para começar"; loading "A preparar o teu vídeo…"; erros em `emptyError`/banner, nunca silenciosos.
+- **Evidence:** `tsc` + `next build` limpos; `tests/test_timeline_api.py` + `test_timeline_contracts.py` 18 passed; browser isolado (API :8001 + web :3000, mock): projeto com 1 asset vídeo 4 s sem job → hint visível → drop simulado → job criado + `PUT /timeline` com 1 clipe V1 0–4 s → `POST /timeline/render` → `completed/verified` → ffprobe 320x180 h264+aac 4.0 s + `source.mp4` preservado, 0 erros consola.
+- **Consequences:** o vazio deixa de ser beco sem saída; a duplicação sessão vs biblioteca mantém-se até um futuro `POST /api/jobs/from-asset` (opção B adiada).

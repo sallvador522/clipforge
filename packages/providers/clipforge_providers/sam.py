@@ -281,6 +281,9 @@ class SamSegmentationProvider:
         prompt: str = "person",
         authorization=None,
         consent: SubjectDetectionConsent | None = None,
+        trim_start_s: float | None = None,
+        trim_end_s: float | None = None,
+        expected_source_hash: str | None = None,
     ) -> SegmentationResult:
         if source_path is None:
             raise SamValidationError("SAM live segmentation requires the source video path.")
@@ -289,13 +292,24 @@ class SamSegmentationProvider:
         source = Path(source_path)
         if not source.is_file():
             raise SamValidationError("Source video not found for SAM segmentation.")
-        source_sha256 = sha256_file(source)
+        file_hash = sha256_file(source)
+        # ADR-056: the uploaded file must be exactly the consented file. With
+        # a trecho, the worker passes the trimmed copy plus its verified hash;
+        # without one, the file must be the consented original itself.
+        effective_hash = expected_source_hash or file_hash
+        if file_hash != effective_hash:
+            raise ConsentValidationError(
+                "subject_detection_consent_source_mismatch",
+                "The file prepared for SAM differs from the verified source; no upload was attempted.",
+            )
         validate_subject_detection_consent(
             consent,
             job_id=job_id,
-            source_video_hash=source_sha256,
+            source_video_hash=effective_hash,
             provider=self.provider_name,
             model=self._model,
+            trim_start_s=trim_start_s,
+            trim_end_s=trim_end_s,
         )
         self._require_authorization(authorization)
 
@@ -313,7 +327,7 @@ class SamSegmentationProvider:
                 frame_count=frame_count,
                 fps=fps,
             )
-            if sha256_file(source) != source_sha256:
+            if sha256_file(source) != effective_hash:
                 raise ConsentValidationError(
                     "subject_detection_consent_source_mismatch",
                     "The source video changed while the SAM input was being prepared; "
@@ -352,7 +366,7 @@ class SamSegmentationProvider:
                     height=height,
                     frame_count=frame_count,
                     fps=fps,
-                    source_sha256=source_sha256,
+                    source_sha256=effective_hash,
                     source_path=source,
                 )
                 if recovered:

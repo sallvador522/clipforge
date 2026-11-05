@@ -39,7 +39,7 @@ export function friendlyApiError(e: unknown, fallback: string): string {
       case "file_too_large":
       case "media_too_long":
       case "upload_too_large":
-        return "Ficheiro demasiado grande. O limite é 15 min em 720p.";
+        return "Ficheiro demasiado grande. O limite é 30 min em 720p.";
       case "upload_timeout":
         return "O envio demorou demasiado. Tenta de novo.";
       case "project_not_found":
@@ -55,6 +55,14 @@ export function friendlyApiError(e: unknown, fallback: string): string {
         return "O vídeo já está noutra fase. Recarrega para ver o estado actual.";
       case "bad_response":
         return "Resposta ilegível da API. Recarrega e tenta de novo.";
+      case "chunks_missing":
+        return "Faltam partes do envio. A retomar automaticamente…";
+      case "size_mismatch":
+        return "O ficheiro chegou diferente do enviado. Tenta de novo.";
+      case "assembly_failed":
+        return "Não consegui juntar as partes. Tenta de novo.";
+      case "upload_not_found":
+        return "Sessão de envio expirada. Escolhe o ficheiro outra vez.";
       default:
         return fallback;
     }
@@ -117,11 +125,158 @@ function xhrUpload<T>(
   });
 }
 
-export function uploadVideo(file: File, onProgress: (percent: number) => void, projectId?: string | null): Promise<JobResponse> {
-  const form = new FormData();
-  form.append("file", file);
-  if (projectId) form.append("project_id", projectId);
-  return xhrUpload<JobResponse>("/api/uploads", form, onProgress);
+/** Pending chunked upload, persisted by the Studio so an interrupted send
+ * can resume after reload by re-selecting the same file. */
+export interface PendingUpload {
+  upload_id: string;
+  filename: string;
+  total_bytes: number;
+  total_chunks: number;
+  chunk_bytes: number;
+  project_id: string | null;
+}
+
+export async function abortChunkedUpload(uploadId: string): Promise<void> {
+  try {
+    await requestJson<{ deleted: boolean }>(`/api/uploads/chunked/${encodeURIComponent(uploadId)}`, {
+      method: "DELETE",
+    });
+  } catch {
+    /* already gone or expired: disk cleanup is best-effort server-side */
+  }
+}
+
+/** ADR-058 resumable chunked upload: init → PUT raw chunks (retry ×3,
+ * resume via server status) → complete. Progress is real bytes, failures
+ * surface friendly codes, and no job exists until complete succeeds.
+ * Pass `resume` (from a previous interrupted send of the same file) to skip
+ * re-sending chunks the server already holds; `onUploadId` persists the
+ * session for cross-reload resume. */
+export async function uploadVideoChunked(
+  file: File,
+  onProgress: (percent: number) => void,
+  projectId?: string | null,
+  chunkBytes: number = 8 * 1024 * 1024,
+  resume?: PendingUpload | null,
+  onUploadId?: (pending: PendingUpload) => void,
+): Promise<JobResponse> {
+  const totalChunks = Math.max(1, Math.ceil(file.size / chunkBytes));
+  let uploadId: string;
+  if (
+    resume &&
+    resume.filename === file.name &&
+    resume.total_bytes === file.size &&
+    resume.chunk_bytes === chunkBytes
+  ) {
+    uploadId = resume.upload_id;
+    try {
+      await requestJson<{ received: number[] }>(
+        `/api/uploads/chunked/${encodeURIComponent(uploadId)}`,
+      );
+    } catch {
+      uploadId = "";
+    }
+  } else {
+    uploadId = "";
+  }
+  if (!uploadId) {
+    const init = await requestJson<{ upload_id: string; total_chunks: number; received: number[] }>(
+      "/api/uploads/chunked",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filename: file.name,
+          total_bytes: file.size,
+          total_chunks: totalChunks,
+          ...(projectId ? { project_id: projectId } : {}),
+        }),
+      },
+    );
+    uploadId = init.upload_id;
+    onUploadId?.({
+      upload_id: uploadId,
+      filename: file.name,
+      total_bytes: file.size,
+      total_chunks: totalChunks,
+      chunk_bytes: chunkBytes,
+      project_id: projectId ?? null,
+    });
+  }
+  let received = new Set<number>();
+  try {
+    const status = await requestJson<{ received: number[] }>(
+      `/api/uploads/chunked/${encodeURIComponent(uploadId)}`,
+    );
+    received = new Set(status.received ?? []);
+  } catch {
+    /* fresh upload: nothing received yet */
+  }
+  let done = 0;
+  for (const i of received) done += chunkLen(file.size, chunkBytes, i);
+  const report = () => onProgress(file.size ? Math.min(100, Math.round((done / file.size) * 100)) : 0);
+  report();
+  for (let i = 0; i < totalChunks; i++) {
+    if (received.has(i)) continue;
+    const start = i * chunkBytes;
+    const blob = file.slice(start, Math.min(file.size, start + chunkBytes));
+    await putChunk(uploadId, i, blob, (loaded) => {
+      onProgress(file.size ? Math.min(100, Math.round(((done + loaded) / file.size) * 100)) : 0);
+    });
+    done += blob.size;
+    report();
+  }
+  return requestJson<JobResponse>(`/api/uploads/chunked/${encodeURIComponent(uploadId)}/complete`, {
+    method: "POST",
+  });
+}
+
+function chunkLen(total: number, chunkBytes: number, index: number): number {
+  return Math.max(0, Math.min(total - index * chunkBytes, chunkBytes));
+}
+
+function putChunk(
+  uploadId: string,
+  index: number,
+  blob: Blob,
+  onChunkProgress: (loaded: number) => void,
+): Promise<void> {
+  const url = `${API_BASE}/api/uploads/chunked/${encodeURIComponent(uploadId)}/${index}`;
+  const attempts = 3;
+  const attempt = (n: number): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url);
+      xhr.timeout = 120_000;
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onChunkProgress(event.loaded);
+      };
+      xhr.onerror = () =>
+        reject(new ApiClientError(0, "api_unreachable", `Cannot reach the ClipForge API at ${API_BASE}. Is the backend running?`));
+      xhr.ontimeout = () => reject(new ApiClientError(0, "upload_timeout", "O envio demorou demasiado. A retomar…"));
+      xhr.onload = () => {
+        try {
+          const body = JSON.parse(xhr.responseText || "{}");
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else
+            reject(
+              new ApiClientError(
+                xhr.status,
+                body?.error?.code ?? "http_error",
+                body?.error?.message ?? `Request failed (${xhr.status}).`,
+              ),
+            );
+        } catch {
+          reject(new ApiClientError(xhr.status, "bad_response", "The API returned an unreadable response."));
+        }
+      };
+      xhr.send(blob);
+    }).catch((e) => {
+      // Retry idempotent chunk PUTs (same bytes, same index); surface the
+      // last error so the Studio banner stays truthful.
+      if (n < attempts) return new Promise<void>((res) => { setTimeout(() => res(), 500 * n); }).then(() => attempt(n + 1));
+      throw e;
+    });
+  return attempt(1);
 }
 
 export function createProject(title?: string): Promise<ProjectData> {
@@ -168,6 +323,55 @@ export function deleteAsset(projectId: string, assetId: string): Promise<{ delet
 
 export function assetFileUrl(projectId: string, assetId: string): string {
   return `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/file`;
+}
+
+/** ADR-057 native video understanding. One explicit approved analysis per call. */
+export interface VideoAnalysisData {
+  analysis_id: string;
+  project_id: string;
+  asset_id: string;
+  source_sha256: string;
+  provider: string;
+  model: string;
+  provider_response_id: string | null;
+  video_duration_s: number | null;
+  created_at: string;
+  raw_text: string;
+  overall_summary: string | null;
+  visual_style: string | null;
+  subjects: string[];
+  objects_seen: string[];
+  scenes: { index: number; start_s: number | null; end_s: number | null; approximate: boolean; description: string | null; main_subject: string | null; main_action: string | null; composition_note: string | null; editing_opportunity: string | null }[];
+  important_moments: { at_s: number | null; approximate: boolean; label: string }[];
+  composition_observations: string[];
+  editing_opportunities: string[];
+  uncertainties: string[];
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost_usd: number;
+  is_mock: boolean;
+  file_reused: boolean;
+}
+
+export interface VideoAnalysisResult {
+  analysis: VideoAnalysisData;
+  video_mode: "mock" | "live";
+  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number; cost_usd?: number; estimated_cost_usd?: number; file_reused?: boolean; response_id?: string | null; file_id?: string | null };
+}
+
+export function getVideoAnalysis(projectId: string, assetId: string): Promise<{ analysis: VideoAnalysisData }> {
+  return requestJson<{ analysis: VideoAnalysisData }>(`/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/analysis`);
+}
+
+export function analyzeVideo(
+  projectId: string,
+  assetId: string,
+  body: { instruction?: string; approved_cost_usd: number },
+): Promise<VideoAnalysisResult> {
+  return requestJson<VideoAnalysisResult>(`/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/analyze`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 /**
@@ -392,13 +596,22 @@ export interface ChatInterview {
   };
 }
 
+export interface ChatSegment {
+  start_s: number;
+  end_s: number;
+}
+
 export interface ChatData {
   intent: "smalltalk" | "help" | "status" | "cancel" | "clarify" | "edit_proposal" | "idea_proposal" | "idea_interview" | string;
   reply: string;
   needs_confirmation: boolean;
   pending_text: string | null;
-  pending_kind: "edit" | "idea" | "tools" | null;
+  pending_kind: "edit" | "idea" | "tools" | "transcript" | null;
   pending_tool_calls?: ChatToolCall[];
+  /** ADR-060 chunked source-transcription cost approval (blocks + USD). */
+  pending_estimate?: { blocks: number; audio_seconds: number; billed_seconds: number; estimated_usd: number } | null;
+  /** Timeline trecho the proposal is scoped to (validated server-side). */
+  pending_segment?: ChatSegment | null;
   select_text_id?: string | null;
   /** ADR-053: "mock" = router local (sem custo); "live" = Muse Spark reescreveu a resposta (1 slot `chat` no ledger). */
   chat_mode?: "mock" | "live";
@@ -410,6 +623,35 @@ export interface ChatData {
     aspect_ratio: "9:16" | "16:9";
   } | null;
   interview?: ChatInterview | null;
+}
+
+export interface SourceTranscriptStatus {
+  status: "idle" | "estimate" | "running" | "completed" | "failed";
+  needs_confirmation?: boolean;
+  estimate?: { blocks: number; audio_seconds: number; billed_seconds: number; estimated_usd: number; window?: { start_s: number; end_s: number } };
+  window?: { start_s: number; end_s: number };
+  transcript?: string | null;
+  turns?: { turn_id: number; start_ms: number; end_ms: number; text: string; speaker?: string | null }[];
+  is_mock?: boolean;
+  error?: { code: string; message: string } | null;
+}
+
+export function requestSourceTranscript(
+  jobId: string,
+  confirmed: boolean,
+  segment?: { start_s: number; end_s: number } | null,
+): Promise<SourceTranscriptStatus> {
+  return requestJson<SourceTranscriptStatus>(`/api/jobs/${encodeURIComponent(jobId)}/source-transcript`, {
+    method: "POST",
+    body: JSON.stringify({
+      confirmed,
+      ...(segment ? { start_s: segment.start_s, end_s: segment.end_s } : {}),
+    }),
+  });
+}
+
+export function getSourceTranscript(jobId: string): Promise<SourceTranscriptStatus> {
+  return requestJson<SourceTranscriptStatus>(`/api/jobs/${encodeURIComponent(jobId)}/source-transcript`);
 }
 
 export function sendChat(
@@ -425,6 +667,9 @@ export function sendChat(
   } | null,
   ideaId?: string | null,
   history?: { role: "user" | "muse"; text: string }[] | null,
+  segment?: ChatSegment | null,
+  /** ADR-061: the library asset selected in Recursos (validated server-side). */
+  selectedAssetId?: string | null,
 ): Promise<ChatData> {
   return requestJson<ChatData>("/api/chat", {
     method: "POST",
@@ -434,8 +679,10 @@ export function sendChat(
       ...(projectId ? { project_id: projectId } : {}),
       ...(ideaId ? { idea_id: ideaId } : {}),
       ...(selectedTextId ? { selected_text_id: selectedTextId } : {}),
+      ...(selectedAssetId ? { selected_asset_id: selectedAssetId } : {}),
       ...(interview && Object.keys(interview).length > 0 ? { interview } : {}),
       ...(history && history.length > 0 ? { history: history.slice(-12) } : {}),
+      ...(segment ? { segment } : {}),
     }),
   });
 }

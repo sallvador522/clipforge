@@ -56,7 +56,6 @@ interface Props {
   onTranscribe: () => void;
   canConfirm: boolean;
   confirming: boolean;
-  submitted: boolean;
   onConfirmTranscript: () => void;
   onRetry: () => void;
   consentWaiting: boolean;
@@ -75,8 +74,10 @@ interface Props {
     reply: string;
     needs_confirmation: boolean;
     pending_text: string | null;
-    pending_kind: "edit" | "idea" | "tools" | null;
+    pending_kind: "edit" | "idea" | "tools" | "transcript" | null;
     pending_tool_calls?: { tool: string; params: Record<string, unknown> }[];
+    pending_estimate?: { blocks: number; audio_seconds: number; billed_seconds: number; estimated_usd: number } | null;
+    pending_segment?: { start_s: number; end_s: number } | null;
     pending_idea_options?: {
       style: string;
       duration_seconds: number;
@@ -92,6 +93,9 @@ interface Props {
   onInterviewChip?: (value: string) => void;
   /** Attach a video file straight from the chat (same upload path). */
   onAttachVideo?: (file: File) => void;
+  /** Trecho ativo da timeline (o Director usa-o como âmbito). */
+  segment?: { start_s: number; end_s: number } | null;
+  onClearSegment?: () => void;
   onConfirmChat?: () => void;
   onAdjustChat?: () => void;
   onCancelChat?: () => void;
@@ -104,10 +108,11 @@ export function AssistantPanel({
   onRejectPlan, decisionBusy, liveAvailable, chatLive, working, recorded, recordingName,
   onRecordingReady, onRecordingCleared, transcribeStatus, transcribeProgress,
   transcriptionError, draft, onDraftChange, onTranscribe,
-  canConfirm, confirming, submitted, onConfirmTranscript, onRetry,
+  canConfirm, confirming, onConfirmTranscript, onRetry,
   consentWaiting, onConsentContinue, confirmLabel, showDurationChoices,
   pendingDuration, onDurationChange, detectedDuration,
   pendingChat, chatBusy, onConfirmChat, onAdjustChat, onCancelChat,
+  segment, onClearSegment,
   interviewCard, onInterviewChip, onAttachVideo,
 }: Props) {
   const [recState, setRecState] = useState<RecorderState>("idle");
@@ -328,14 +333,27 @@ export function AssistantPanel({
                 ))}
               </ul>
             )}
+            {pendingChat.pending_estimate && (
+              <p className="mt-1.5 font-mono text-[10px] text-muted">
+                {pendingChat.pending_estimate.blocks} bloco(s) ·{" "}
+                {pendingChat.pending_estimate.billed_seconds}s · ≈$
+                {pendingChat.pending_estimate.estimated_usd.toFixed(4)} — só executo se confirmares.
+              </p>
+            )}
             {pendingChat.pending_idea_options && (
               <p className="mt-1.5 font-mono text-[10px] text-muted">
                 {pendingChat.pending_idea_options.style} · {pendingChat.pending_idea_options.duration_seconds}s ·{" "}
                 {pendingChat.pending_idea_options.aspect_ratio === "9:16" ? "vertical 9:16" : "horizontal 16:9"}
               </p>
             )}
+            {pendingChat.pending_segment && pendingChat.pending_segment.end_s > pendingChat.pending_segment.start_s && (
+              <p className="mt-1.5 font-mono text-[10px] text-muted">
+                Trecho {pendingChat.pending_segment.start_s.toFixed(1)}s–
+                {pendingChat.pending_segment.end_s.toFixed(1)}s — aplico como recorte ao executar.
+              </p>
+            )}
             <div className="mt-2 grid grid-cols-2 gap-1.5">
-              <Button variant="secondary" onClick={onConfirmChat} disabled={chatBusy || confirming || submitted}>
+              <Button variant="secondary" onClick={onConfirmChat} disabled={chatBusy || confirming}>
                 Executar
               </Button>
               <Button variant="ghost" onClick={onAdjustChat} disabled={chatBusy}>
@@ -428,14 +446,16 @@ export function AssistantPanel({
               <span className="text-[11px] text-muted">
                 {liveAvailable
                   ? transcribeStatus === "done"
-                    ? "Transcrição pronta — revê e envia."
+                    ? chatBusy
+                      ? "Transcrição pronta — o Muse está a responder…"
+                      : "Transcrição pronta — enviada ao Muse."
                     : "A enviar a gravação para transcrição…"
                   : "Gravação guardada. Neste servidor a voz está em simulação."}
               </span>
               <button
                 type="button"
                 onClick={discardRecording}
-                disabled={busyTranscribe || submitted}
+                disabled={busyTranscribe}
                 className="text-[12px] text-muted underline underline-offset-2 hover:text-danger disabled:opacity-40"
               >
                 Descartar
@@ -470,7 +490,7 @@ export function AssistantPanel({
           </div>
         )}
 
-        {confirmLabel && showDurationChoices && !submitted && (
+        {confirmLabel && showDurationChoices && (
           <div className="mb-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Escolher a duração do vídeo">
             <span className="text-[11px] text-muted">Duração:</span>
             {DURATION_CHOICES.map((seconds) => {
@@ -493,7 +513,7 @@ export function AssistantPanel({
             })}
           </div>
         )}
-        {confirmLabel && showDurationChoices && !submitted && detectedDuration != null && detectedDuration !== pendingDuration && (
+        {confirmLabel && showDurationChoices && detectedDuration != null && detectedDuration !== pendingDuration && (
           <p className="mb-2 font-mono text-[10px] text-muted">
             Detetei {detectedDuration}s no teu texto — é essa a duração usada. Toca numa pill para mudar.
           </p>
@@ -517,7 +537,7 @@ export function AssistantPanel({
               <button
                 type="button"
                 onClick={() => attachRef.current?.click()}
-                disabled={submitted || chatBusy}
+                disabled={chatBusy}
                 aria-label="Anexar vídeo"
                 title="Anexar vídeo (começar a trabalhar nele)"
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
@@ -531,9 +551,9 @@ export function AssistantPanel({
           <button
             type="button"
             onClick={recState === "recording" ? stopRecording : startRecording}
-            disabled={submitted || busyTranscribe || chatBusy}
+            disabled={busyTranscribe || chatBusy}
             aria-label={recState === "recording" ? "Parar gravação" : "Gravar mensagem de voz"}
-            title={recState === "recording" ? "Parar (a transcrever ao parar)" : "Gravar voz"}
+            title={recState === "recording" ? "Parar (a transcrever e enviar ao Muse ao parar)" : "Gravar voz"}
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40 ${
               recState === "recording" ? "bg-danger" : "bg-accent hover:bg-[#ff8a70]"
             }`}
@@ -544,18 +564,31 @@ export function AssistantPanel({
             </svg>
           </button>
           <div className="min-w-0 flex-1 rounded-xl border border-border bg-raised px-2.5 pb-1.5 pt-2 focus-within:border-accent">
+            {segment && segment.end_s > segment.start_s && (
+              <span className="mb-1.5 inline-flex items-center gap-1.5 rounded-[6px] border border-accent/50 bg-accent/10 px-2 py-0.5 font-mono text-[10px] tabular-nums text-foreground">
+                Trecho {segment.start_s.toFixed(1)}s–{segment.end_s.toFixed(1)}s · o Director usa esta janela
+                <button
+                  type="button"
+                  onClick={() => onClearSegment?.()}
+                  aria-label="Limpar trecho selecionado"
+                  title="Limpar trecho"
+                  className="flex h-4 w-4 items-center justify-center rounded text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6 6 18" /></svg>
+                </button>
+              </span>
+            )}
             <textarea
               value={draft}
               onChange={(e) => onDraftChange(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
                 e.preventDefault();
-                if (!canConfirm || confirming || submitted || !draft.trim()) return;
+                if (!canConfirm || confirming || !draft.trim()) return;
                 onConfirmTranscript();
               }}
               rows={2}
               maxLength={1000}
-              disabled={submitted}
               aria-label="Mensagem para o Muse"
               placeholder={emptyPlatform ? "Descreve o vídeo que queres criar…" : "Descreve a alteração…"}
               className="w-full resize-none bg-transparent text-[13px] leading-relaxed outline-none placeholder:text-muted/60 disabled:opacity-70"
@@ -567,7 +600,7 @@ export function AssistantPanel({
               <button
                 type="button"
                 onClick={onConfirmTranscript}
-                disabled={!canConfirm || confirming || submitted || !draft.trim()}
+                disabled={!canConfirm || confirming || !draft.trim()}
                 aria-label="Enviar para o Muse"
                 title="Enviar (Enter)"
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-[#14110C] transition-colors hover:bg-[#ff8a70] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
@@ -588,12 +621,12 @@ export function AssistantPanel({
             {recState === "recording" && `A gravar… 00:${String(seconds).padStart(2, "0")} — prime para parar`}
             {recState === "recorded" && !liveAvailable && "Revê o texto e envia."}
             {recState === "recorded" && liveAvailable && transcribeStatus !== "done" && "A transcrever…"}
+            {recState === "recorded" && liveAvailable && transcribeStatus === "done" && "Enviado ao Muse."}
             {recState === "unsupported" && "Gravação indisponível neste navegador."}
             {recState === "denied" && "Microfone bloqueado pelo navegador."}
-            {recState === "idle" && (liveAvailable ? "Voz transcrita por serviço externo." : "Voz em simulação — sem custo.")}
-            {submitted && "A tratar do teu pedido…"}
+            {recState === "idle" && (liveAvailable ? "Voz transcrita e enviada ao Muse." : "Voz em simulação — sem custo.")}
           </span>
-          {draft.trim() && !submitted && (
+          {draft.trim() && (
             <span className="shrink-0 font-mono text-[10px] text-muted">{draft.trim().length}/1000</span>
           )}
         </div>

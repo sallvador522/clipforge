@@ -443,6 +443,21 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] Entregáveis `ClipForge_E2E_*.mp4` verificados em Videos/Video; relatório `docs/HACKATHON_FINAL_E2E_REPORT.md`; zero chamadas pagas (ledger intacto).
 - [ ] Live Meta + voz: NOT EXECUTED nesta missão (sem aprovação de custo por chamada / sem microfone headless).
 
+## Milestone 9.21 - Retomar upload + ETA adaptativo (2026-11-04, ADR-059)
+- [x] Cross-reload resume + host-calibrated Montar ETA; browser PHASEB 5/5 PASS; suite 559; zero chamadas pagas.
+
+## Milestone 9.22 - Transcricao do audio-fonte em blocos (2026-11-04, ADR-060)
+- [x] Chunking <=10 min + estimativa + juncao + falha fechada + chat; `test_source_transcript.py` (8) + suite 559; zero chamadas pagas.
+
+## Milestone 9.20 - Upload retomável 30 min (2026-11-04, ADR-058, produção)
+- [x] Protocolo chunked + teto 1800 s + retry/progresso reais; `test_chunked_upload.py` (5) + CHUNKED-UI browser PASS; suite 558; zero chamadas pagas.
+
+## Milestone 9.19 - Consentimento SAM vinculado ao recorte (2026-11-04, ADR-056)
+- [x] Consentimento vincula janela + hash; trim permitido em live; worker/provider verificam antes do upload; diálogo mostra o trecho; `test_consent_trim_rebind.py` (5) + browser até recusar sem chamada; suite 525; zero chamadas pagas.
+
+## Milestone 9.18 - Trecho da timeline como âmbito do Director (2026-11-04, ADR-055)
+- [x] Seleção Início/Fim + chip/faixa; `ChatSegment` validado; router com estimativa e teto SAM; Executar aplica trim primeiro; `test_chat_segment.py` (6) + SEGMENT-E2E browser PASS; suite 520; zero chamadas pagas.
+
 ## Milestone 9.17 - Hackathon README + presentation docs (2026-11-04, docs-only)
 - [x] README: ownership, per-model I/O, Mermaid, capability matrix, verified numbers/links; `README.pt-AO.md`, `HACKATHON_PROJECT_OVERVIEW.md`, `HACKATHON_DEMO_GUIDE.md`; zero paid calls, no app changes.
 
@@ -456,3 +471,30 @@ Status key: `[x]` done, `[ ]` pending, `[~]` in progress.
 - [x] `/api/chat` aceita `idea_id` + `history`; perguntas informacionais cortam antes de qualquer pending; `_guard_pending` remove pendentes em conversa/meta.
 - [x] Spark live recebe estado real + historia; continua sem decidir pendentes, ferramentas ou factos novos; capacidades/desactivadas enunciadas com honestidade.
 - [x] Studio propaga `idea_id` e ultimas 12 mensagens; regressao coberta em `tests/test_chat_context.py` (11 testes, inclui barreira anti-gibberish e crash 500); chat suites 37/37; suite completa 514 passed; `tsc` + `next build` limpos; zero novas chamadas pagas.
+
+## Milestone 9.17 - Muse Spark native video understanding (2026-11-04, ADR-057)
+- [x] Contratos `VideoAnalysis` + `ProviderFileRef` (tudo descritivo opcional; sem fabricar campos).
+- [x] Provider `SparkVideoAnalysisProvider` (Responses `input_text`+`input_file`, Files upload reutilizado por sha256, sem retries).
+- [x] Endpoints `POST .../assets/{id}/analyze` + `GET .../analysis`; aprovação explícita ($0.10 teto); modo mock zero-custo; ledger slot `video_analysis`.
+- [x] Chat responde de cache; Studio com botão «Analisar vídeo» + confirmação + estados honestos.
+- [x] `tests/test_video_analysis.py` (21 testes) + resposta a análise e fallback a excerto verbatim; suite completa 553 passed; `tsc` + `next build` limpos; zero chamadas pagas.
+- [x] TEST 1+2 live EXECUTADO (aprovado $0.10): upload Facebook_2 + 1 análise Responses — resposta descreve conteúdo visível real (split-screen adcopy.ai, apresentador, legendas, CTA webinar); custo real **$0.000709** (4993 in / 1049 out); file_id reutilizável; análise persistida e servida via GET + chat.
+
+## Milestone 9.23 - Chat segue a seleção dos Recursos + anexo vira asset (2026-11-04, ADR-061)
+- [x] `ChatRequest.selected_asset_id` (max 32); backend só aceita asset do projeto efetivo (sidecar + project_id), resto é ignorado sem partir o chat.
+- [x] Router responde do selecionado com análise; seleção sem análise aponta «Analisar vídeo» nomeando-o; vários analisados sem desempate pedem qual (sem escolha silenciosa); fallback sha256 no mesmo projeto.
+- [x] `handleAttachVideo` com job carregado importa para a biblioteca, seleciona e sugere análise (fim do falso "verifica o formato").
+- [x] `tests/test_chat_selected_asset.py` (8 testes novos); suite completa **574 passed**; `tsc` + `next build` limpos; e2e browser adiado a pedido (follow-up).
+- [x] Fix 2026-11-05 (reporte "analise o video para mim"): raiz "analis"/"anális" + resposta de seleção determinística + guarda-redes anti-interview; 2 regressões novas (10 testes); chat suites 26 passed; suite completa pós-fix **576 passed**; API destacada reiniciada (depois parada a pedido).
+
+## Fix - Chat permanece aberto após Montar/verificado (2026-11-04)
+- [x] Removido gate legado `submitted`/`voiceSubmitted` no `AssistantPanel` (anexo, mic, textarea, enviar, Descartar, Executar, pills, contador); `Studio` com `canConfirm={!pendingChat}`.
+- [x] Verificação: `tsc` + `next build` limpos; chat suites 29 passed; e2e isolado (8001/3001, mock) Montar→completed→2 turnos follow-up, 0 erros consola; zero chamadas pagas.
+
+## Fix - Drop no vazio cria job a partir do asset (2026-11-05, ADR-062)
+- [x] `Timeline` V1 vazia droppable (`onEmptyDrop/emptyDropping/emptyError`); `Studio.handleEmptyDrop` valida e cria job via `fetch->uploadVideoChunked` + auto-place (sem IA, original intacto).
+- [x] Verificação: `tsc` + `next build` limpos; timeline suites 18 passed; browser isolado (API :8001 + web :3000, mock): hint visível → drop → job + clipe V1 4 s → Montar `completed/verified` (320x180 h264+aac 4.0 s, `source.mp4` preservado), 0 erros consola; zero chamadas pagas.
+
+## Fix - Rail sem botões fantasma (2026-11-05)
+- [x] `EditorRail` passa a mostrar só `Recursos` + `Texto` (destinos reais); removidos Áudio/Efeitos/Transições/Legendas/Ajustes desativados e a seta decorativa.
+- [x] Verificação: `tsc` + `next build` limpos; browser (prod :3000): rail com 2 botões, 0 erros consola.

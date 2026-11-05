@@ -268,6 +268,26 @@ Montar ja nao converte tudo para 1280x720: canvas/fps derivam do primeiro V2 (se
 
 Auditoria completa utilizador→download: 509 testes backend, `tsc`+build limpos, 5 suites browser reais PASS com 0 erros de consola (`qa-final-e2e` novo: upload UI com nome acentuado→download original SHA-256 idêntico→422 em `.exe`→reload→zoom→Montar→Exportar ffprobe; rescue/chat/chat2/magicbg). Corrigido P1: assets sem acção de download (cartão de sessão + linhas da biblioteca, endpoint real com Content-Disposition). `qa-chat.mjs` actualizado para a entrevista ADR-048. Entregáveis novos em Videos/Video: `ClipForge_E2E_PropertiesEditing.mp4`, `ClipForge_E2E_ExistingVideoEdit.mp4`, `ClipForge_E2E_Timeline.mp4` (h264+aac verificados). Zero chamadas pagas; ledger intacto 24/27/8/16/17. Live Meta e voz = NOT EXECUTED nesta missão. Relatório: `docs/HACKATHON_FINAL_E2E_REPORT.md`. Veredicto: READY WITH LIMITATIONS.
 
+## Transcrição do áudio-fonte em blocos (2026-11-04, ADR-060)
+
+Teto 10 min/bloco respeitado: estimativa antes, async com poll, junção com offsets, falha sem parcial, chat propõe com blocos + USD. Testes: `test_source_transcript.py` (8) + suite 559; zero chamadas pagas.
+
+## Retomar upload + ETA adaptativo (2026-11-04, ADR-059)
+
+`PendingUpload` no localStorage retoma o mesmo ficheiro após reload (sem re-PUT, status honesto); EMA local calibra o Montar e mostra ETA por máquina; sem mudanças backend. Testes: browser PHASEB (5/5, 0 erros) + suite 559; zero chamadas pagas.
+
+## Upload 30 min retomável (2026-11-04, ADR-058, produção)
+
+Protocolo fatiado (init → PUT raw idempotente → status → complete → abort) com retry ×3 e progresso real; teto 30 min na validação, programa e régua; single-shot preservado via finalize partilhado. Testes: `test_chunked_upload.py` (5) + browser CHUNKED-UI (0 erros); suite 558; zero chamadas pagas.
+
+## Consentimento SAM vinculado ao recorte (2026-11-04, ADR-056)
+
+Trim + SAM live deixa de ser recusado: o consentimento vincula (job, hash original, janela) e o worker/provider verificam ambos antes de qualquer upload; diálogo mostra o trecho. Testes: `test_consent_trim_rebind.py` (5) + browser até ao diálogo (recusado, ledger intacto); suite 525; zero chamadas pagas.
+
+## Trecho da timeline para o Director (2026-11-04, ADR-055)
+
+Marcar Início/Fim na timeline → chip + faixa; o Muse cita o trecho com estimativa honesta (frames + $ SAM) e o Executar aplica o recorte antes do fluxo normal. Testes: `test_chat_segment.py` (6) + browser SEGMENT-E2E (trim aplicado, director em curso, 0 erros); suite 520 passed; tsc+build limpos; ledger intacto, zero chamadas pagas.
+
 ## Hackathon README + presentation docs (2026-11-04)
 
 README升級 sem ficção: atribuição (António Salvador, Angola; Muse Wonder só desenvolvimento — ausente do runtime, verificado por grep), tabela Meta com I/O real por modelo, diagrama Mermaid do ecossistema, matriz Capability status (13 linhas, classificações honestas), números verificados (513 testes, next 15.5.28, motion 12.43.0), links internos 22/22 OK, sem segredos. Novos: `README.pt-AO.md`, `docs/HACKATHON_PROJECT_OVERVIEW.md`, `docs/HACKATHON_DEMO_GUIDE.md`. `.env.example` já completo, sem alterações. Comandos de instalação verificados contra configuração (não executados); tsc+build+pytest herdados da missão UI/UX (sem mudanças de código desde então).
@@ -279,3 +299,27 @@ Auditoria de interacções no browser real (stacks mock isoladas, zero chamadas 
 ## Director conversacional com contexto real (2026-11-04, ADR-054)
 
 O chat ja nao trata perguntas como ordens de edicao: `chat_context` junta ProjectStore/JobStore/IdeaStore em snapshot pequeno + historia resentida (ate 12 turnos) e responde a "quantos videos tenho?", "o que eu tenho?", "o que foi feito?" e follow-ups meta sem pending. Instrucoes de edicao reais continuam a passar por Executar (sem side effects ate confirmacao). Suite de chat: 37/37 (inclui barreira anti-gibberish e regressão do crash 500 em pergunta direta); suite completa 514 passed; `tsc` + `next build` limpos; sem chamadas pagas novas.
+
+## Muse Spark native video understanding (2026-11-04, ADR-057)
+
+Muse passa a receber o vídeo de verdade: `POST .../assets/{id}/analyze` normaliza para MP4 só-vídeo, faz upload uma vez por versão (`POST /v1/files`, reutilizado por SHA-256) e corre uma análise Responses (`input_text` + `input_file`), sem retries, sob um slot `video_analysis` do ledger. Modo mock por omissão (fixture simulada, zero custo). Chat responde de cache; sem cache aponta o botão «Analisar vídeo» do painel Propriedades. Contrato `VideoAnalysis` nunca inventa campos; timestamps sempre aproximados. Suite: `tests/test_video_analysis.py` (21 testes); suite completa 574 passed; `tsc` + `next build` limpos. TEST 1+2 live executado com aprovação: Facebook_2 analisado de verdade ($0.000709), file_id reutilizável, servido via GET + chat.
+
+## Chat segue a seleção dos Recursos + anexo vira asset (2026-11-04, ADR-061)
+
+Correção de dois falhanços encadeados reportados com o MP4 real: (1) o chat ignorava o asset selecionado na biblioteca — `POST /api/chat` agora aceita `selected_asset_id`, validado contra o projeto efetivo no backend, e o router responde da análise desse asset (fallback: clipe do job por sha256; vários analisados sem desempate → pergunta qual, sem escolha silenciosa; seleção sem análise → aponta «Analisar vídeo» nomeando o asset); fallback sha256 no mesmo projeto cobre re-imports. (2) anexar vídeo com clipe carregado morria em silêncio no `uploadFileObject` (que recusa com job ativo) com mensagem enganadora de formato — agora importa como asset da biblioteca, seleciona-o e sugere analisar. `tests/test_chat_selected_asset.py` (8 testes); 574 passed no total; `tsc` + build limpos. E2E no browser adiado a pedido — fica como follow-up.
+
+## Fix 2026-11-05 — conjugação "analise/analises" caía na entrevista de ideia (ADR-061)
+
+Reportado com o MP4 real: "analise o video para mim" / "estou a (a)pedir para analisar" / "quero que analises ele" respondiam "…ainda não tenho análise… Que estilo queres para o vídeo?" — o trigger exato não cobria a conjugação, o `answer_project_question` devolvia `None` e o `_classify_chat` sem clipe caía em `idea_proposal` → `_interview_turn` (estilo). Em live o Spark reescrevia esse base e juntava o nome/duração reais do asset + a pergunta de estilo. Correção backend-only: `_requests_visual_analysis` aceita a raiz "analis"/"anális" (qualquer conjugação; não há outra análise no produto), resposta de seleção determinística ("qual video tenho selecionado" nomeia o selecionado e o estado da análise, sem estilo), e guarda-redes no `/api/chat` que nunca deixa um pedido de análise/seleção ir ao interview. Verificação: chat suites 26 passed (10 seleção + 16 contexto); suite completa pós-fix **576 passed**; API destacada reiniciada e depois parada a pedido (sem listeners). Zero chamadas pagas na verificação (mock). Smoke live sem Executar pendente de aprovação com estimativa.
+
+## Chat permanece aberto após Montar/verificado (2026-11-04, fix)
+
+Causa: `voiceSubmitted` bloqueava textarea/mic/anexo/enviar após a primeira instrução e `canConfirm` era `false` com `job.status=completed`; o cartão `Vídeo pronto e verificado` ficava visível mas sem forma de falar com o Muse — `Recomeçar` era a única saída e perdia o contexto. Correção frontend-only: `AssistantPanel` ignora o legado `submitted` (removido da interface e de todos os gates), `Studio` usa `canConfirm={!pendingChat}` (chat-first ADR-045: `/api/chat` é side-effect free, execução só via `Executar`). Verificação: `tsc` limpo, `next build` limpo, chat suites 29 passed, e2e isolado (8001/3001, mock) drop→Montar→`completed/verificado`→`ola`→resposta→2º turno, 0 erros consola. Zero chamadas pagas.
+
+## Drop no vazio cria job a partir do asset (2026-11-05, ADR-062)
+
+Sem job não havia `assembly` e a V1 recusava o drop em silêncio. Agora a V1 vazia aceita o drop (`onEmptyDrop`), o Studio valida (só vídeo com duração; texto/áudio com mensagem honesta) e cria o job via `fetch(assetFileUrl)->File->uploadVideoChunked` (sem IA), com auto-place na V1. Original da biblioteca intacto (job usa cópia `session_source`). Verificação: `tsc` + `build` limpos, timeline suites 18 passed, browser isolado (API :8001 + web :3000, mock) com asset 4 s sem job — hint "Arrasta um vídeo para aqui para começar", drop → job + clipe V1 0–4 s → Montar `completed/verified` (320x180 h264+aac 4.0 s, `source.mp4` preservado), 0 erros consola. Zero chamadas pagas.
+
+## Rail sem botões fantasma (2026-11-05, fix)
+
+A barra esquerda mostrava Áudio/Efeitos/Transições/Legendas/Ajustes desativados + seta decorativa — sem função, percebidos como fakes. Removidos (product-guard: o que não existe não se mostra); ficam só `Recursos` + `Texto`, os únicos destinos reais. Verificação: `tsc` + `next build` limpos, browser (prod :3000) com rail de 2 botões, 0 erros consola.

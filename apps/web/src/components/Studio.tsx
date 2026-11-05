@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   answerClarification,
+  analyzeVideo,
+  ApiClientError,
   approvePlan,
   assetFileUrl,
   checkHealth,
@@ -17,7 +19,9 @@ import {
   getPlan,
   getProject,
   getResult,
+  getSourceTranscript,
   getTimeline,
+  getVideoAnalysis,
   listAssets,
   newClipId,
   putClipTexts,
@@ -26,6 +30,7 @@ import {
   rejectPlan,
   renameProject,
   renderTimeline,
+  requestSourceTranscript,
   setTrim,
   setUploadAudio,
   sendChat,
@@ -34,10 +39,11 @@ import {
   submitTranscript,
   transcribeRecording,
   uploadAsset,
-  uploadVideo,
+  uploadVideoChunked,
+  abortChunkedUpload,
 } from "@/lib/api";
 import type { AssetData, JobResponse, JobResultData, PlanReviewData, ProjectData, TimelineClipData, TimelineData, TimelineTrack, TranscriptData } from "@/lib/types";
-import type { ChatData, ChatInterview, ChatToolCall } from "@/lib/api";
+import type { ChatData, ChatInterview, ChatToolCall, PendingUpload, VideoAnalysisData } from "@/lib/api";
 import {
   applyRefinement,
   approveAssets as approveIdeaAssets,
@@ -63,7 +69,7 @@ import type { IdeaConfigData, IdeaPayload } from "@/lib/idea-types";
 import { IdeaPreview, type IdeaPreviewHandle } from "./IdeaPreview";
 import { IdeaStatusPanel } from "./IdeaStatusPanel";
 import { TopBar } from "./TopBar";
-import { MediaPanel, type SourceMeta } from "./MediaPanel";
+import { MediaPanel, formatBadge, type SourceMeta } from "./MediaPanel";
 import { Viewer } from "./Viewer";
 import { AssistantPanel, type ChatMessage, type TranscribeStatus } from "./AssistantPanel";
 import { ConsentDialog } from "./ConsentDialog";
@@ -84,6 +90,8 @@ import {
 } from "@/lib/textOverlays";
 
 const TERMINAL = new Set(["completed", "failed", "rejected", "unsupported"]);
+/** ADR-058: production programs up to 30 min. */
+const PROGRAM_LIMIT_S = 1800;
 const REVIEW_WAIT = new Set(["awaiting_approval", "awaiting_clarification"]);
 // Idea-to-video on the same route: while the platform is empty (no clip,
 // no edit job) the assistant routes the confirmed instruction into an idea
@@ -104,6 +112,8 @@ export function Studio() {
   const [localMeta, setLocalMeta] = useState<SourceMeta | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [resumingUpload, setResumingUpload] = useState(false);
+  const PENDING_UPLOAD_KEY = "clipforge.pendingUpload";
 
   // P0 project workspace: the project persists across reloads via the backend;
   // only the project id is kept in localStorage.
@@ -125,7 +135,6 @@ export function Studio() {
   // ADR-044: library selection drives the right-hand Properties tab.
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [voiceSubmitted, setVoiceSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [planReview, setPlanReview] = useState<PlanReviewData | null>(null);
   const [planDialogOpen, setPlanDialogOpen] = useState(false);
@@ -134,12 +143,19 @@ export function Studio() {
   const [consentOpen, setConsentOpen] = useState(false);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [consentReason, setConsentReason] = useState<string | null>(null);
+  /** ADR-057: cached analysis state for the selected video asset. */
+  const [analysisStatus, setAnalysisStatus] = useState<"idle" | "loading" | "confirm" | "working" | "done" | "error" | "stale">("idle");
+  const [analysis, setAnalysis] = useState<VideoAnalysisData | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const analysisSeq = useRef(0);
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
   const planAutoOpenedForRef = useRef<string | null>(null);
   const consentAutoOpenedForRef = useRef<string | null>(null);
   const selectionKeyRef = useRef<string | null>(null);
   const uploadingRef = useRef(false);
   const handleTranscribeRef = useRef<() => void>(() => {});
+  const voiceAutoSentRef = useRef<string | null>(null);
+  const sendInstructionRef = useRef<(text: string) => Promise<void>>(async () => {});
 
   const [recording, setRecording] = useState<{ blob: Blob; filename: string } | null>(null);
   const [transcribeStatus, setTranscribeStatus] = useState<TranscribeStatus>("idle");
@@ -183,6 +199,8 @@ export function Studio() {
   // Executar. The server never executes from /api/chat; execution reuses the
   // existing voice/ideas endpoints so the approval/consent gates are unchanged.
   const [pendingChat, setPendingChat] = useState<ChatData | null>(null);
+  /** Timeline trecho (original-source seconds) the director scopes SAM work to. */
+  const [segment, setSegment] = useState<{ start_s: number; end_s: number } | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
 
   const [draft, setDraft] = useState("");
@@ -196,8 +214,51 @@ export function Studio() {
   // explicitly chooses landscape/portrait instead.
   const [timelineFormat, setTimelineFormat] = useState<"source" | "landscape" | "portrait">("source");
   const [renderingTimeline, setRenderingTimeline] = useState(false);
+  /** ADR-058 adaptive ETA: program-seconds per real second, calibrated by
+   * this machine's own verified renders (localStorage EMA). No invented numbers. */
+  const RENDER_RATE_KEY = "clipforge.renderRate";
+  const renderStartRef = useRef<{ t0: number; programDuration: number } | null>(null);
+
+  function readRenderRatio(): number | null {
+    try {
+      const raw = window.localStorage.getItem(RENDER_RATE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { ratio?: number; samples?: number };
+      if (parsed && Number.isFinite(parsed.ratio) && (parsed.ratio as number) > 0) return parsed.ratio as number;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  function recordRenderRatio(programDuration: number, elapsedSeconds: number) {
+    if (!(programDuration > 0) || !(elapsedSeconds > 5)) return;
+    const ratio = programDuration / elapsedSeconds;
+    if (!Number.isFinite(ratio) || ratio <= 0) return;
+    let samples = 0;
+    let prev = ratio;
+    try {
+      const raw = window.localStorage.getItem(RENDER_RATE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { ratio?: number; samples?: number };
+        if (Number.isFinite(parsed.ratio) && (parsed.ratio as number) > 0) {
+          prev = parsed.ratio as number;
+          samples = parsed.samples ?? 1;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    const next = samples > 0 ? prev * 0.5 + ratio * 0.5 : ratio;
+    try {
+      window.localStorage.setItem(RENDER_RATE_KEY, JSON.stringify({ ratio: next, samples: samples + 1 }));
+    } catch {
+      /* ignore */
+    }
+  }
   const [socialFormat, setSocialFormat] = useState<"reels" | "youtube">("reels");
   const [exporting, setExporting] = useState(false);
+  const [exportBusyLabel, setExportBusyLabel] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   // Fase 1 preview-only clip texts (ADR-045): local-only, no backend.
   // Max 5 styles, anime.js overlay in Viewer + T1 lane in Timeline.
@@ -908,7 +969,7 @@ export function Studio() {
             track: "V1",
             timeline_start_s: 0,
             source_in_s: 0,
-            source_out_s: round3(Math.min(sessionDuration, 900)),
+            source_out_s: round3(Math.min(sessionDuration, PROGRAM_LIMIT_S)),
           },
         ]);
         setAssembly(data);
@@ -922,6 +983,67 @@ export function Studio() {
     setSelectedAssetId(assetId);
   }
 
+  // ADR-057: load the cached analysis whenever a video asset is selected.
+  // Missing analysis is a normal empty state (idle), not an error.
+  async function loadVideoAnalysis() {
+    const asset = assets.find((a) => a.asset_id === selectedAssetId) ?? null;
+    if (!project || !asset || asset.kind !== "video") {
+      analysisSeq.current += 1;
+      setAnalysis(null);
+      setAnalysisError(null);
+      setAnalysisStatus("idle");
+      return;
+    }
+    const seq = ++analysisSeq.current;
+    setAnalysisStatus("loading");
+    setAnalysisError(null);
+    try {
+      const data = await getVideoAnalysis(project.project_id, asset.asset_id);
+      if (analysisSeq.current !== seq) return;
+      setAnalysis(data.analysis);
+      setAnalysisStatus("done");
+    } catch (e) {
+      if (analysisSeq.current !== seq) return;
+      const code = e instanceof ApiClientError ? e.code : "";
+      if (code === "analysis_not_found") {
+        setAnalysis(null);
+        setAnalysisStatus("idle");
+      } else if (code === "analysis_stale") {
+        setAnalysis(null);
+        setAnalysisStatus("stale");
+      } else {
+        setAnalysis(null);
+        setAnalysisError(e instanceof ApiClientError ? e.message : "Não consegui ler a análise.");
+        setAnalysisStatus("error");
+      }
+    }
+  }
+
+  useEffect(() => {
+    void loadVideoAnalysis();
+  }, [project?.project_id, selectedAssetId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleRunVideoAnalysis() {
+    const asset = assets.find((a) => a.asset_id === selectedAssetId) ?? null;
+    if (!project || !asset || asset.kind !== "video" || analysisStatus === "working") return;
+    const seq = ++analysisSeq.current;
+    setAnalysisStatus("working");
+    setAnalysisError(null);
+    try {
+      const result = await analyzeVideo(project.project_id, asset.asset_id, { approved_cost_usd: 0.1 });
+      if (analysisSeq.current !== seq) return;
+      setAnalysis(result.analysis);
+      setAnalysisStatus("done");
+      pushMuseMessage(
+        `Analisei o vídeo «${asset.original_filename}». ${result.analysis.overall_summary ?? ""}`.trim(),
+      );
+    } catch (e) {
+      if (analysisSeq.current !== seq) return;
+      setAnalysisError(e instanceof ApiClientError ? e.message : "A análise falhou. Tenta de novo.");
+      setAnalysisStatus("error");
+    }
+  }
+
   async function uploadFileObject(f: File): Promise<JobResponse | null> {
     // Idempotent: exactly one job per selection. Extra selects while an
     // upload is in flight — or after a job exists — are ignored, so no AI
@@ -932,6 +1054,7 @@ export function Studio() {
     setError(null);
     setLocalMeta(null);
     setSelectedAssetId(null);
+    setSegment(null);
     if (originalUrl && originalUrl.startsWith("blob:")) URL.revokeObjectURL(originalUrl);
     const url = URL.createObjectURL(f);
     setOriginalUrl(url);
@@ -956,11 +1079,44 @@ export function Studio() {
     probe.src = url;
     setUploading(true);
     setUploadProgress(0);
+    // ADR-058 resume: an interrupted send of the SAME file (name + bytes)
+    // continues where the server stopped; anything else starts fresh.
+    let pending: PendingUpload | null = null;
+    try {
+      const raw = window.localStorage.getItem(PENDING_UPLOAD_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as PendingUpload;
+        if (parsed && parsed.filename === f.name && parsed.total_bytes === f.size) pending = parsed;
+      }
+    } catch {
+      pending = null;
+    }
+    if (!pending) {
+      try {
+        const raw = window.localStorage.getItem(PENDING_UPLOAD_KEY);
+        if (raw) {
+          const stale = JSON.parse(raw) as PendingUpload;
+          if (stale?.upload_id) void abortChunkedUpload(stale.upload_id);
+        }
+      } catch {
+        /* ignore */
+      }
+      window.localStorage.removeItem(PENDING_UPLOAD_KEY);
+    }
+    setResumingUpload(Boolean(pending));
     try {
       // The session clip joins the persistent project: reuse it or create one,
       // then register the source as a project asset server-side (no extra AI).
       const active = await ensureProject();
-      const created = await uploadVideo(f, setUploadProgress, active.project_id);
+      const created = await uploadVideoChunked(
+        f,
+        setUploadProgress,
+        active.project_id,
+        undefined,
+        pending,
+        (p) => window.localStorage.setItem(PENDING_UPLOAD_KEY, JSON.stringify(p)),
+      );
+      window.localStorage.removeItem(PENDING_UPLOAD_KEY);
       setJob(created);
       window.localStorage.setItem(JOB_STORAGE_KEY, created.job_id);
       if (created.project_id && created.project_id !== active.project_id) {
@@ -985,6 +1141,7 @@ export function Studio() {
       return null;
     } finally {
       setUploading(false);
+      setResumingUpload(false);
       uploadingRef.current = false;
     }
   }
@@ -1062,8 +1219,8 @@ export function Studio() {
     chips: { label: string; value: string }[];
   } | null>(null);
 
-  async function sendInstruction() {
-    const text = draft.trim();
+  async function sendInstructionWith(textInput: string) {
+    const text = textInput.trim();
     if (!text || chatBusy || submitting || ideaBusy) return;
     // A new turn replaces any unconfirmed proposal: the server is the source
     // of truth for intent, the local card is just the last proposal.
@@ -1079,7 +1236,7 @@ export function Studio() {
       const brief = fresh ? text : (interviewBrief ?? text);
       if (fresh) setInterviewBrief(text);
       const history = messages.slice(-12).map((m) => ({ role: m.role, text: m.text }));
-      const chat = await sendChat(text, job?.job_id ?? null, project?.project_id ?? null, selectedTextId, { ...interviewAnswers, brief }, idea?.idea_id ?? null, history);
+      const chat = await sendChat(text, job?.job_id ?? null, project?.project_id ?? null, selectedTextId, { ...interviewAnswers, brief }, idea?.idea_id ?? null, history, segment ?? undefined, selectedAsset?.asset_id ?? null);
       pushMuseMessage(chat.reply);
       setPendingChat(chat.needs_confirmation ? chat : null);
       if (chat.intent === "idea_interview" && chat.interview) {
@@ -1100,6 +1257,10 @@ export function Studio() {
     } finally {
       setChatBusy(false);
     }
+  }
+
+  async function sendInstruction() {
+    await sendInstructionWith(draft);
   }
 
   function buildInterviewCard(question: string, interview: ChatInterview): {
@@ -1133,7 +1294,7 @@ export function Studio() {
     setChatBusy(true);
     try {
       const history = messages.slice(-12).map((m) => ({ role: m.role, text: m.text }));
-      const chat = await sendChat(value, job?.job_id ?? null, project?.project_id ?? null, selectedTextId, { ...interviewAnswers, ...(interviewBrief ? { brief: interviewBrief } : {}) }, idea?.idea_id ?? null, history);
+      const chat = await sendChat(value, job?.job_id ?? null, project?.project_id ?? null, selectedTextId, { ...interviewAnswers, ...(interviewBrief ? { brief: interviewBrief } : {}) }, idea?.idea_id ?? null, history, segment ?? undefined, selectedAsset?.asset_id ?? null);
       pushMuseMessage(chat.reply);
       setPendingChat(chat.needs_confirmation ? chat : null);
       if (chat.intent === "idea_interview" && chat.interview) {
@@ -1156,11 +1317,41 @@ export function Studio() {
     }
   }
 
-  /** Chat video attach: the same upload path as Recursos, announced in chat. */
+  /** Chat video attach: lands in the library as a project asset (ADR-061).
+   *
+   * Rationale: attaching while a job is loaded used to call uploadFileObject,
+   * which refuses when a job exists — the attach silently died with a
+   * misleading "check the format" message. An attachment is library material
+   * to analyse/select, never a replacement for the open editing job.
+   */
   async function handleAttachVideo(file: File) {
     if (uploading || uploadingRef.current || chatBusy) return;
     setError(null);
     pushUserMessage(`[vídeo anexado: ${file.name}]`);
+    if (job) {
+      try {
+        const active = await ensureProject();
+        setAssetUploading(file.name);
+        setAssetProgress(0);
+        let created: AssetData | null = null;
+        try {
+          created = await uploadAsset(active.project_id, file, setAssetProgress);
+        } finally {
+          setAssetUploading(null);
+          setAssetProgress(null);
+        }
+        await refreshAssets(active.project_id);
+        setSelectedAssetId(created.asset_id);
+        pushMuseMessage(
+          `Vídeo "${created.original_filename}" guardado nos Recursos e selecionado. ` +
+          `Descreve o que queres saber sobre ele — ou prime «Analisar vídeo» no painel Propriedades para eu ver o conteúdo de verdade.`
+        );
+      } catch (e) {
+        pushMuseMessage("Não consegui importar o vídeo para os Recursos. Verifica o formato (MP4/MOV/WebM/MKV) e tenta de novo.");
+        setError(friendlyApiError(e, "Não consegui importar o vídeo. Tenta de novo."));
+      }
+      return;
+    }
     const created = await uploadFileObject(file);
     if (!created) {
       pushMuseMessage("Não consegui carregar o vídeo — verifica o formato (MP4/MOV/WebM/MKV) e tenta de novo.");
@@ -1235,9 +1426,67 @@ export function Studio() {
       }
       return;
     }
+    // ADR-060 chunked source transcription: explicit cost approval, then
+    // poll the async job. Clears pending first; failures surface honestly.
+    if (pending.pending_kind === "transcript") {
+      if (!job) {
+        setPendingChat(null);
+        return;
+      }
+      setPendingChat(null);
+      setChatBusy(true);
+      try {
+        const started = await requestSourceTranscript(
+          job.job_id, true, pending.pending_segment ?? undefined);
+        if (started.status !== "running" && started.status !== "completed") {
+          throw new Error(started.error?.message ?? "Transcription did not start.");
+        }
+        let current = started;
+        for (let i = 0; i < 120 && current.status === "running"; i++) {
+          await new Promise<void>((res) => setTimeout(res, 2000));
+          current = await getSourceTranscript(job.job_id);
+        }
+        if (current.status === "completed" && current.transcript) {
+          const turns = current.turns?.length ?? 0;
+          pushMuseMessage(
+            `Transcrevi o áudio (${current.estimate?.blocks ?? "?"} blocos, ${turns} turnos` +
+            `${current.is_mock ? ", simulação sem custo" : ""}): «${current.transcript.slice(0, 280)}»` +
+            (current.transcript.length > 280 ? "…" : "") +
+            ` Pede-me legendas ou um resumo a partir deste texto.`);
+        } else {
+          pushMuseMessage(
+            `Não consegui transcrever (${current.error?.code ?? "falhou"}). Nada foi cobrado a meio: tenta de novo.`);
+          setError(friendlyApiError(
+            new ApiClientError(500, current.error?.code ?? "http_error", current.error?.message ?? ""),
+            "Não consegui transcrever o áudio. Tenta de novo."));
+        }
+      } catch (e) {
+        pushMuseMessage("Não consegui transcrever agora. Tenta de novo.");
+        setError(friendlyApiError(e, "Não consegui transcrever o áudio. Tenta de novo."));
+      } finally {
+        setChatBusy(false);
+      }
+      return;
+    }
     setPendingChat(null);
     setInterviewCard(null);
     if (job) {
+      // Trecho selecionado: aplica-o como recorte antes de instruir, para o
+      // director trabalhar na janela que o utilizador marcou. Falha aqui
+      // aborta sem submeter (o projeto fica intacto).
+      const seg = pending.pending_kind === "edit" ? pending.pending_segment : null;
+      if (seg && seg.end_s > seg.start_s) {
+        setChatBusy(true);
+        try {
+          await setTrim(job.job_id, seg.start_s, seg.end_s);
+        } catch (e) {
+          setChatBusy(false);
+          setPendingChat(pending);
+          setError(friendlyApiError(e, "Não consegui aplicar o trecho. Tenta de novo."));
+          return;
+        }
+        setChatBusy(false);
+      }
       setInterviewAnswers({});
       setInterviewBrief(null);
       await submitInstructionWith(text);
@@ -1289,6 +1538,41 @@ export function Studio() {
     await handleDirectIdeaWith(draft);
   }
 
+  // ADR-058: record this host's real render speed once per verified render.
+  useEffect(() => {
+    if (!job || !renderStartRef.current) return;
+    if (job.status === "completed") {
+      const { t0, programDuration } = renderStartRef.current;
+      recordRenderRatio(programDuration, (Date.now() - t0) / 1000);
+      renderStartRef.current = null;
+    } else if (job.status === "failed" || job.status === "rejected") {
+      renderStartRef.current = null;
+    }
+  }, [job?.status]);
+
+  function formatEta(seconds: number): string {
+    const total = Math.max(0, Math.round(seconds));
+    if (total < 90) return `${total}s`;
+    const m = Math.floor(total / 60);
+    if (m < 90) return `${m} min`;
+    return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`;
+  }
+
+  let renderEta: string | null = null;
+  {
+    const started = renderStartRef.current;
+    if (started && job && (job.status === "queued" || job.status === "processing")) {
+      const elapsed = (Date.now() - started.t0) / 1000;
+      const ratio = readRenderRatio();
+      if (ratio) {
+        const remaining = started.programDuration / ratio - elapsed;
+        if (remaining > 5) renderEta = `a gerar… cerca de ${formatEta(remaining)} (estimativa desta máquina)`;
+      } else if (elapsed > 30) {
+        renderEta = "a gerar… isto pode demorar — vídeos longos levam minutos";
+      }
+    }
+  }
+
   function handleApplyRefinement() {
     if (!idea) return;
     void runIdea("apply-refinement", () => applyRefinement(idea.idea_id));
@@ -1311,7 +1595,6 @@ export function Studio() {
         transcript?.session_id ?? null,
       );
       setJob(updated);
-      setVoiceSubmitted(true);
       pollJob(job.job_id);
     } catch (e) {
       setError(friendlyApiError(e, "Não consegui enviar. Tenta de novo."));
@@ -1694,6 +1977,18 @@ export function Studio() {
 
   function reset() {
     stopPolling();
+    // Abandon any interrupted upload: the server copy is discarded and the
+    // next selection starts fresh.
+    try {
+      const raw = window.localStorage.getItem(PENDING_UPLOAD_KEY);
+      if (raw) {
+        const stale = JSON.parse(raw) as PendingUpload;
+        if (stale?.upload_id) void abortChunkedUpload(stale.upload_id);
+      }
+    } catch {
+      /* ignore */
+    }
+    window.localStorage.removeItem(PENDING_UPLOAD_KEY);
     setMessages([]);
     notifiedRef.current.clear();
     lastSentRef.current = null;
@@ -1710,6 +2005,7 @@ export function Studio() {
     setJob(null);
     setSelectedAssetId(null);
     setLeftTab("assets");
+    setSegment(null);
     setClipTexts([]);
     setSelectedTextId(null);
     setColour({ contrast: 1, brightness: 0, saturation: 1 });
@@ -1717,7 +2013,6 @@ export function Studio() {
     setTextsNote(null);
     window.localStorage.removeItem(JOB_STORAGE_KEY);
     setResult(null);
-    setVoiceSubmitted(false);
     setAssembly(null);
     setAssemblyError(null);
     setRenderingTimeline(false);
@@ -1727,6 +2022,7 @@ export function Studio() {
     setCurrentTime(0);
     setDuration(0);
     setPlaying(false);
+    voiceAutoSentRef.current = null;
     setRecording(null);
     setTranscribeStatus("idle");
     setTranscribeProgress(null);
@@ -1767,6 +2063,23 @@ export function Studio() {
       handleTranscribeRef.current();
     }
   }, [recording, liveAvailable, transcribeStatus]);
+
+  // Voice auto-send: a live transcription is a chat turn, not a draft to
+  // confirm manually. Fires exactly once per transcript; if a proposal is
+  // already awaiting confirmation (or another turn is busy) the text stays
+  // in the draft for manual send and never fires late.
+  sendInstructionRef.current = sendInstructionWith;
+  useEffect(() => {
+    if (transcribeStatus !== "done" || !transcript || transcript.is_mock) return;
+    if (!liveAvailable) return;
+    const text = transcript.text.trim();
+    if (!text) return;
+    const key = transcript.session_id ?? `${text}:${transcript.audio_duration_ms ?? ""}`;
+    if (voiceAutoSentRef.current === key) return;
+    voiceAutoSentRef.current = key;
+    if (pendingChat || chatBusy || submitting || ideaBusy) return;
+    void sendInstructionRef.current(text);
+  }, [transcribeStatus, transcript, liveAvailable, pendingChat, chatBusy, submitting, ideaBusy]);
 
   // Shared subject selection: initialized once per plan (auto-select a lone
   // subject), then toggled from the preview chips or the review cards.
@@ -1858,7 +2171,7 @@ export function Studio() {
   const studioStatus = useMemo((): { text: string | null; tone: "idle" | "working" | "attention" | "done" } => {
     if (apiError) return { text: "Sem ligação", tone: "attention" };
     if (error) return { text: "Precisa de atenção", tone: "attention" };
-    if (uploading) return { text: "A enviar vídeo…", tone: "working" };
+    if (uploading) return { text: resumingUpload ? "A retomar envio…" : "A enviar vídeo…", tone: "working" };
     if (job) {
       if (job.status === "queued") return { text: "Na fila", tone: "working" };
       if (job.status === "processing") {
@@ -1882,7 +2195,7 @@ export function Studio() {
       return { text: "A trabalhar", tone: "working" };
     }
     return { text: null, tone: "idle" as const };
-  }, [apiError, error, job?.status, job?.stage, idea?.status, idea?.stage, uploading]);
+  }, [apiError, error, job?.status, job?.stage, idea?.status, idea?.stage, uploading, resumingUpload]);
 
   // Right-column tabs: approvals live in Propriedades, answers in Muse.
   const ideaNeedsReview = Boolean(
@@ -1937,6 +2250,16 @@ export function Studio() {
   }, []);
 
   const resultReady = Boolean(job?.status === "completed" && result?.render_status === "verified" && result?.rendered);
+  // Exportar fica ativo sempre que há algo exportável: um MP4 verificado
+  // ou um programa montável na timeline. Só fica desligado quando não há
+  // mesmo nada para exportar — e aí diz porquê em vez de calar.
+  const hasExportableClips = (assembly?.timeline.clips.length ?? 0) > 0;
+  const canExport = Boolean(job) && (resultReady || hasExportableClips);
+  const exportDisabledReason = !job
+    ? "Importa um vídeo para poderes exportar."
+    : !resultReady && !hasExportableClips
+      ? "Adiciona o vídeo à faixa V1 para gerar o MP4 final."
+      : null;
   const editedUrl = job && resultReady ? downloadUrl(job.job_id, "original") : null;
 
   // ADR-041 upload trim window (absolute seconds in the original file).
@@ -2022,11 +2345,11 @@ export function Studio() {
       setAssemblyError("Este asset não tem duração mensurável.");
       return;
     }
-    const dur = Math.max(0.5, Math.min(asset.duration, 900 - Math.max(0, at)));
+    const dur = Math.max(0.5, Math.min(asset.duration, PROGRAM_LIMIT_S - Math.max(0, at)));
     const tracks: TimelineTrack[] = wantVideo ? ["V1", "V2"] : ["A1", "A2"];
     const clips = assembly.timeline.clips;
     for (const track of tracks) {
-      const start = Math.max(0, Math.min(at, 900 - dur));
+      const start = Math.max(0, Math.min(at, PROGRAM_LIMIT_S - dur));
       const end = start + dur;
       const clash = clips.some(
         (c) =>
@@ -2034,7 +2357,7 @@ export function Studio() {
           start < c.timeline_start_s + (c.source_out_s - c.source_in_s) - 1e-9 &&
           end > c.timeline_start_s + 1e-9,
       );
-      if (!clash && start + dur <= 900 + 1e-9) {
+      if (!clash && start + dur <= PROGRAM_LIMIT_S + 1e-9) {
         void pushAssembly([
           ...clips,
           {
@@ -2050,6 +2373,68 @@ export function Studio() {
       }
     }
     setAssemblyError("Sem espaço livre aqui — move ou apara um clipe.");
+  }
+
+  // ADR-062 empty drop: sem job não há assembly para o Timeline aceitar o
+  // drop. Largar um vídeo na V1 vazia cria o job a partir desse asset
+  // (fetch bytes -> uploadVideoChunked, sem IA) e o auto-place coloca-o na
+  // V1. O asset original da biblioteca fica intacto; o job usa uma cópia.
+  function handleEmptyDrop(
+    _at: number,
+    asset: { asset_id: string; kind: string; duration: number; name?: string },
+  ) {
+    if (job && assembly) {
+      handleSmartDrop(_at, asset);
+      return;
+    }
+    if (uploadingRef.current || uploading) return;
+    if (asset.kind === "text") {
+      setAssemblyError("Texto precisa de um vídeo na timeline — larga primeiro um vídeo para aqui.");
+      return;
+    }
+    if (asset.kind !== "video") {
+      setAssemblyError("Larga primeiro um vídeo para aqui para começar — áudio entra depois na A1.");
+      return;
+    }
+    if (!(asset.duration > 0)) {
+      setAssemblyError("Este asset não tem duração mensurável.");
+      return;
+    }
+    if (job && !assembly) {
+      // Job existe mas a timeline ainda está a carregar: recarrega e coloca.
+      setAssemblyError(null);
+      void (async () => {
+        try {
+          const data = await getTimeline(job.job_id);
+          setAssembly(data);
+          setAssemblyError(null);
+        } catch (e) {
+          setAssemblyError(friendlyApiError(e, "A timeline ainda está a preparar. Tenta de novo em segundos."));
+        }
+      })();
+      return;
+    }
+    if (!project) {
+      setAssemblyError("Cria ou abre um projeto antes de largar — importa o vídeo em Recursos.");
+      return;
+    }
+    const projectId = project.project_id;
+    const assetId = asset.asset_id;
+    const assetName = asset.name ?? asset.asset_id;
+    setAssemblyError(null);
+    setError(null);
+    void (async () => {
+      try {
+        const res = await fetch(assetFileUrl(projectId, assetId));
+        if (!res.ok) throw new Error(`asset fetch failed (${res.status})`);
+        const blob = await res.blob();
+        if (!blob || blob.size === 0) throw new Error("asset vazio");
+        const f = new File([blob], assetName, { type: blob.type || "video/mp4" });
+        await uploadFileObject(f);
+      } catch (e) {
+        setError(friendlyApiError(e, "Não consegui trazer o vídeo para a timeline. Tenta de novo."));
+      }
+    })();
   }
 
   // Text assets become T1 overlays (preview-only per ADR-045): the file
@@ -2103,7 +2488,7 @@ export function Studio() {
               ...c,
               timeline_start_s: Math.max(
                 0,
-                Math.min(round3(newStart), 900 - (c.source_out_s - c.source_in_s)),
+                Math.min(round3(newStart), PROGRAM_LIMIT_S - (c.source_out_s - c.source_in_s)),
               ),
             }
           : c,
@@ -2141,16 +2526,16 @@ export function Studio() {
       inn -= start;
       start = 0;
     }
-    if (start + (out - inn) > 900) {
+    if (start + (out - inn) > PROGRAM_LIMIT_S) {
       if (edge === "start") {
-        const over = start + (out - inn) - 900;
+        const over = start + (out - inn) - PROGRAM_LIMIT_S;
         start -= over;
         inn -= over;
       } else {
-        out -= start + (out - inn) - 900;
+        out -= start + (out - inn) - PROGRAM_LIMIT_S;
       }
     }
-    if (inn < 0 || out - inn < 0.5 || start < 0 || start + (out - inn) > 900 + 1e-9) return;
+    if (inn < 0 || out - inn < 0.5 || start < 0 || start + (out - inn) > PROGRAM_LIMIT_S + 1e-9) return;
     void pushAssembly(
       assembly.timeline.clips.map((c) =>
         c.clip_id === clipId
@@ -2167,6 +2552,9 @@ export function Studio() {
 
   async function handleRenderTimeline() {
     if (!job || renderingTimeline) return;
+    renderStartRef.current = assembly && assembly.timeline.clips.length > 0
+      ? { t0: Date.now(), programDuration: assembly.program_duration_s }
+      : null;
     setRenderingTimeline(true);
     setAssemblyError(null);
     try {
@@ -2181,11 +2569,98 @@ export function Studio() {
   }
 
   async function handleExport() {
-    if (!job || !resultReady) return;
+    if (!job || exporting || renderingTimeline) return;
+    setExportError(null);
+    // Caso A — render verificado: download direto, como antes.
+    if (resultReady) {
+      await downloadVerifiedRender(job.job_id);
+      return;
+    }
+    const clips = assembly?.timeline.clips ?? [];
+    if (clips.length === 0) {
+      setExportError("Adiciona o vídeo à faixa V1 para gerar o MP4 final.");
+      return;
+    }
+    // Caso B — fluxo do Muse a meio: não renderizar por trás; levar o
+    // utilizador ao sítio onde está bloqueado.
+    if (job.status === "awaiting_consent") {
+      reopenConsent();
+      return;
+    }
+    if (REVIEW_WAIT.has(job.status)) {
+      if (planReview) setPlanDialogOpen(true);
+      else setExportError("Termina a revisão do plano do Muse antes de exportar.");
+      return;
+    }
+    // Caso C — há programa mas ainda não há MP4 verificado: montar e
+    // descarregar a seguir, sem pedir um segundo clique.
+    setExporting(true);
+    try {
+      if (job.status !== "processing") {
+        setExportBusyLabel("A montar…");
+        setRenderingTimeline(true);
+        try {
+          const updated = await renderTimeline(job.job_id, timelineFormat);
+          setJob(updated);
+        } catch (e) {
+          throw new Error(exportRenderError(e));
+        } finally {
+          setRenderingTimeline(false);
+        }
+      }
+      setExportBusyLabel("A exportar…");
+      await waitForVerifiedRender(job.job_id);
+      await downloadVerifiedRender(job.job_id);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : "A exportação falhou. Tenta de novo.");
+    } finally {
+      setExporting(false);
+      setExportBusyLabel(null);
+    }
+  }
+
+  function exportRenderError(e: unknown): string {
+    if (e instanceof ApiClientError) {
+      if (e.code === "timeline_empty") return "Adiciona o vídeo à faixa V1 para gerar o MP4 final.";
+      if (e.code === "timeline_render_not_allowed") return "Termina ou rejeita o plano do Muse antes de exportar.";
+    }
+    return friendlyApiError(e, "Não consegui gerar o MP4. Tenta de novo.");
+  }
+
+  async function waitForVerifiedRender(jobId: string): Promise<void> {
+    const deadline = Date.now() + 10 * 60 * 1000;
+    for (;;) {
+      if (Date.now() > deadline) {
+        throw new Error("A gerar o MP4 está a demorar mais do que o esperado. Volta a carregar Exportar daqui a pouco para ir buscar o ficheiro.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      let latest: JobResponse;
+      try {
+        latest = await getJob(jobId);
+      } catch (e) {
+        throw new Error(friendlyApiError(e, "Perdi a ligação à API durante a exportação. Tenta de novo."));
+      }
+      setJob(latest);
+      if (latest.status === "completed") {
+        const res = await getResult(jobId);
+        setResult(res);
+        if (res.render_status === "verified" && res.rendered) return;
+        throw new Error("O render terminou sem verificação. Tenta Montar de novo.");
+      }
+      if (TERMINAL.has(latest.status)) {
+        throw new Error("O render falhou. Tenta Montar de novo e verifica o erro no painel.");
+      }
+      if (REVIEW_WAIT.has(latest.status) || latest.status === "awaiting_consent") {
+        throw new Error("O trabalho entrou em revisão. Termina o fluxo do Muse antes de exportar.");
+      }
+    }
+  }
+
+  async function downloadVerifiedRender(jobId: string) {
     setExporting(true);
     setExportError(null);
     try {
-      const response = await fetch(downloadUrl(job.job_id, socialFormat));
+      const response = await fetch(downloadUrl(jobId, socialFormat));
       if (!response.ok) {
         let detail = `Export failed (${response.status}) — the verified file may have been removed.`;
         try {
@@ -2200,7 +2675,7 @@ export function Studio() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `clipforge-${job.job_id}-${socialFormat}.mp4`;
+      anchor.download = `clipforge-${jobId}-${socialFormat}.mp4`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -2223,8 +2698,10 @@ export function Studio() {
         apiError={apiError}
         statusText={studioStatus.text}
         statusTone={studioStatus.tone}
-        canExport={resultReady}
+        canExport={canExport}
         exporting={exporting}
+        exportingLabel={exportBusyLabel}
+        exportDisabledReason={exportDisabledReason}
         onExport={handleExport}
         exportError={exportError}
         onRenameProject={(title) => void handleRenameProject(title)}
@@ -2401,6 +2878,21 @@ export function Studio() {
                   : null
               }
               onClearSelection={() => handleSelectAsset(null)}
+              videoAnalysis={
+                selectedAsset?.kind === "video"
+                  ? {
+                      status: analysisStatus,
+                      analysis,
+                      error: analysisError,
+                      estimateText: "até $0.10 por análise (teto da missão: $5).",
+                      onCheck: () => void loadVideoAnalysis(),
+                      onStartConfirm: () => setAnalysisStatus("confirm"),
+                      onCancelConfirm: () =>
+                        setAnalysisStatus(analysis ? "done" : "idle"),
+                      onAnalyze: () => void handleRunVideoAnalysis(),
+                    }
+                  : null
+              }
               clipEdit={
                 job
                   ? {
@@ -2483,6 +2975,7 @@ export function Studio() {
             recorded={Boolean(recording)}
             recordingName={recording?.filename ?? null}
             onRecordingReady={(blob, filename) => {
+              voiceAutoSentRef.current = null;
               setRecording({ blob, filename });
               setTranscript(null);
               setTranscriptSource(null);
@@ -2491,6 +2984,7 @@ export function Studio() {
               setTranscribeStatus("idle");
             }}
             onRecordingCleared={() => {
+              voiceAutoSentRef.current = null;
               setRecording(null);
               setTranscribeStatus("idle");
               setTranscriptionError(null);
@@ -2501,15 +2995,8 @@ export function Studio() {
             draft={draft}
             onDraftChange={setDraft}
             onTranscribe={handleTranscribe}
-            canConfirm={
-              pendingChat
-                ? false
-                : job
-                  ? Boolean(job.status === "queued" && !job.ready)
-                  : ideaDirectable || !idea || IDEA_TERMINAL.has(idea.status)
-            }
+            canConfirm={!pendingChat}
             confirming={submitting || ideaBusy === "create" || ideaBusy === "direct" || chatBusy}
-            submitted={voiceSubmitted}
             onConfirmTranscript={sendInstruction}
             onRetry={reset}
             consentWaiting={job?.status === "awaiting_consent" && !consentOpen}
@@ -2525,6 +3012,8 @@ export function Studio() {
             emptyPlatform={!job && !file && !uploading}
             pendingDuration={pendingDuration}
             pendingChat={pendingChat}
+            segment={segment}
+            onClearSegment={() => setSegment(null)}
             chatBusy={chatBusy}
             interviewCard={interviewCard}
             onInterviewChip={(value) => void sendInterviewChip(value)}
@@ -2570,6 +3059,9 @@ export function Studio() {
           onSeek={handleSeek}
           editedReady={resultReady}
           trim={clipTrimWindow}
+          onEmptyDrop={handleEmptyDrop}
+          emptyDropping={uploading}
+          emptyError={assemblyError}
           assembly={
             job && assembly
               ? {
@@ -2585,6 +3077,7 @@ export function Studio() {
                   onTrimClip: handleTrimClip,
                   onRemoveClip: handleRemoveClip,
                   onRender: () => void handleRenderTimeline(),
+                  etaNote: renderEta,
                 }
               : null
           }
@@ -2603,6 +3096,10 @@ export function Studio() {
           onMoveText={handleMoveClipText}
           onTrimText={handleTrimClipText}
           onRemoveText={handleRemoveClipText}
+          segment={segment}
+          onMarkSegmentStart={(t) => setSegment({ start_s: t, end_s: t })}
+          onMarkSegmentEnd={(t) => setSegment((prev) => (prev ? { start_s: prev.start_s, end_s: t } : null))}
+          onClearSegment={() => setSegment(null)}
         />
       ) : null}
         </div>
@@ -2614,6 +3111,11 @@ export function Studio() {
           submitting={submitting}
           error={consentError}
           reason={consentReason}
+          trimLabel={
+            job && job.trim_start_s != null && job.trim_end_s != null
+              ? `${formatBadge(job.trim_start_s)}–${formatBadge(job.trim_end_s)}`
+              : null
+          }
           onAuthorize={() => void handleAuthorizeConsent()}
           onDecline={declineConsent}
         />

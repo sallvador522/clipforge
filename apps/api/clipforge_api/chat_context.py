@@ -143,9 +143,81 @@ def read_project_assets(projects, project_id: str | None) -> list[dict[str, Any]
                 "name": asset.original_filename,
                 "provenance": str(asset.provenance),
                 "line": _asset_line(asset),
+                "sha256": asset.sha256,
+                "analysis_summary": _cached_analysis_summary(
+                    projects, project.project_id, asset.asset_id, asset.sha256
+                ),
             }
         )
+    # Fallback por conteúdo idêntico (mesmo projeto): um re-import ou uma
+    # cópia de sessão gera outro asset_id com os mesmos bytes. Como a análise
+    # descreve pixels — e está vinculada ao sha256 — é seguro reutilizar o
+    # resumo dentro do mesmo projeto, sem nunca atravessar projetos.
+    by_sha_summary: dict[str, dict[str, Any]] = {}
+    for item in items:
+        summary = item.get("analysis_summary")
+        if isinstance(summary, dict) and isinstance(item.get("sha256"), str):
+            by_sha_summary.setdefault(item["sha256"], summary)
+    for item in items:
+        if not isinstance(item.get("analysis_summary"), dict):
+            reused = by_sha_summary.get(item.get("sha256", ""))
+            if isinstance(reused, dict):
+                item["analysis_summary"] = reused
     return items
+
+
+def _cached_analysis_summary(
+    projects, project_id: str, asset_id: str, sha256: str
+) -> dict[str, Any] | None:
+    """Compact, non-sensitive summary of a cached analysis for this exact asset version.
+
+    Returns None when there is no analysis or it belongs to another version.
+    Never raises: context building must not break chat on a corrupt sidecar.
+    """
+    try:
+        path = projects.asset_dir(project_id, asset_id) / "analysis.json"
+        if not path.is_file():
+            return None
+        import json as _json
+
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("source_sha256") != sha256:
+        return None
+    if payload.get("asset_id") != asset_id or payload.get("project_id") != project_id:
+        return None
+    summary = str(payload.get("overall_summary") or "").strip()[:600]
+    opportunities = [
+        str(item).strip()[:200]
+        for item in (payload.get("editing_opportunities") or [])
+        if str(item).strip()
+    ][:6]
+    moments = []
+    for item in (payload.get("important_moments") or [])[:6]:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()[:160]
+        if not label:
+            continue
+        at_s = item.get("at_s")
+        stamp = ""
+        if isinstance(at_s, (int, float)) and at_s >= 0:
+            stamp = f"{int(at_s // 60):02d}:{int(at_s % 60):02d} "
+        moments.append(f"{stamp}{label}".strip())
+    raw = str(payload.get("raw_text", ""))
+    excerpt = " ".join(raw.strip().split())[:800]
+    return {
+        "analysis_id": str(payload.get("analysis_id", "")),
+        "is_mock": bool(payload.get("is_mock", False)),
+        "overall_summary": summary,
+        "editing_opportunities": opportunities,
+        "important_moments": moments,
+        "created_at": str(payload.get("created_at", "")),
+        "raw_excerpt": excerpt,
+    }
 
 
 def build_chat_context(
@@ -158,6 +230,7 @@ def build_chat_context(
     idea_record=None,
     interview=None,
     history: list | None = None,
+    selected_asset_id: str | None = None,
 ) -> dict[str, Any]:
     """Snapshot used by the local Q&A and the Spark conversation.
 
@@ -188,6 +261,17 @@ def build_chat_context(
     by_kind: dict[str, list[dict[str, Any]]] = {}
     for asset in assets:
         by_kind.setdefault(asset["kind"], []).append(asset)
+
+    # ADR-061: a seleção dos Recursos viaja com o turno, mas só vale se o
+    # asset existir neste projeto. Seleção inexistente => None (o router
+    # decide sem ela em vez de responder sobre o vídeo errado).
+    resolved_selection: str | None = None
+    if selected_asset_id:
+        for asset in assets:
+            if asset.get("asset_id") == selected_asset_id:
+                asset["selected"] = True
+                resolved_selection = selected_asset_id
+                break
 
     source = job.source_info.model_dump() if job is not None else None
     duration_s = float(source["duration_seconds"]) if source else None
@@ -249,6 +333,7 @@ def build_chat_context(
                 kind: len(items) for kind, items in by_kind.items()
             },
             "assets": assets,
+            "selected_asset_id": resolved_selection,
         },
         "job": {
             "has_clip": job is not None,
@@ -257,6 +342,7 @@ def build_chat_context(
             "status": job.status.value if job is not None else None,
             "stage": job.stage if job is not None else None,
             "ready": job.ready if job is not None else False,
+            "source_sha256": job.source_sha256 if job is not None else None,
             "source_label": source_label,
             "duration_s": duration_s,
             "aspect": aspect,
@@ -369,6 +455,40 @@ def context_for_prompt(snapshot: dict) -> str:
             "Assets (máx. 12 listados): "
             + "; ".join(asset["line"] for asset in project["assets"][:12])
         )
+        selected = _selected_video_asset(project)
+        if selected is not None:
+            has_analysis = isinstance(selected.get("analysis_summary"), dict)
+            blocks.append(
+                f"Vídeo selecionado nos Recursos: «{selected.get('name', selected.get('asset_id'))}»"
+                + (" (com análise visual em cache)" if has_analysis else " (sem análise ainda)")
+                + ". Responde sobre ESTE vídeo quando perguntarem «este vídeo»."
+            )
+        analysed = [
+            asset for asset in project["assets"][:12]
+            if isinstance(asset.get("analysis_summary"), dict)
+        ]
+        if selected is not None and isinstance(selected.get("analysis_summary"), dict):
+            analysed = [selected] + [a for a in analysed if a is not selected]
+        for asset in analysed[:3]:
+            summary = asset["analysis_summary"]
+            bits = []
+            if summary.get("overall_summary"):
+                bits.append(f"Resumo: {summary['overall_summary']}")
+            if summary.get("important_moments"):
+                bits.append("Momentos: " + "; ".join(summary["important_moments"][:4]))
+            if summary.get("editing_opportunities"):
+                bits.append("Melhorias: " + "; ".join(summary["editing_opportunities"][:4]))
+            if not bits and summary.get("raw_excerpt"):
+                bits.append(
+                    "Texto integral do modelo (sem estrutura validada): "
+                    + summary["raw_excerpt"]
+                )
+            if bits:
+                mock_note = " (simulada)" if summary.get("is_mock") else ""
+                blocks.append(
+                    f"Análise visual de «{asset.get('name', asset.get('asset_id'))}»{mock_note}: "
+                    + " ".join(bits)
+                )
     if job.get("has_clip"):
         status = f"{job.get('status')}/{job.get('stage')}"
         lines = [
@@ -451,6 +571,182 @@ def _needs_project_answer(low: str) -> bool:
     return any(hint in low for hint in hints)
 
 
+def _requests_visual_analysis(low: str) -> bool:
+    triggers = (
+        "analisa este video",
+        "analisa este vídeo",
+        "analisar este video",
+        "analisar este vídeo",
+        "analisa o video",
+        "analisa o vídeo",
+        "analisar o video",
+        "analisar o vídeo",
+        "analisa este clipe",
+        "analisar este clipe",
+        "o que se passa neste video",
+        "o que se passa neste vídeo",
+        "o que acontece neste video",
+        "o que acontece neste vídeo",
+        "descreve este video",
+        "descreve este vídeo",
+        "descreve o video",
+        "descreve o vídeo",
+        "sabes sobre",
+        "conheces este video",
+        "conheces este vídeo",
+        "sobre oque",
+        "sobre o que é",
+        "oque é o video",
+        "oque é o vídeo",
+        "o que é o video",
+        "o que é o vídeo",
+        "fala-me deste video",
+        "fala-me deste vídeo",
+    )
+    if any(trigger in low for trigger in triggers):
+        return True
+    # Qualquer conjugação de analisar (analisa/analise/analisar/analises/
+    # analisares/analisado) é um pedido de análise visual — não há outra
+    # análise no produto. Cobre os reportes 2026-11-05 ("analise o video
+    # para mim", "estou a pedir para analisar", "quero que analises ele")
+    # que caíam na entrevista de ideia por falta de trigger exato. O router
+    # decide depois a partir de que asset responder; nunca cai no interview.
+    if "analis" in low or "anális" in low:
+        return True
+    return False
+
+
+def _asks_about_video_content(low: str) -> bool:
+    if not is_direct_question(low):
+        return False
+    hints = (
+        "o que acontece",
+        "o que se passa",
+        "do que se trata",
+        "sobre o que",
+        "o que mostra",
+        "o que aparece",
+        "quem aparece",
+        "que pessoas",
+        "descreve",
+        "resume",
+        "resumo",
+        "acontece no video",
+        "acontece no vídeo",
+        "neste video",
+        "neste vídeo",
+        "neste clipe",
+    )
+    return any(hint in low for hint in hints)
+
+
+def _analysis_target_name(project: dict, preferred_name: str | None = None) -> str:
+    if preferred_name:
+        return f"«{preferred_name}»"
+    videos = [
+        asset.get("name", asset.get("asset_id"))
+        for asset in (project.get("assets") or [])
+        if asset.get("kind") == "video"
+    ]
+    if videos:
+        return f"«{videos[0]}»"
+    return "um vídeo do projeto"
+
+
+def _format_analysis_answer(asset: dict[str, Any], *, with_moments: bool) -> dict[str, Any]:
+    summary = asset.get("analysis_summary") or {}
+    parts = []
+    overall = summary.get("overall_summary") or summary.get("raw_excerpt")
+    if overall:
+        parts.append(overall)
+    if with_moments and summary.get("important_moments"):
+        parts.append("Momentos: " + "; ".join(summary["important_moments"][:4]))
+    if summary.get("editing_opportunities"):
+        parts.append("Melhorias: " + "; ".join(summary["editing_opportunities"][:4]))
+    mock_note = " (análise simulada)" if summary.get("is_mock") else ""
+    return {
+        "intent": "question",
+        "reply": (
+            f"No vídeo «{asset.get('name', asset.get('asset_id'))}»{mock_note}: "
+            + " ".join(parts)
+        )[:1500],
+        "needs_confirmation": False,
+        "pending_text": None,
+        "pending_kind": None,
+    }
+
+
+def _analysis_needed_reply(project: dict, preferred_name: str | None = None) -> dict[str, Any]:
+    target = _analysis_target_name(project, preferred_name)
+    return {
+        "intent": "question",
+        "reply": (
+            "Ainda não analisei esse vídeo — sem análise não adivinho o conteúdo. "
+            f"Seleciona {target} e prime «Analisar vídeo» no painel Propriedades; "
+            "eu vejo-o de verdade e depois respondo sobre o que lá está."
+        ),
+        "needs_confirmation": False,
+        "pending_text": None,
+        "pending_kind": None,
+    }
+
+
+def _ambiguous_video_reply(project: dict) -> dict[str, Any]:
+    analysed = [
+        asset for asset in (project.get("assets") or [])
+        if isinstance(asset.get("analysis_summary"), dict)
+    ]
+    names = ", ".join(f"«{a.get('name', a.get('asset_id'))}»" for a in analysed[:4])
+    return {
+        "intent": "question",
+        "reply": (
+            f"Tenho análises de vários vídeos ({names}). "
+            "Seleciona nos Recursos aquele sobre o qual queres perguntar e repete a pergunta — "
+            "respondo só sobre o vídeo selecionado para não misturar conteúdos."
+        ),
+        "needs_confirmation": False,
+        "pending_text": None,
+        "pending_kind": None,
+    }
+
+
+def _selected_video_asset(project: dict) -> dict[str, Any] | None:
+    """The Recursos selection, only when it is a video of this project."""
+    selected_id = project.get("selected_asset_id")
+    if not selected_id:
+        return None
+    for asset in project.get("assets") or []:
+        if asset.get("asset_id") == selected_id and asset.get("kind") == "video":
+            return asset
+    return None
+
+
+def _ranked_analyses(project: dict, job: dict) -> list[dict[str, Any]]:
+    """Analysed assets ordered by reference strength (ADR-061).
+
+    1. The asset explicitly selected in Recursos (never a silent guess: the
+    user pointed at it). 2. The asset matching the open job's source bytes.
+    3. Everything else, in library order. Summaries only ever come from
+    assets of this project (built that way upstream).
+    """
+    assets = project.get("assets") or []
+    analysed = [
+        asset for asset in assets
+        if isinstance(asset.get("analysis_summary"), dict)
+    ]
+    if not analysed:
+        return []
+    selected = _selected_video_asset(project)
+    if selected is not None and isinstance(selected.get("analysis_summary"), dict):
+        return [selected]
+    job_sha = job.get("source_sha256")
+    if job_sha:
+        linked = [a for a in analysed if a.get("sha256") == job_sha]
+        if linked:
+            return linked
+    return analysed
+
+
 def _meta_history_question(low: str) -> bool:
     meta = (
         "entendeste a minha pergunta",
@@ -482,6 +778,73 @@ def answer_project_question(
     project = context.get("project", {})
     job = context.get("job", {})
     history = context.get("history") or []
+
+    if _requests_visual_analysis(low) and not editorial_intent_verifiable(message):
+        selected = _selected_video_asset(project)
+        if selected is not None:
+            if isinstance(selected.get("analysis_summary"), dict):
+                return _format_analysis_answer(selected, with_moments=True)
+            return _analysis_needed_reply(project, selected.get("name"))
+        ranked = _ranked_analyses(project, job)
+        if ranked:
+            if len(ranked) == 1:
+                return _format_analysis_answer(ranked[0], with_moments=True)
+            lines = []
+            for asset in ranked[:3]:
+                summary = asset["analysis_summary"]
+                text = summary.get("overall_summary") or summary.get("raw_excerpt") or "sem resumo"
+                mock_note = " (simulada)" if summary.get("is_mock") else ""
+                lines.append(f"«{asset.get('name', asset.get('asset_id'))}»{mock_note}: {text}")
+                if summary.get("editing_opportunities"):
+                    lines.append(
+                        "Melhorias: " + "; ".join(summary["editing_opportunities"][:4])
+                    )
+                if summary.get("important_moments"):
+                    lines.append(
+                        "Momentos: " + "; ".join(summary["important_moments"][:4])
+                    )
+            return {
+                "intent": "question",
+                "reply": " ".join(lines)[:1500],
+                "needs_confirmation": False,
+                "pending_text": None,
+                "pending_kind": None,
+            }
+        return _analysis_needed_reply(project)
+
+    if _asks_about_video_content(low):
+        selected = _selected_video_asset(project)
+        if selected is not None:
+            if isinstance(selected.get("analysis_summary"), dict):
+                return _format_analysis_answer(selected, with_moments=True)
+            return _analysis_needed_reply(project, selected.get("name"))
+        ranked = _ranked_analyses(project, job)
+        if not ranked:
+            return _analysis_needed_reply(project)
+        if len(ranked) > 1:
+            return _ambiguous_video_reply(project)
+        asset = ranked[0]
+        summary = asset["analysis_summary"]
+        parts = []
+        if summary.get("overall_summary"):
+            parts.append(summary["overall_summary"])
+        elif summary.get("raw_excerpt"):
+            parts.append(summary["raw_excerpt"])
+        if summary.get("important_moments"):
+            parts.append(
+                "Momentos: " + "; ".join(summary["important_moments"][:4])
+            )
+        mock_note = " (análise simulada)" if summary.get("is_mock") else ""
+        return {
+            "intent": "question",
+            "reply": (
+                f"No vídeo «{asset.get('name', asset.get('asset_id'))}»{mock_note}: "
+                + " ".join(parts)
+            )[:1500],
+            "needs_confirmation": False,
+            "pending_text": None,
+            "pending_kind": None,
+        }
 
     if _meta_history_question(low):
         prior = None
@@ -549,6 +912,44 @@ def answer_project_question(
                 "pending_text": None,
                 "pending_kind": None,
             }
+
+    if "selecion" in low and ("video" in low or "vídeo" in low or "clipe" in low or "qual" in low or "que" in low or "tenho" in low or "tens" in low):
+        selected = _selected_video_asset(project)
+        if selected is not None:
+            analysed = isinstance(selected.get("analysis_summary"), dict)
+            name = selected.get("name", selected.get("asset_id"))
+            if analysed:
+                return _format_analysis_answer(selected, with_moments=False)
+            return {
+                "intent": "question",
+                "reply": (
+                    f"Tens selecionado nos Recursos o {name}, ainda sem análise. "
+                    "Prime «Analisar vídeo» no painel Propriedades e eu vejo-o de verdade."
+                ),
+                "needs_confirmation": False,
+                "pending_text": None,
+                "pending_kind": None,
+            }
+        assets = project.get("assets") or []
+        if assets:
+            names = ", ".join(f"«{a.get('name', a.get('asset_id'))}»" for a in assets[:4])
+            return {
+                "intent": "question",
+                "reply": (
+                    f"Não tens nenhum vídeo selecionado nos Recursos. Tens: {names}. "
+                    "Seleciona um e repete a pergunta."
+                ),
+                "needs_confirmation": False,
+                "pending_text": None,
+                "pending_kind": None,
+            }
+        return {
+            "intent": "question",
+            "reply": "Não tens nenhum vídeo selecionado e o projeto ainda não tem assets.",
+            "needs_confirmation": False,
+            "pending_text": None,
+            "pending_kind": None,
+        }
 
     if any(phrase in low for phrase in ("que clipe", "qual o clipe", "qual é o vídeo", "nome do vídeo", "qual o ficheiro")):
         if job.get("has_clip"):

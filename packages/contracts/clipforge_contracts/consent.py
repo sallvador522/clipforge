@@ -1,7 +1,9 @@
-"""Explicit consent for external SAM video processing (ADR-020).
+"""Explicit consent for external SAM video processing (ADR-020, ADR-056).
 
 Consent is bound to one job, one source-video hash, one disclosure version and
-one provider/model. It is separate from editing-plan approval.
+one provider/model. Since ADR-056 it may also bind a trim window: when the
+user marks a trecho, only that window (seconds into the original source) may
+be sent to Meta. It is separate from editing-plan approval.
 """
 
 from __future__ import annotations
@@ -30,6 +32,15 @@ class SubjectDetectionConsent(BaseModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     segmentation_mode: Literal["live"]
+    # ADR-056: optional trim window (seconds into the ORIGINAL source) the
+    # consent covers. None/None = the whole video. A set window must match
+    # the job's trim exactly, otherwise SAM stays refused.
+    trim_start_s: float | None = Field(default=None, ge=0.0)
+    trim_end_s: float | None = Field(default=None, gt=0.0)
+    # Hash of the materialized trimmed working copy, when it already exists
+    # at binding time (the /consent path). Voice-time binding happens before
+    # materialization, so this stays None and the window binding governs.
+    trimmed_video_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class ConsentValidationError(ValueError):
@@ -48,6 +59,12 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def _same_window(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(a - b) <= 1e-6
+
+
 def validate_subject_detection_consent(
     consent: SubjectDetectionConsent | None,
     *,
@@ -55,6 +72,8 @@ def validate_subject_detection_consent(
     source_video_hash: str,
     provider: str,
     model: str,
+    trim_start_s: float | None = None,
+    trim_end_s: float | None = None,
 ) -> None:
     """Validate every binding before any upload or inference call."""
     if consent is None or not consent.consent_given:
@@ -92,4 +111,12 @@ def validate_subject_detection_consent(
         raise ConsentValidationError(
             "subject_detection_consent_mode_mismatch",
             "The consent record was not given for live segmentation.",
+        )
+    if not _same_window(consent.trim_start_s, trim_start_s) or not _same_window(
+        consent.trim_end_s, trim_end_s
+    ):
+        raise ConsentValidationError(
+            "subject_detection_consent_trim_mismatch",
+            "The consent record covers a different trecho (or the whole video); "
+            "re-authorize the current selection before SAM runs.",
         )

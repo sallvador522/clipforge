@@ -319,6 +319,44 @@ def _job_with_clip(tmp_path):
     )
 
 
+def test_content_question_falls_back_to_raw_excerpt(tmp_path):
+    """Free-form model text (no parsed sections) is still answerable: the
+    router quotes the verbatim excerpt instead of inventing structure."""
+    from clipforge_api import chat_context
+
+    context = {
+        "project": {
+            "id": "prj_1",
+            "title": "T",
+            "assets_total": 1,
+            "assets_by_kind": {"video": 1},
+            "assets": [
+                {
+                    "kind": "video",
+                    "name": "clip.mp4",
+                    "analysis_summary": {
+                        "is_mock": False,
+                        "overall_summary": "",
+                        "important_moments": [],
+                        "editing_opportunities": [],
+                        "raw_excerpt": "Um vídeo vertical sobre uma ferramenta de IA.",
+                    },
+                }
+            ],
+        },
+        "job": {"has_clip": True},
+        "idea": None,
+        "history": [],
+    }
+    body = chat_context.answer_project_question(
+        "o que acontece neste vídeo?", context, has_clip=True, has_texts=False
+    )
+    assert body is not None
+    assert body["intent"] == "question"
+    assert "ferramenta de IA" in body["reply"]
+    assert body["pending_text"] is None
+
+
 def test_gibberish_with_clip_is_clarify_without_pending(tmp_path):
     client = _job_with_clip(tmp_path)
     for message in ("HSDJS", "JSDHSD", "asdf qwer"):
@@ -376,3 +414,116 @@ def test_direct_question_with_clip_does_not_crash(tmp_path):
     assert body["pending_text"] is None
     assert body["pending_kind"] is None
     assert "Executar" not in body["reply"]
+
+
+def _write_analysis(projects: ProjectStore, asset_id: str, *, is_mock: bool = False) -> None:
+    payload = {
+        "analysis_id": "van_0123456789ab",
+        "project_id": "prj_00000000abcd",
+        "asset_id": asset_id,
+        "source_sha256": "0" * 64,
+        "provider": "mock" if is_mock else "meta-muse-spark",
+        "model": "mock-video-analysis-fixture" if is_mock else "muse-spark-1.3-contributor",
+        "provider_response_id": None,
+        "video_duration_s": 19.6,
+        "created_at": "2026-11-04T00:00:00Z",
+        "raw_text": "RESUMO: Um cão castanho corre num parque.",
+        "overall_summary": "Um cão castanho corre num parque ao pôr-do-sol.",
+        "visual_style": None,
+        "subjects": ["uma pessoa de casaco escuro"],
+        "objects_seen": ["um cão castanho", "relva"],
+        "scenes": [],
+        "important_moments": [
+            {"at_s": 1.0, "approximate": True, "label": "o cão entra a correr"}
+        ],
+        "composition_observations": ["luz lateral quente"],
+        "editing_opportunities": ["desfocar ligeiramente o fundo"],
+        "uncertainties": [],
+        "prompt_tokens": 800 if not is_mock else 0,
+        "completion_tokens": 120 if not is_mock else 0,
+        "estimated_cost_usd": 0.000104 if not is_mock else 0.0,
+        "is_mock": is_mock,
+        "file_reused": False,
+    }
+    directory = projects.assets_dir("prj_00000000abcd") / asset_id
+    Path(directory, "analysis.json").write_text(_to_json(payload), encoding="utf-8")
+
+
+def test_analysis_request_without_cache_points_to_button(tmp_path):
+    store, projects = _project_stores(tmp_path)
+    _direct_project_file(projects)
+    _write_asset(projects, tmp_path / "storage", "video", "clip-1.mp4", 3)
+    store.create(_job_record(tmp_path))
+    client = _client(tmp_path)
+    body = client.post(
+        "/api/chat",
+        json={"message": "analisa este vídeo", "job_id": "jobchat123"},
+    ).json()
+    assert body["intent"] == "question"
+    assert body["needs_confirmation"] is False
+    assert body["pending_text"] is None
+    assert "Analisar vídeo" in body["reply"]
+    assert "Executar" not in body["reply"]
+
+
+def test_analysis_request_with_cache_answers_from_analysis(tmp_path):
+    store, projects = _project_stores(tmp_path)
+    _direct_project_file(projects)
+    asset_id = _write_asset(projects, tmp_path / "storage", "video", "clip-1.mp4", 3)
+    _write_analysis(projects, asset_id)
+    store.create(_job_record(tmp_path))
+    client = _client(tmp_path)
+    body = client.post(
+        "/api/chat",
+        json={"message": "analisa este vídeo", "job_id": "jobchat123"},
+    ).json()
+    assert body["intent"] == "question"
+    assert body["needs_confirmation"] is False
+    assert body["pending_text"] is None
+    assert "cão castanho" in body["reply"]
+
+
+def test_content_question_answered_from_cached_analysis(tmp_path):
+    store, projects = _project_stores(tmp_path)
+    _direct_project_file(projects)
+    asset_id = _write_asset(projects, tmp_path / "storage", "video", "clip-1.mp4", 3)
+    _write_analysis(projects, asset_id)
+    store.create(_job_record(tmp_path))
+    client = _client(tmp_path)
+    body = client.post(
+        "/api/chat",
+        json={"message": "o que acontece neste vídeo?", "job_id": "jobchat123"},
+    ).json()
+    assert body["intent"] == "question"
+    assert body["pending_text"] is None
+    assert "cão castanho" in body["reply"]
+
+
+def test_content_question_without_cache_points_to_button(tmp_path):
+    store, projects = _project_stores(tmp_path)
+    _direct_project_file(projects)
+    _write_asset(projects, tmp_path / "storage", "video", "clip-1.mp4", 3)
+    store.create(_job_record(tmp_path))
+    client = _client(tmp_path)
+    body = client.post(
+        "/api/chat",
+        json={"message": "o que acontece neste vídeo?", "job_id": "jobchat123"},
+    ).json()
+    assert body["intent"] == "question"
+    assert body["pending_text"] is None
+    assert "Analisar vídeo" in body["reply"]
+
+
+def test_edit_request_still_proposes_after_analysis_hooks(tmp_path):
+    store, projects = _project_stores(tmp_path)
+    _direct_project_file(projects)
+    asset_id = _write_asset(projects, tmp_path / "storage", "video", "clip-1.mp4", 3)
+    _write_analysis(projects, asset_id)
+    store.create(_job_record(tmp_path))
+    client = _client(tmp_path)
+    body = client.post(
+        "/api/chat", json={"message": "desfoca o fundo", "job_id": "jobchat123"}
+    ).json()
+    assert body["intent"] == "edit_proposal"
+    assert body["needs_confirmation"] is True
+    assert body["pending_text"] == "desfoca o fundo"

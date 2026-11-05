@@ -10,6 +10,10 @@ interface Props {
   statusTone: "idle" | "working" | "attention" | "done";
   canExport: boolean;
   exporting: boolean;
+  /** Texto do botão durante o fluxo automático (ex. "A montar…"). */
+  exportingLabel?: string | null;
+  /** Motivo visível quando o botão está desligado (sem nada para exportar). */
+  exportDisabledReason?: string | null;
   onExport: () => void;
   exportError: string | null;
   onRenameProject: (title: string) => void;
@@ -25,7 +29,7 @@ const TONE_DOT: Record<Props["statusTone"], string> = {
 
 export function TopBar({
   projectName, apiError, statusText, statusTone,
-  canExport, exporting, onExport, exportError, onRenameProject, canRename,
+  canExport, exporting, exportingLabel, exportDisabledReason, onExport, exportError, onRenameProject, canRename,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -77,9 +81,11 @@ export function TopBar({
       </div>
 
       <div className="relative shrink-0">
+      <span title={!canExport && exportDisabledReason ? exportDisabledReason : undefined}>
         <Button onClick={onExport} disabled={!canExport || exporting} className="h-8 shrink-0 whitespace-nowrap rounded-[6px] px-3.5 text-[12px]">
-          {exporting ? "A exportar…" : "Exportar"}
+          {exporting ? (exportingLabel ?? "A exportar…") : "Exportar"}
         </Button>
+      </span>
         {exportError && (
           <p className="absolute right-0 top-full z-10 mt-1 w-64 rounded-md border border-danger/40 bg-surface p-2 text-xs text-danger" role="alert">
             {exportError}

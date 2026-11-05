@@ -25,7 +25,7 @@ from PIL import Image
 from clipforge_api.media import UploadValidationError, probe_video
 from clipforge_jobs.models import SourceInfo
 
-MAX_ASSET_BYTES = 4 * 1024 * 1024 * 1024  # ADR-044: 15-min media; import buffers in memory, disk is the real bound
+MAX_ASSET_BYTES = 4 * 1024 * 1024 * 1024  # ADR-058: 30-min media; import buffers in memory, disk is the real bound
 MAX_TEXT_BYTES = 1 * 1024 * 1024
 MAX_SVG_BYTES = 2 * 1024 * 1024
 
@@ -91,8 +91,8 @@ def probe_audio_file(path: Path) -> dict:
         duration = 0.0
     if duration <= 0:
         raise UploadValidationError("invalid_audio", "The uploaded audio has no measurable duration.")
-    if duration > 900:
-        raise UploadValidationError("audio_too_long", f"Audio is {duration:.1f}s; the limit is 900s (15 min).")
+    if duration > 1800:
+        raise UploadValidationError("audio_too_long", f"Audio is {duration:.1f}s; the limit is 1800s (30 min).")
     try:
         channels = int(audio.get("channels", 0) or 0)
     except (TypeError, ValueError):

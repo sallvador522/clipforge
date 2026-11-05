@@ -11,7 +11,7 @@ Built for the **Meta Global Hackathon**. ClipForge is not a UI mockup: rendering
 FFmpeg + OpenCV, outputs are verified with ffprobe, and live runs use Meta Muse models for
 transcription and editing direction.
 
-![ClipForge editor with a clip loaded, timeline populated and a voice instruction ready](docs/assets/clipforge-editor.png)
+![ClipForge editor — project library, 9:16 preview, Muse assistant and multitrack timeline with a verified clip](capaGit.png)
 
 ---
 
@@ -329,7 +329,7 @@ npm run typecheck
 npm run build
 ```
 
-Current backend suite: **513 tests passing** (run 2026-11-04). The frontend typecheck and production build
+Current backend suite: **576 tests passing** (run 2026-11-05). The frontend typecheck and production build
 also pass. Browser E2E suites in `apps/web/scripts/` (`qa-final-e2e`, `qa-rescue`,
 `qa-chat`, `qa-chat2`, `qa-magicbg`, `qa-ux-rescue`) run against an isolated mock stack
 (API `:8001` + web `:3001`) with zero paid calls. No GitHub Actions or paid CI is required;

@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import anyio
 import functools
+import json
 import logging
 import os
+import re
 import uuid
-from typing import Literal
+from typing import Any, Literal
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -34,8 +36,10 @@ from clipforge_contracts import (
     ColourGrade,
     ProjectMode,
     ProjectRecord,
+    ProviderFileRef,
     SubjectDetectionConsent,
     Timeline,
+    VideoAnalysis,
     get_capability,
     sha256_file,
 )
@@ -121,6 +125,15 @@ class ConsentRequest(BaseModel):
     subject_detection_consent: bool | None = None
 
 
+class AnalyzeVideoBody(BaseModel):
+    """Explicit per-analysis approval. `approved_cost_usd` must cover the
+    documented per-analysis ceiling; it is recorded, never silently raised."""
+
+    model_config = ConfigDict(extra="forbid")
+    instruction: str | None = Field(default=None, max_length=500)
+    approved_cost_usd: float = Field(default=0.0, ge=0.0, le=5.0)
+
+
 class InterviewAnswers(BaseModel):
     """Slots the director interviews for before creating an idea.
 
@@ -147,6 +160,16 @@ class ChatTurnMessage(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class ChatSegment(BaseModel):
+    """Timeline trecho selected by the user (seconds into the original
+    source). The director scopes SAM work to this window: segments above
+    the SAM frame cap are refused with an honest smaller-segment request."""
+
+    model_config = ConfigDict(extra="forbid")
+    start_s: float = Field(ge=0.0)
+    end_s: float = Field(gt=0.0)
+
+
 class ChatRequest(BaseModel):
     """Conversational Muse turn. Side-effect free: never creates jobs,
     ideas, ledger reservations or provider calls. Execution happens only
@@ -159,8 +182,13 @@ class ChatRequest(BaseModel):
     project_id: str | None = Field(default=None, max_length=128)
     idea_id: str | None = Field(default=None, max_length=128)
     selected_text_id: str | None = Field(default=None, max_length=64)
+    # ADR-061: the library asset selected in Recursos. Validated server-side
+    # against the effective project (same-project only); the router may use
+    # its cached analysis, but anything else is ignored, never trusted.
+    selected_asset_id: str | None = Field(default=None, max_length=32)
     interview: InterviewAnswers | None = None
     history: list[ChatTurnMessage] = Field(default_factory=list, max_length=24)
+    segment: ChatSegment | None = None
 
 
 class TrimRequest(BaseModel):
@@ -169,6 +197,49 @@ class TrimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     start_s: float | None = Field(default=None, ge=0.0)
     end_s: float | None = Field(default=None, gt=0.0)
+
+
+class SourceTranscriptRequest(BaseModel):
+    """ADR-060 chunked source-audio transcription. Cost approval first:
+    unconfirmed calls return only the block/cost estimate."""
+
+    model_config = ConfigDict(extra="forbid")
+    confirmed: bool = False
+    start_s: float | None = Field(default=None, ge=0.0)
+    end_s: float | None = Field(default=None, gt=0.0)
+
+
+def _source_transcript_path(store: JobStore, job_id: str) -> Path:
+    return store.job_dir(job_id) / "source_transcript.json"
+
+
+def _read_source_transcript(store: JobStore, job_id: str) -> dict | None:
+    try:
+        return json.loads(_source_transcript_path(store, job_id).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_source_transcript(store: JobStore, job_id: str, payload: dict) -> None:
+    path = _source_transcript_path(store, job_id)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.replace(path)
+
+
+class ChunkedInitRequest(BaseModel):
+    """ADR-058 resumable upload: declare the file before sending chunks."""
+
+    model_config = ConfigDict(extra="forbid")
+    filename: str = Field(min_length=1, max_length=255)
+    total_bytes: int = Field(gt=0)
+    total_chunks: int = Field(ge=1)
+    project_id: str | None = Field(default=None, max_length=128)
+
+
+CHUNKED_MAX_CHUNKS = 4096
+CHUNKED_MAX_CHUNK_BYTES = 64 * 1024 * 1024
+CHUNKED_STALE_SECONDS = 24 * 3600
 
 
 class UploadAudioRequest(BaseModel):
@@ -407,8 +478,146 @@ def _to_response(record: JobRecord) -> JobResponse:
     )
 
 
+def _chunked_root(store: JobStore) -> Path:
+    root = store.uploads_dir / "chunked"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _chunked_manifest_path(store: JobStore, upload_id: str) -> Path:
+    return _chunked_root(store) / upload_id / "manifest.json"
+
+
+def _read_chunked_manifest(store: JobStore, upload_id: str) -> dict | None:
+    if not re.fullmatch(r"[0-9a-f]{32}", upload_id or ""):
+        return None
+    try:
+        return json.loads(_chunked_manifest_path(store, upload_id).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_chunked_manifest(store: JobStore, upload_id: str, manifest: dict) -> None:
+    directory = _chunked_root(store) / upload_id
+    directory.mkdir(parents=True, exist_ok=True)
+    tmp = directory / "manifest.json.tmp"
+    tmp.write_text(json.dumps(manifest), encoding="utf-8")
+    tmp.replace(directory / "manifest.json")
+
+
+def _sweep_stale_chunked(store: JobStore) -> None:
+    """Best-effort cleanup of abandoned chunked uploads (>24 h). Runs on init."""
+    import time
+
+    root = _chunked_root(store)
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return
+    now = time.time()
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        try:
+            manifest = json.loads((entry / "manifest.json").read_text(encoding="utf-8"))
+            created = float(manifest.get("created_at", 0))
+        except Exception:
+            created = 0.0
+        if now - created > CHUNKED_STALE_SECONDS:
+            import shutil
+
+            shutil.rmtree(entry, ignore_errors=True)
+
+
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": {"code": code, "message": message}})
+
+
+def _finalize_session_upload(
+    store: JobStore,
+    projects,
+    original_name: str,
+    assembled_path: Path,
+    size: int,
+    project_id: str | None,
+) -> JobRecord:
+    """Shared finalize path for single-shot and chunked session uploads.
+
+    Resolves (or creates) the project, moves the assembled file into a fresh
+    job directory, probes it, creates the job and registers the session
+    asset. Raises UploadValidationError (mapped to JSON by the app handler);
+    invalid uploads leave no orphaned files or job records behind.
+    """
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise UploadValidationError(
+            "unsupported_extension",
+            f"Extension {suffix or '(none)'} not allowed; use {sorted(ALLOWED_EXTENSIONS)}.",
+            422,
+        )
+    try:
+        project = None
+        if project_id:
+            try:
+                project = projects.get_project(project_id)
+            except ProjectNotFoundError:
+                raise UploadValidationError("project_not_found", f"Project not found: {project_id}", 404)
+        else:
+            base = Path(original_name).stem.strip() or "Untitled project"
+            try:
+                project = projects.create_project(base[:80])
+            except ValueError as exc:
+                raise UploadValidationError("invalid_project", str(exc), 422)
+    except UploadValidationError:
+        raise
+    assert project is not None
+    job_id = uuid.uuid4().hex
+    upload_dir = store.uploads_dir / job_id
+    upload_dir.mkdir(parents=True, exist_ok=False)
+    source_path = upload_dir / f"source{suffix}"
+    try:
+        os.replace(assembled_path, source_path)
+        if size == 0:
+            raise UploadValidationError("empty_file", "Uploaded file is empty.", 400)
+        info = probe_video(source_path)
+        source_sha256 = sha256_file(source_path)
+    except UploadValidationError:
+        source_path.unlink(missing_ok=True)
+        try:
+            upload_dir.rmdir()
+        except OSError:
+            pass
+        raise
+    except OSError as exc:
+        source_path.unlink(missing_ok=True)
+        try:
+            upload_dir.rmdir()
+        except OSError:
+            pass
+        raise UploadValidationError("file_unreadable", "Uploaded file could not be read.", 422) from exc
+    record = JobRecord(
+        job_id=job_id,
+        project_id=project.project_id,
+        original_filename=original_name,
+        source_relative_path=f"uploads/{job_id}/source{suffix}",
+        source_info=info,
+        source_sha256=source_sha256,
+    )
+    store.create(record)
+    try:
+        _register_session_asset(
+            projects,
+            project_id=project.project_id,
+            original_name=original_name,
+            source_path=source_path,
+            size=size,
+            info=info,
+            source_sha256=source_sha256,
+        )
+    except Exception:
+        logger.warning("session_asset_registration_failed job_id=%s", job_id)
+    logger.info("job_created job_id=%s project_id=%s file=%s size=%d", job_id, project.project_id, original_name, size)
+    return record
 
 
 class _ConsentBindingError(Exception):
@@ -423,9 +632,12 @@ class _ConsentBindingError(Exception):
 def _bind_consent_record(record: JobRecord, store: JobStore, bundle: ProviderBundle) -> SubjectDetectionConsent:
     """Build the source-bound consent record for a live job.
 
-    Raises _ConsentBindingError (no state changed) when the source cannot be
-    read, changed since upload, or the provider identity is missing. Only the
-    explicit caller persists the returned record.
+    Binds the original hash plus the current trim window (ADR-056). When the
+    trimmed working copy is already materialized, its hash is bound too, so
+    SAM can verify the exact file it uploads. Raises _ConsentBindingError
+    (no state changed) when the source cannot be read, changed since upload,
+    or the provider identity is missing. Only the explicit caller persists
+    the returned record.
     """
     source_path = store.source_path(record)
     try:
@@ -450,6 +662,13 @@ def _bind_consent_record(record: JobRecord, store: JobStore, bundle: ProviderBun
             "segmentation_provider_misconfigured",
             "Live segmentation provider is missing provider/model identity.",
         )
+    trimmed_hash: str | None = None
+    trimmed_rel = getattr(record, "trimmed_relative_path", None)
+    if record.trim_start_s is not None and trimmed_rel:
+        try:
+            trimmed_hash = sha256_file(store.root / str(trimmed_rel).replace("\\", "/"))
+        except OSError:
+            trimmed_hash = None
     return SubjectDetectionConsent(
         job_id=record.job_id,
         source_video_hash=source_hash,
@@ -459,6 +678,9 @@ def _bind_consent_record(record: JobRecord, store: JobStore, bundle: ProviderBun
         provider=provider_name,
         model=model,
         segmentation_mode="live",
+        trim_start_s=record.trim_start_s,
+        trim_end_s=record.trim_end_s,
+        trimmed_video_hash=trimmed_hash,
     )
 
 
@@ -583,6 +805,19 @@ CHAT_ENV_VAR = "CLIPFORGE_CHAT_MODE"
 
 def _chat_mode() -> str:
     selected = os.environ.get(CHAT_ENV_VAR, "mock").strip().lower()
+    return "live" if selected == "live" else "mock"
+
+
+# ADR-057: native video understanding. Mock (local deterministic fixture) is
+# the default; live reuses the verified Responses + Files contract via
+# SparkVideoAnalysisProvider: one Files upload (reused per asset version) +
+# one Responses analysis call under a single `video_analysis` ledger slot.
+VIDEO_ENV_VAR = "CLIPFORGE_VIDEO_MODE"
+ANALYSIS_CEILING_USD = 0.10  # documented per-analysis approval ceiling.
+
+
+def _video_mode() -> str:
+    selected = os.environ.get(VIDEO_ENV_VAR, "mock").strip().lower()
     return "live" if selected == "live" else "mock"
 
 
@@ -980,7 +1215,74 @@ def _propose_edit_tools(message: str, record, selected_text_id: str | None) -> d
             "select_text_id": target["overlay_id"]}
 
 
-def _classify_chat(message: str, has_clip: bool) -> dict:
+SAM_MAX_FRAMES = 15_000
+SAM_USD_PER_1K_FRAMES = 0.20
+
+
+def _format_mmss(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _segment_estimate(start_s: float, end_s: float, fps: float) -> tuple[int, float]:
+    frames = max(1, int(round((end_s - start_s) * fps)))
+    return frames, round(frames / 1000 * SAM_USD_PER_1K_FRAMES, 4)
+
+
+def _is_source_transcript_request(message: str) -> bool:
+    """Explicit request to transcribe the clip's own audio (for captions)."""
+    import re as _re
+
+    low = message.strip().lower()
+    if not _re.search(r"\btranscrev\w+", low):
+        return False
+    return bool(_re.search(r"\b(áudio|audio|falas?|voz|diálogo|dialogo|fala)\b", low))
+
+
+def _transcript_proposal(text: str, record, segment: dict | None) -> dict:
+    """Cost-approved proposal for chunked source transcription (ADR-060)."""
+    from clipforge_api.transcribe import estimate_source_transcript
+
+    info = record.source_info
+    duration = float(info.duration_seconds)
+    if not info.has_audio:
+        return {
+            "intent": "clarify",
+            "reply": "Este vídeo não tem faixa de áudio para transcrever.",
+            "needs_confirmation": False,
+            "pending_text": None,
+            "pending_kind": None,
+        }
+    if segment is not None:
+        start, end = float(segment["start_s"]), float(segment["end_s"])
+        label = f"trecho {_format_mmss(start)}–{_format_mmss(end)}"
+    else:
+        start, end = 0.0, duration
+        label = "vídeo inteiro"
+    estimate = estimate_source_transcript(end - start)
+    return {
+        "intent": "edit_proposal",
+        "reply": (
+            f"Percebi: «{text}». Transcrevo o áudio do {label} em "
+            f"{estimate['blocks']} bloco(s) (≈${estimate['estimated_usd']:.4f} no total). "
+            "Nada foi executado ainda — prime Executar para continuar."
+        ),
+        "needs_confirmation": True,
+        "pending_text": text,
+        "pending_kind": "transcript",
+        "pending_estimate": estimate,
+        **({"pending_segment": {"start_s": start, "end_s": end}} if segment else {}),
+    }
+
+
+def _classify_chat(
+    message: str,
+    has_clip: bool,
+    *,
+    segment: dict | None = None,
+    duration_s: float | None = None,
+    fps: float | None = None,
+) -> dict:
     """Deterministic production router. No AI/provider calls, no side effects."""
     text = message.strip()
     low = text.lower()
@@ -1050,14 +1352,71 @@ def _classify_chat(message: str, has_clip: bool) -> dict:
                 and "titulo" not in low_full):
             programmatic = any(k in low_full for k in
                                ("gradient", "gradiente", "animad", "minimalista", "geometric"))
+            if programmatic:
+                return {
+                    "intent": "edit_proposal",
+                    "reply": (
+                        f"Percebi: «{text}». Para um fundo animado uso o gerador programático local "
+                        "(gradiente + formas em movimento, sem gerar imagens nem custos extra). "
+                        "Nada foi executado ainda — prime Executar para continuar ou ajusta o texto."
+                    ),
+                    "needs_confirmation": True,
+                    "pending_text": text,
+                    "pending_kind": "edit",
+                }
+            seg = segment if isinstance(segment, dict) else None
+            seg_label = (
+                f"{_format_mmss(seg['start_s'])}–{_format_mmss(seg['end_s'])}"
+                if seg else None
+            )
+            if seg and duration_s and fps:
+                frames, cost = _segment_estimate(seg["start_s"], seg["end_s"], fps)
+                if frames > SAM_MAX_FRAMES:
+                    return {
+                        "intent": "edit_proposal",
+                        "reply": (
+                            f"Percebi: «{text}». Mas o trecho {seg_label} tem ~{frames} frames e o "
+                            f"SAM só analisa até {SAM_MAX_FRAMES} de cada vez — escolhe um trecho mais "
+                            "curto na timeline e peço de novo."
+                        ),
+                        "needs_confirmation": False,
+                        "pending_text": None,
+                        "pending_kind": None,
+                    }
+                return {
+                    "intent": "edit_proposal",
+                    "reply": (
+                        f"Percebi: «{text}». Uso o trecho {seg_label} "
+                        f"({seg['end_s'] - seg['start_s']:.1f}s, ~{frames} frames a {fps:g}fps, "
+                        f"≈${cost:.2f} de SAM). Ao executar, aplico o trecho como recorte e corro o "
+                        "fluxo normal: plano → aprovação → SAM → render. "
+                        "Nada foi executado ainda — prime Executar para continuar."
+                    ),
+                    "needs_confirmation": True,
+                    "pending_text": text,
+                    "pending_kind": "edit",
+                    "pending_segment": {"start_s": seg["start_s"], "end_s": seg["end_s"]},
+                }
+            if duration_s and fps and int(round(duration_s * fps)) > SAM_MAX_FRAMES:
+                whole = _format_mmss(duration_s)
+                return {
+                    "intent": "edit_proposal",
+                    "reply": (
+                        f"Percebi: «{text}». Mas o teu vídeo tem {whole} — o SAM só analisa até "
+                        f"{SAM_MAX_FRAMES} frames de cada vez. Seleciona um trecho na timeline "
+                        "(botões Início/Fim do trecho) e peço de novo."
+                    ),
+                    "needs_confirmation": False,
+                    "pending_text": None,
+                    "pending_kind": None,
+                }
             bg_path = (
-                "Para um fundo animado uso o gerador programático local "
-                "(gradiente + formas em movimento, sem gerar imagens nem custos extra). "
-                if programmatic else
                 "Para o fundo uso o director (Muse Spark): ele planeia, tu aprovas, "
                 "e a remoção ou substituição corre com SAM 3.1 + Muse Image com o teu "
                 "consentimento explícito. "
             )
+            if seg_label:
+                bg_path += f"Vou usar o trecho {seg_label} que selecionaste na timeline. "
             return {
                 "intent": "edit_proposal",
                 "reply": (
@@ -1067,6 +1426,8 @@ def _classify_chat(message: str, has_clip: bool) -> dict:
                 "needs_confirmation": True,
                 "pending_text": text,
                 "pending_kind": "edit",
+                **({"pending_segment": {"start_s": seg["start_s"], "end_s": seg["end_s"]}}
+                   if seg else {}),
             }
         if not has_actionable_edit_signal(text):
             # Gibberish or content-free text (e.g. "HSDJS") is never an
@@ -1094,11 +1455,79 @@ def _classify_chat(message: str, has_clip: bool) -> dict:
     }
 
 
+def _analysis_sidecar_paths(projects: ProjectStore, project_id: str, asset_id: str) -> tuple[Path, Path]:
+    """(analysis.json, provider_files.json) inside the asset directory."""
+    directory = projects.asset_dir(project_id, asset_id)
+    return directory / "analysis.json", directory / "provider_files.json"
+
+
+def _read_json_sidecar(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _valid_provider_ref_for_sha(refs: Any, sha256: str) -> str | None:
+    """Return a reusable file_id bound to exactly this asset version."""
+    if not isinstance(refs, list):
+        return None
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        if ref.get("source_sha256") == sha256 and isinstance(ref.get("file_id"), str):
+            file_id = ref["file_id"]
+            if file_id.startswith("file-"):
+                return file_id
+    return None
+
+
+def _mock_video_analysis(*, project_id: str, asset_id: str, sha256: str) -> dict:
+    """Deterministic zero-cost fixture: labels itself simulated, no network."""
+    raw = (
+        "RESUMO: Vídeo de demonstração (análise simulada, sem chamada ao modelo).\n"
+        "ACONTECE: Sequência de teste com formas em movimento.\n"
+        "ELEMENTOS:\n- formas geométricas coloridas sobre fundo escuro\n"
+        "MOMENTOS:\n- 00:01 - abertura com formas em movimento\n"
+        "OBSERVACOES:\n- composição centrada de demonstração\n"
+        "MELHORIAS:\n- nenhuma sugerida em modo simulado\n"
+        "INCERTEZAS:\n- análise simulada: sem observações reais"
+    )
+    return {
+        "analysis_id": "van_" + uuid.uuid4().hex[:12],
+        "project_id": project_id,
+        "asset_id": asset_id,
+        "source_sha256": sha256,
+        "provider": "mock",
+        "model": "mock-video-analysis-fixture",
+        "provider_response_id": None,
+        "video_duration_s": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "raw_text": raw,
+        "overall_summary": "Vídeo de demonstração (análise simulada, sem chamada ao modelo).",
+        "visual_style": None,
+        "subjects": [],
+        "objects_seen": ["formas geométricas coloridas sobre fundo escuro"],
+        "actions": [],
+        "scenes": [],
+        "important_moments": [{"at_s": 1.0, "approximate": True, "label": "abertura com formas em movimento"}],
+        "composition_observations": ["composição centrada de demonstração"],
+        "editing_opportunities": [],
+        "uncertainties": ["análise simulada: sem observações reais"],
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "estimated_cost_usd": 0.0,
+        "is_mock": True,
+        "file_reused": False,
+    }
+
+
 def create_app(
     storage_root: str | Path | None = None,
     providers: ProviderBundle | None = None,
     *,
     chat_provider_factory=None,
+    video_analysis_provider_factory=None,
 ) -> FastAPI:
     root = Path(storage_root) if storage_root else Path(os.environ.get("CLIPFORGE_STORAGE_ROOT", "storage"))
     store = JobStore(root)
@@ -1157,10 +1586,12 @@ def create_app(
             "segmentation_mode": bundle.segmentation_mode,
             "image_mode": bundle.image_mode,
             "chat_mode": chat_mode,
+            "video_mode": _video_mode(),
             "subject_detection_disclosure_version": SUBJECT_DETECTION_DISCLOSURE_VERSION,
             "live_transcription_available": bundle.transcription_mode == "live",
             "live_image_available": bundle.image_mode == "live",
             "live_chat_available": chat_mode == "live",
+            "live_video_available": _video_mode() == "live",
             "live_call_limits": budget.limits,
             "live_call_budget_enforced": budget.enforced,
             "live_calls_used": {function: budget.used(function) for function in budget.limits},
@@ -1177,77 +1608,294 @@ def create_app(
         if suffix not in ALLOWED_EXTENSIONS:
             return _error(422, "unsupported_extension",
                           f"Extension {suffix or '(none)'} not allowed; use {sorted(ALLOWED_EXTENSIONS)}.")
-        # Resolve the project: reuse the caller's workspace or create one so the
-        # source clip is always a registered project asset (no AI triggered here).
-        try:
-            project: ProjectRecord | None = None
-            if project_id:
-                try:
-                    project = projects.get_project(project_id)
-                except ProjectNotFoundError:
-                    return _error(404, "project_not_found", f"Project not found: {project_id}")
-            else:
-                base = Path(original_name).stem.strip() or "Untitled project"
-                project = projects.create_project(base[:80])
-        except ValueError as exc:
-            return _error(422, "invalid_project", str(exc))
-        assert project is not None
-        job_id = uuid.uuid4().hex
-        upload_dir = store.uploads_dir / job_id
-        upload_dir.mkdir(parents=True, exist_ok=False)
-        source_path = upload_dir / f"source{suffix}"
+        # Stream to a temp file first; the shared finalize path moves it into
+        # the job directory (single-shot and chunked uploads end identically).
+        tmp_path = store.uploads_dir / f"single_{uuid.uuid4().hex}{suffix}.part"
         size = 0
         try:
-            with source_path.open("wb") as out:
+            with tmp_path.open("wb") as out:
                 while chunk := await file.read(1024 * 1024):
                     size += len(chunk)
                     if size > MAX_UPLOAD_BYTES:
                         raise UploadValidationError("file_too_large", "Upload exceeds the local size limit.", 413)
                     out.write(chunk)
-            if size == 0:
-                raise UploadValidationError("empty_file", "Uploaded file is empty.", 400)
-            info = probe_video(source_path)
-            source_sha256 = sha256_file(source_path)
         except UploadValidationError:
-            # Invalid uploads leave no orphaned files or job records behind.
-            source_path.unlink(missing_ok=True)
-            try:
-                upload_dir.rmdir()
-            except OSError:
-                pass
+            tmp_path.unlink(missing_ok=True)
             raise
         except OSError as exc:
-            source_path.unlink(missing_ok=True)
-            try:
-                upload_dir.rmdir()
-            except OSError:
-                pass
-            raise UploadValidationError(
-                "file_unreadable", "Uploaded file could not be read.", 422
-            ) from exc
-        record = JobRecord(
-            job_id=job_id,
-            project_id=project.project_id,
-            original_filename=original_name,
-            source_relative_path=f"uploads/{job_id}/source{suffix}",
-            source_info=info,
-            source_sha256=source_sha256,
-        )
-        store.create(record)
+            tmp_path.unlink(missing_ok=True)
+            raise UploadValidationError("file_unreadable", "Uploaded file could not be read.", 422) from exc
         try:
-            _register_session_asset(
-                projects,
-                project_id=project.project_id,
-                original_name=original_name,
-                source_path=source_path,
-                size=size,
-                info=info,
-                source_sha256=source_sha256,
-            )
-        except Exception:
-            logger.warning("session_asset_registration_failed job_id=%s", job_id)
-        logger.info("job_created job_id=%s project_id=%s file=%s size=%d", job_id, project.project_id, original_name, size)
+            record = _finalize_session_upload(store, projects, original_name, tmp_path, size, project_id)
+        finally:
+            tmp_path.unlink(missing_ok=True)
         return _to_response(record)
+
+    # -- Resumable chunked uploads (ADR-058, production) ------------------------
+    @app.post("/api/uploads/chunked", status_code=201, response_model=None)
+    async def chunked_init(body: ChunkedInitRequest) -> JSONResponse:
+        """Declare a resumable upload. Returns an upload_id; chunks follow via
+        PUT .../{upload_id}/{index}, status via GET, assembly via POST
+        .../{upload_id}/complete, cleanup via DELETE. No job exists until
+        complete succeeds, so aborted uploads cost nothing but temp disk."""
+        filename = Path(body.filename or "").name[:255] or "upload"
+        suffix = Path(filename).suffix.lower()
+        if suffix not in ALLOWED_EXTENSIONS:
+            return _error(422, "unsupported_extension",
+                          f"Extension {suffix or '(none)'} not allowed; use {sorted(ALLOWED_EXTENSIONS)}.")
+        if body.total_bytes > MAX_UPLOAD_BYTES:
+            return _error(413, "file_too_large", "Upload exceeds the local size limit.")
+        if body.total_chunks > CHUNKED_MAX_CHUNKS:
+            return _error(422, "too_many_chunks", f"Too many chunks; maximum is {CHUNKED_MAX_CHUNKS}.")
+        if body.project_id:
+            try:
+                projects.get_project(body.project_id)
+            except ProjectNotFoundError:
+                return _error(404, "project_not_found", f"Project not found: {body.project_id}")
+        _sweep_stale_chunked(store)
+        upload_id = uuid.uuid4().hex
+        import time as _time
+
+        _write_chunked_manifest(store, upload_id, {
+            "filename": filename,
+            "suffix": suffix,
+            "total_bytes": body.total_bytes,
+            "total_chunks": body.total_chunks,
+            "received": [],
+            "project_id": body.project_id,
+            "created_at": _time.time(),
+        })
+        logger.info("chunked_init upload_id=%s file=%s bytes=%d chunks=%d",
+                    upload_id, filename, body.total_bytes, body.total_chunks)
+        return JSONResponse(status_code=201, content={
+            "upload_id": upload_id,
+            "total_chunks": body.total_chunks,
+            "received": [],
+        })
+
+    @app.get("/api/uploads/chunked/{upload_id}", response_model=None)
+    async def chunked_status(upload_id: str) -> JSONResponse:
+        """Which chunk indices the server already holds (resume support)."""
+        manifest = _read_chunked_manifest(store, upload_id)
+        if manifest is None:
+            return _error(404, "upload_not_found", f"Unknown or expired upload: {upload_id}")
+        return JSONResponse(content={
+            "upload_id": upload_id,
+            "total_chunks": manifest["total_chunks"],
+            "received": sorted(manifest["received"]),
+        })
+
+    @app.put("/api/uploads/chunked/{upload_id}/{index}", response_model=None)
+    async def chunked_put(upload_id: str, index: int, request: Request) -> JSONResponse:
+        """Store one raw chunk body. Idempotent: resending an index overwrites it."""
+        manifest = _read_chunked_manifest(store, upload_id)
+        if manifest is None:
+            return _error(404, "upload_not_found", f"Unknown or expired upload: {upload_id}")
+        total = int(manifest["total_chunks"])
+        if not (0 <= index < total):
+            return _error(422, "invalid_chunk_index", f"Chunk index {index} is outside 0–{total - 1}.")
+        body = await request.body()
+        if len(body) == 0:
+            return _error(422, "empty_chunk", f"Chunk {index} is empty.")
+        if len(body) > CHUNKED_MAX_CHUNK_BYTES:
+            return _error(413, "chunk_too_large",
+                           f"Chunk {index} exceeds the {CHUNKED_MAX_CHUNK_BYTES // (1024 * 1024)} MB per-chunk limit.")
+        directory = _chunked_root(store) / upload_id
+        part = directory / f"part_{index:06d}.bin"
+        tmp = directory / f"part_{index:06d}.bin.tmp"
+        try:
+            tmp.write_bytes(body)
+            os.replace(tmp, part)
+        except OSError:
+            return _error(422, "chunk_unwritable", f"Chunk {index} could not be stored.")
+        received = sorted(set(manifest.get("received", [])) | {index})
+        manifest["received"] = received
+        _write_chunked_manifest(store, upload_id, manifest)
+        return JSONResponse(content={"upload_id": upload_id, "received": received})
+
+    @app.post("/api/uploads/chunked/{upload_id}/complete", status_code=201, response_model=None)
+    async def chunked_complete(upload_id: str) -> JobResponse | JSONResponse:
+        """Assemble chunks in order and run the standard session-upload finalize.
+        Missing chunks, size mismatch or invalid media fail here with no job."""
+        manifest = _read_chunked_manifest(store, upload_id)
+        if manifest is None:
+            return _error(404, "upload_not_found", f"Unknown or expired upload: {upload_id}")
+        total = int(manifest["total_chunks"])
+        received = sorted(set(manifest.get("received", [])))
+        if received != list(range(total)):
+            missing = sorted(set(range(total)) - set(received))
+            return _error(409, "chunks_missing",
+                          f"Chunks missing: {missing[:8]}{'...' if len(missing) > 8 else ''}.")
+        directory = _chunked_root(store) / upload_id
+        assembled = directory / "assembled.bin"
+        size = 0
+        try:
+            with assembled.open("wb") as out:
+                for i in range(total):
+                    part = directory / f"part_{i:06d}.bin"
+                    if not part.is_file():
+                        return _error(409, "chunks_missing", f"Chunk file {i} is missing.")
+                    with part.open("rb") as fh:
+                        while data := fh.read(1024 * 1024):
+                            size += len(data)
+                            out.write(data)
+            if size != int(manifest["total_bytes"]):
+                return _error(422, "size_mismatch",
+                              f"Assembled {size} bytes but declared {manifest['total_bytes']}.")
+        except OSError:
+            return _error(422, "assembly_failed", "Chunks could not be assembled.")
+        try:
+            record = _finalize_session_upload(
+                store, projects, manifest["filename"], assembled, size, manifest.get("project_id"))
+        finally:
+            import shutil as _shutil
+
+            _shutil.rmtree(directory, ignore_errors=True)
+        logger.info("chunked_complete upload_id=%s job_id=%s size=%d", upload_id, record.job_id, size)
+        return _to_response(record)
+
+    @app.delete("/api/uploads/chunked/{upload_id}", response_model=None)
+    async def chunked_abort(upload_id: str) -> JSONResponse:
+        """Discard a resumable upload and free its temp disk."""
+        manifest = _read_chunked_manifest(store, upload_id)
+        if manifest is None:
+            return _error(404, "upload_not_found", f"Unknown or expired upload: {upload_id}")
+        import shutil as _shutil
+
+        _shutil.rmtree(_chunked_root(store) / upload_id, ignore_errors=True)
+        return JSONResponse(content={"deleted": True})
+
+    # -- Source-audio transcription in provider-capped blocks (ADR-060) -----
+    @app.post("/api/jobs/{job_id}/source-transcript", response_model=None)
+    async def start_source_transcript(
+        job_id: str, body: SourceTranscriptRequest, background: BackgroundTasks,
+    ) -> JSONResponse:
+        """Transcribe the job's own audio in <=10-min blocks with per-block
+        ledger slots. Unconfirmed calls return ONLY the block/cost estimate;
+        confirmed calls run async (202) and the GET endpoint is polled."""
+        from clipforge_api.transcribe import estimate_source_transcript
+
+        record = store.get(job_id)
+        info = record.source_info
+        if not info.has_audio:
+            return _error(422, "source_transcript_no_audio", "This video has no audio track to transcribe.")
+        duration = float(info.duration_seconds)
+        if duration > 1800:
+            return _error(422, "source_transcript_too_long", "Source audio exceeds the 30-minute limit.")
+        start = 0.0 if body.start_s is None else float(body.start_s)
+        end = duration if body.end_s is None else float(body.end_s)
+        if not (0.0 <= start < end <= duration + 1e-6):
+            return _error(422, "invalid_transcript_window",
+                           f"Window [{start:.1f}, {end:.1f}] is outside the 0–{duration:.1f}s audio.")
+        window = end - start
+        if window < 1.0:
+            return _error(422, "transcript_window_too_short", "Transcribe at least 1 second of audio.")
+        estimate = estimate_source_transcript(window)
+        estimate["window"] = {"start_s": round(start, 3), "end_s": round(end, 3)}
+        existing = _read_source_transcript(store, job_id)
+        if existing and existing.get("status") == "completed" and existing.get("window") == estimate["window"]:
+            return JSONResponse(content={**existing, "needs_confirmation": False})
+        if not body.confirmed:
+            return JSONResponse(content={
+                "status": "estimate", "needs_confirmation": True,
+                "estimate": estimate, "transcript": None, "turns": [], "error": None})
+        if existing and existing.get("status") == "running" and existing.get("window") == estimate["window"]:
+            return JSONResponse(content={**existing, "needs_confirmation": False}, status_code=202)
+        _write_source_transcript(store, job_id, {
+            "status": "running", "needs_confirmation": False, "estimate": estimate,
+            "window": estimate["window"], "transcript": None, "turns": [], "error": None,
+        })
+        background.add_task(_run_source_transcript, store, bundle, job_id, start, end, estimate)
+        logger.info("source_transcript_started job_id=%s window=%.1f-%.1f blocks=%d",
+                    job_id, start, end, estimate["blocks"])
+        return JSONResponse(content={
+            "status": "running", "needs_confirmation": False, "estimate": estimate,
+            "window": estimate["window"], "transcript": None, "turns": [], "error": None,
+        }, status_code=202)
+
+    @app.get("/api/jobs/{job_id}/source-transcript", response_model=None)
+    async def get_source_transcript(job_id: str) -> JSONResponse:
+        """Poll the chunked transcription: idle | running | completed | failed."""
+        store.get(job_id)
+        existing = _read_source_transcript(store, job_id)
+        if existing is None:
+            return JSONResponse(content={"status": "idle"})
+        return JSONResponse(content=existing)
+
+    async def _run_source_transcript(
+        store: JobStore, bundle, job_id: str, start: float, end: float, estimate: dict,
+    ) -> None:
+        """Background worker: extract window audio, transcribe per block, join."""
+        from clipforge_api import transcribe as _t
+
+        def fail(code: str, message: str) -> None:
+            _write_source_transcript(store, job_id, {
+                "status": "failed", "needs_confirmation": False, "estimate": estimate,
+                "window": estimate["window"], "transcript": None, "turns": [],
+                "error": {"code": code, "message": message},
+            })
+            logger.warning("source_transcript_failed job_id=%s code=%s", job_id, code)
+
+        try:
+            record = store.get(job_id)
+        except Exception as exc:
+            fail("job_not_found", str(exc))
+            return
+        source = store.uploads_dir / job_id / f"source{Path(record.original_filename).suffix.lower()}"
+        if record.trimmed_relative_path:
+            candidate = store.root / record.trimmed_relative_path
+            if candidate.is_file():
+                source = candidate
+        if not source.is_file():
+            fail("source_not_found", "The job source file is missing.")
+            return
+        try:
+            import tempfile as _tempfile
+
+            tmp = Path(_tempfile.mkdtemp(prefix="clipforge-src-asr-"))
+            full_wav = tmp / "full.wav"
+            window_len = end - start
+            if start > 0 or window_len < float(record.source_info.duration_seconds) - 1e-6:
+                _t.convert_to_wav_window(source, full_wav, start, window_len)
+            else:
+                _t.convert_to_wav(source, full_wav)
+            result = await anyio.to_thread.run_sync(
+                lambda: _t.transcribe_source_blocks(
+                    wav_path=full_wav,
+                    duration_seconds=window_len,
+                    providers=bundle,
+                    budget=LiveCallBudget(store.root),
+                    block_seconds=_t.TRANSCRIPT_BLOCK_SECONDS,
+                )
+            )
+        except AudioValidationError as exc:
+            fail(exc.code, str(exc))
+            return
+        except Exception as exc:  # never leave the poller hanging
+            fail("transcription_failed", f"Source transcription failed: {exc}")
+            return
+        finally:
+            import shutil as _shutil
+
+            try:
+                _shutil.rmtree(tmp, ignore_errors=True)
+            except Exception:
+                pass
+        try:
+            payload = {
+                "status": "completed", "needs_confirmation": False, "estimate": estimate,
+                "window": estimate["window"],
+                "transcript": result.text,
+                "turns": [t.model_dump(mode="json") for t in result.turns],
+                "is_mock": result.is_mock,
+                "error": None,
+            }
+        except Exception as exc:
+            fail("transcription_failed", f"Transcription result was not usable: {exc}")
+            return
+        _write_source_transcript(store, job_id, payload)
+        logger.info("source_transcript_completed job_id=%s chars=%d turns=%d mock=%s",
+                    job_id, len(result.text), len(result.turns), result.is_mock)
 
     # -- Project workspace (P0) -------------------------------------------------
     @app.post("/api/projects", status_code=201, response_model=None)
@@ -1396,13 +2044,352 @@ def create_app(
             projects.get_project(project_id)
         except ProjectNotFoundError:
             return _error(404, "project_not_found", f"Project not found: {project_id}")
+        # Best-effort Meta file cleanup: read refs before the sidecars vanish.
+        provider_file_ids: list[str] = []
+        try:
+            _refs_path, _ = _analysis_sidecar_paths(projects, project_id, asset_id)
+            refs = _read_json_sidecar(_refs_path)
+            if isinstance(refs, list):
+                seen: set[str] = set()
+                for ref in refs:
+                    file_id = ref.get("file_id") if isinstance(ref, dict) else None
+                    if isinstance(file_id, str) and file_id.startswith("file-") and file_id not in seen:
+                        seen.add(file_id)
+                        provider_file_ids.append(file_id)
+        except (ProjectNotFoundError, AssetNotFoundError, Exception):
+            provider_file_ids = []
         try:
             projects.delete_asset(project_id, asset_id)
         except AssetNotFoundError:
             return _error(404, "asset_not_found", f"Asset not found: {asset_id}")
         except OSError as exc:
             return _error(409, "asset_delete_failed", f"Asset could not be deleted: {exc}")
+        if provider_file_ids:
+            try:
+                from clipforge_providers.video_analysis import SparkVideoAnalysisProvider
+
+                api_key = os.environ.get("MODEL_API_KEY", "")
+                if api_key.strip():
+                    cleanup_provider = SparkVideoAnalysisProvider(api_key, timeout_seconds=10.0)
+                    try:
+                        for file_id in provider_file_ids:
+                            try:
+                                cleanup_provider.delete_file(file_id)
+                            except Exception as exc:
+                                logger.warning("analysis_file_cleanup_failed file_id=%s error=%s", file_id, type(exc).__name__)
+                    finally:
+                        cleanup_provider.close()
+            except Exception as exc:
+                logger.warning("analysis_file_cleanup_skipped error=%s", type(exc).__name__)
         return JSONResponse(content={"deleted": True})
+
+    def _resolve_analysis_asset(project_id: str, asset_id: str):
+        """Validate project/asset and return (meta, source_path) or a JSONResponse error."""
+        try:
+            projects.get_project(project_id)
+        except ProjectNotFoundError:
+            return None, _error(404, "project_not_found", f"Project not found: {project_id}")
+        sidecar = projects.asset_dir(project_id, asset_id) / "asset.json"
+        if not sidecar.is_file():
+            return None, _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        try:
+            meta = AssetRecord.model_validate_json(sidecar.read_text(encoding="utf-8"))
+        except Exception:
+            return None, _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        if meta.project_id != project_id:
+            return None, _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        if meta.kind != AssetKind.VIDEO:
+            return None, _error(422, "analysis_not_video", "Video analysis requires a video asset.")
+        directory = projects.asset_dir(project_id, asset_id)
+        path = directory / meta.stored_filename
+        try:
+            path.resolve().relative_to(directory.resolve())
+        except ValueError:
+            return None, _error(404, "asset_not_found", f"Asset not found: {asset_id}")
+        if not path.is_file():
+            return None, _error(404, "asset_file_missing", "The asset media file is missing.")
+        return (meta, path), None
+
+    @app.get("/api/projects/{project_id}/assets/{asset_id}/analysis", response_model=None)
+    async def get_video_analysis(project_id: str, asset_id: str) -> JSONResponse:
+        resolved, error = _resolve_analysis_asset(project_id, asset_id)
+        if error is not None:
+            return error
+        meta, source_path = resolved
+        try:
+            current_sha = sha256_file(source_path)
+        except OSError:
+            return _error(404, "asset_file_missing", "The asset media file could not be read.")
+        analysis_path, _refs_path_unused = _analysis_sidecar_paths(projects, project_id, asset_id)
+        payload = _read_json_sidecar(analysis_path)
+        if not isinstance(payload, dict):
+            return _error(404, "analysis_not_found", "This video has no analysis yet.")
+        try:
+            record = VideoAnalysis.model_validate(payload)
+        except Exception:
+            return _error(404, "analysis_not_found", "This video has no valid analysis yet.")
+        if record.source_sha256 != current_sha or record.asset_id != asset_id:
+            return _error(409, "analysis_stale",
+                            "The video changed since this analysis; run a new analysis.")
+        return JSONResponse(content={"analysis": record.model_dump(mode="json")})
+
+    @app.post("/api/projects/{project_id}/assets/{asset_id}/analyze", response_model=None)
+    async def analyze_video_asset(
+        project_id: str, asset_id: str, body: AnalyzeVideoBody | None = None
+    ) -> JSONResponse:
+        """Analyse one project video with Muse Spark (ADR-057).
+
+        Mock (default): deterministic local fixture, zero cost, no ledger.
+        Live (`CLIPFORGE_VIDEO_MODE=live`): Files upload once per asset
+        version (reused afterwards) + one Responses analysis call under a
+        single `video_analysis` ledger slot. Explicit per-call approval via
+        `approved_cost_usd` against ANALYSIS_CEILING_USD. No retries.
+        """
+        from clipforge_director.ledger import (
+            LedgerIntegrityError,
+            LedgerLockedError,
+            LiveBudgetExceeded,
+            LiveCallAuthorization,
+            LiveCallBudget,
+            LiveCallNotAuthorizedError,
+        )
+
+        resolved, error = _resolve_analysis_asset(project_id, asset_id)
+        if error is not None:
+            return error
+        meta, source_path = resolved
+        try:
+            current_sha = sha256_file(source_path)
+        except OSError:
+            return _error(404, "asset_file_missing", "The asset media file could not be read.")
+        if meta.sha256 != current_sha:
+            return _error(409, "analysis_source_changed",
+                            "The asset changed after import; re-import it before analysing.")
+        approved = float(body.approved_cost_usd) if body else 0.0
+        if approved < ANALYSIS_CEILING_USD:
+            return _error(409, "cost_cap_exceeded",
+                            f"Video analysis needs explicit approval up to ${ANALYSIS_CEILING_USD:.2f}; "
+                            f"approved ${approved:.2f}.")
+        analysis_path, refs_path = _analysis_sidecar_paths(projects, project_id, asset_id)
+        if _video_mode() != "live":
+            payload = _mock_video_analysis(
+                project_id=project_id, asset_id=asset_id, sha256=current_sha
+            )
+            try:
+                record = VideoAnalysis.model_validate(payload)
+            except Exception as exc:
+                return _error(502, "analysis_failed", f"Mock analysis failed validation: {exc}")
+            try:
+                tmp = analysis_path.with_suffix(".json.tmp")
+                tmp.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+                os.replace(tmp, analysis_path)
+            except OSError as exc:
+                return _error(503, "analysis_not_persisted", f"Could not store the analysis: {exc}")
+            return JSONResponse(content={
+                "analysis": record.model_dump(mode="json"),
+                "video_mode": "mock",
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                          "estimated_cost_usd": 0.0, "file_reused": False},
+            })
+
+        # ---- live path ----
+        from clipforge_providers.video_analysis import (
+            SparkVideoAnalysisProvider,
+            VideoAnalysisAPIError,
+            VideoAnalysisError,
+            VideoAnalysisMissingCredentialsError,
+            VideoAnalysisNotAuthorizedError,
+            VideoAnalysisRateLimitedError,
+            VideoAnalysisTimeoutError,
+            VideoAnalysisValidationError,
+            parse_analysis_sections,
+            prepare_analysis_copy,
+        )
+
+        api_key = os.environ.get("MODEL_API_KEY", "")
+        if not api_key.strip():
+            return _error(503, "analysis_not_configured",
+                            "Video analysis needs a server-side MODEL_API_KEY.")
+        try:
+            if video_analysis_provider_factory is not None:
+                provider = video_analysis_provider_factory()
+            else:
+                provider = SparkVideoAnalysisProvider(
+                    api_key,
+                    max_output_tokens=int(os.environ.get("CLIPFORGE_VIDEO_MAX_TOKENS", "2000")),
+                    timeout_seconds=float(os.environ.get("CLIPFORGE_VIDEO_TIMEOUT_SECONDS", "300")),
+                )
+            authorization = LiveCallAuthorization(LiveCallBudget(root), "video_analysis")
+            refs = _read_json_sidecar(refs_path)
+            file_id = _valid_provider_ref_for_sha(refs, current_sha)
+            file_reused = file_id is not None
+            tmp_out = root / "tmp" / f"analysis_{asset_id}.mp4"
+            tmp_out.parent.mkdir(parents=True, exist_ok=True)
+            # A failed run may leave one stale temp copy; it is overwritten
+            # here and removed after every successful analysis.
+            tmp_out.unlink(missing_ok=True)
+            try:
+                await anyio.to_thread.run_sync(
+                    functools.partial(prepare_analysis_copy, source_path, tmp_out)
+                )
+            except VideoAnalysisValidationError as exc:
+                return _error(422, "analysis_unusable", str(exc))
+            if not file_reused:
+                try:
+                    file_id = await anyio.to_thread.run_sync(provider.upload_file, tmp_out)
+                except VideoAnalysisMissingCredentialsError:
+                    return _error(503, "analysis_not_configured",
+                                    "Video analysis needs a server-side MODEL_API_KEY.")
+                except VideoAnalysisRateLimitedError:
+                    return _error(429, "analysis_rate_limited",
+                                    "A análise de vídeo está com muito tráfego. Tenta de novo.")
+                except VideoAnalysisTimeoutError as exc:
+                    return _error(504, "analysis_timeout", str(exc))
+                except (VideoAnalysisAPIError, VideoAnalysisError) as exc:
+                    return _error(502, "analysis_failed", f"Video upload failed: {exc}")
+                new_ref = {
+                    "provider": "meta",
+                    "model": provider.model,
+                    "source_sha256": current_sha,
+                    "file_id": file_id,
+                    "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                    "expires_at": None,
+                    "purpose": "user_data",
+                }
+                kept = [r for r in (refs if isinstance(refs, list) else []) if isinstance(r, dict)]
+                kept.append(new_ref)
+                kept = kept[-4:]
+                try:
+                    tmp_refs = refs_path.with_suffix(".json.tmp")
+                    tmp_refs.write_text(json.dumps(kept, indent=2), encoding="utf-8")
+                    os.replace(tmp_refs, refs_path)
+                except OSError as exc:
+                    return _error(503, "analysis_not_persisted",
+                                    f"Could not store the file reference: {exc}")
+            instruction = ((body.instruction or "").strip()
+                           if body and body.instruction else "")
+            if not instruction:
+                instruction = ("Descreve o que acontece neste vídeo "
+                               "(resumo, elementos visuais, momentos, composição) "
+                               "e sugere melhorias profissionais.")
+            try:
+                text, usage = await anyio.to_thread.run_sync(
+                    functools.partial(
+                        provider.analyze_file,
+                        file_id=file_id,
+                        instruction=instruction,
+                        authorization=authorization,
+                    )
+                )
+            except VideoAnalysisMissingCredentialsError:
+                return _error(503, "analysis_not_configured",
+                                "Video analysis needs a server-side MODEL_API_KEY.")
+            except LiveCallNotAuthorizedError as exc:
+                return _error(503, "live_budget_not_authorized", str(exc))
+            except LedgerIntegrityError as exc:
+                return _error(503, "live_budget_integrity_error", str(exc))
+            except LedgerLockedError as exc:
+                return _error(503, "live_budget_locked", str(exc))
+            except LiveBudgetExceeded as exc:
+                return _error(429, "live_budget_exhausted", str(exc))
+            except VideoAnalysisRateLimitedError:
+                return _error(429, "analysis_rate_limited",
+                                "A análise de vídeo está com muito tráfego. Tenta de novo.")
+            except VideoAnalysisTimeoutError as exc:
+                return _error(504, "analysis_timeout", str(exc))
+            except (VideoAnalysisAPIError, VideoAnalysisValidationError,
+                    VideoAnalysisError, ValueError) as exc:
+                logger.warning("video_analysis_failed asset=%s error=%s",
+                               asset_id, type(exc).__name__)
+                return _error(502, "analysis_failed",
+                                f"A análise de vídeo falhou ({type(exc).__name__}). Tenta de novo.")
+            finally:
+                try:
+                    provider.close()
+                except Exception:
+                    pass
+            parsed = parse_analysis_sections(text)
+            try:
+                record = VideoAnalysis(
+                    analysis_id="van_" + uuid.uuid4().hex[:12],
+                    project_id=project_id,
+                    asset_id=asset_id,
+                    source_sha256=current_sha,
+                    provider="meta-muse-spark",
+                    model=provider.model,
+                    provider_response_id=usage.response_id,
+                    video_duration_s=float(meta.duration_seconds) if meta.duration_seconds else None,
+                    raw_text=text[:12000],
+                    overall_summary=parsed.get("overall_summary"),
+                    subjects=parsed.get("subjects", []),
+                    objects_seen=parsed.get("objects_seen", []),
+                    scenes=[],
+                    important_moments=[
+                        {"at_s": m.get("at_s"), "approximate": True, "label": m.get("label", "")[:200]}
+                        for m in parsed.get("moments", [])[:12]
+                    ],
+                    composition_observations=parsed.get("composition_observations", []),
+                    editing_opportunities=parsed.get("editing_opportunities", []),
+                    uncertainties=parsed.get("uncertainties", []),
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    estimated_cost_usd=usage.cost_usd,
+                    is_mock=False,
+                    file_reused=file_reused,
+                )
+            except Exception as exc:
+                return _error(502, "analysis_failed",
+                                f"Analysis output failed validation: {exc}")
+            try:
+                tmp = analysis_path.with_suffix(".json.tmp")
+                tmp.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+                os.replace(tmp, analysis_path)
+            except OSError as exc:
+                return _error(503, "analysis_not_persisted",
+                                f"Could not store the analysis: {exc}")
+            try:
+                tmp_out.unlink(missing_ok=True)
+            except OSError:
+                pass
+            usage.file_reused = file_reused
+            logger.info("video_analysis_ok asset=%s file_reused=%s in=%d out=%d cost=%.6f",
+                        asset_id, file_reused,
+                        usage.prompt_tokens, usage.completion_tokens, usage.cost_usd)
+            return JSONResponse(content={
+                "analysis": record.model_dump(mode="json"),
+                "video_mode": "live",
+                "usage": usage.model_dump(mode="json"),
+            })
+        except (VideoAnalysisMissingCredentialsError, LiveCallNotAuthorizedError,
+                LedgerIntegrityError, LedgerLockedError, LiveBudgetExceeded,
+                VideoAnalysisRateLimitedError, VideoAnalysisTimeoutError,
+                VideoAnalysisAPIError, VideoAnalysisValidationError,
+                VideoAnalysisError, ValueError) as exc:
+            logger.warning("video_analysis_failed asset=%s error=%s",
+                           asset_id, type(exc).__name__)
+            code = "analysis_failed"
+            status = 502
+            if isinstance(exc, VideoAnalysisMissingCredentialsError):
+                code, status = "analysis_not_configured", 503
+            elif isinstance(exc, LiveCallNotAuthorizedError):
+                code, status = "live_budget_not_authorized", 503
+            elif isinstance(exc, LedgerIntegrityError):
+                code, status = "live_budget_integrity_error", 503
+            elif isinstance(exc, LedgerLockedError):
+                code, status = "live_budget_locked", 503
+            elif isinstance(exc, LiveBudgetExceeded):
+                code, status = "live_budget_exhausted", 429
+            elif isinstance(exc, VideoAnalysisRateLimitedError):
+                code, status = "analysis_rate_limited", 429
+            elif isinstance(exc, VideoAnalysisTimeoutError):
+                code, status = "analysis_timeout", 504
+            return _error(status, code, f"{code}: {exc}")
+        except Exception as exc:  # noqa: BLE001 - surfaced as a stable API error
+            logger.warning("video_analysis_failed asset=%s error=%s",
+                           asset_id, type(exc).__name__)
+            return _error(502, "analysis_failed",
+                            f"A análise de vídeo falhou ({type(exc).__name__}). Tenta de novo.")
+
 
     @app.post("/api/chat", response_model=None)
     async def chat(body: ChatRequest) -> JSONResponse:
@@ -1427,6 +2414,23 @@ def create_app(
                 record = None
         has_clip = record is not None and bool(record.original_filename)
 
+        # Timeline trecho: validated against the real source duration so the
+        # director only ever plans SAM work on a window it can process.
+        seg_dict: dict | None = None
+        if body.segment is not None:
+            if record is None or not has_clip or record.source_info is None:
+                return _error(422, "segment_no_clip",
+                                "Seleciona primeiro um clipe para marcar um trecho.")
+            duration = float(record.source_info.duration_seconds)
+            start, end = float(body.segment.start_s), float(body.segment.end_s)
+            if not (0.0 <= start < end <= duration + 1e-6):
+                return _error(422, "invalid_segment",
+                                f"Trecho [{start:.1f}, {end:.1f}] fora do vídeo de {duration:.1f}s.")
+            if end - start < 0.5:
+                return _error(422, "segment_too_short",
+                                "O trecho tem de ter pelo menos 0.5s.")
+            seg_dict = {"start_s": start, "end_s": min(end, duration)}
+
         idea_record = None
         if body.idea_id:
             try:
@@ -1435,6 +2439,22 @@ def create_app(
                 idea_record = IdeaStore(root).get(body.idea_id)
             except Exception:
                 idea_record = None
+
+        # ADR-061: the Recursos selection travels with the turn, but is only
+        # honored when it provably belongs to the effective project. Anything
+        # else is ignored (never trusted, never an error that breaks chat).
+        selected_asset_id: str | None = None
+        effective_project_id = body.project_id or (record.project_id if record is not None else None)
+        if body.selected_asset_id and effective_project_id:
+            try:
+                sidecar = projects.asset_dir(effective_project_id, body.selected_asset_id) / "asset.json"
+                meta = AssetRecord.model_validate_json(sidecar.read_text(encoding="utf-8"))
+                if meta.project_id == effective_project_id:
+                    selected_asset_id = body.selected_asset_id
+                else:
+                    logger.warning("chat_selected_asset_cross_project asset_id=%s", body.selected_asset_id)
+            except Exception:
+                logger.warning("chat_selected_asset_unknown asset_id=%s", body.selected_asset_id)
 
         context = build_chat_context(
             projects=projects,
@@ -1445,6 +2465,7 @@ def create_app(
             idea_record=idea_record,
             interview=body.interview,
             history=body.history,
+            selected_asset_id=selected_asset_id,
         )
         context_text = context_for_prompt(context)
 
@@ -1461,6 +2482,28 @@ def create_app(
                 len(text),
             )
             return await _chat_response(question, text, has_clip, context=context)
+
+        # ADR-060 source transcription: explicit cost-approved proposal with
+        # block counts. Runs before the edit-tools router so "transcreve o
+        # áudio deste vídeo" never becomes a text-overlay tool call.
+        if record is not None and has_clip and _is_source_transcript_request(text):
+            proposal = _transcript_proposal(text, record, seg_dict)
+            if proposal.get("needs_confirmation"):
+                payload = {
+                    "intent": "edit_proposal",
+                    "reply": proposal["reply"],
+                    "needs_confirmation": True,
+                    "pending_text": text,
+                    "pending_kind": "transcript",
+                    "pending_tool_calls": [],
+                    "pending_estimate": proposal.get("pending_estimate"),
+                    **({"pending_segment": proposal["pending_segment"]}
+                       if proposal.get("pending_segment") else {}),
+                }
+                logger.info("chat_turn intent=transcript_proposal has_clip=%s chars=%d",
+                            has_clip, len(text))
+                return await _chat_response(payload, text, has_clip, context=context)
+            return await _chat_response(proposal, text, has_clip, context=context)
 
         # ADR-047 edit router: real tool proposals on the persisted job.
         if record is not None and has_clip and editorial_intent_verifiable(text):
@@ -1483,12 +2526,53 @@ def create_app(
                             payload["intent"], has_clip, len(text),
                             len(proposal.get("tool_calls") or []))
                 return await _chat_response(payload, text, has_clip, context=context)
-        classified = _classify_chat(text, has_clip)
+        classified = _classify_chat(
+            text,
+            has_clip,
+            segment=seg_dict,
+            duration_s=float(record.source_info.duration_seconds) if record and record.source_info else None,
+            fps=float(record.source_info.fps) if record and record.source_info else None,
+        )
         result = _guard_pending(classified, text, context)
         # Director interview (empty platform): an idea request becomes 3
         # quick questions (style/duration/format) before the proposal.
         # Smalltalk/help/status/cancel pass through untouched.
+        # Guarda-redes 2026-11-05: um pedido de análise ou de seleção nunca
+        # é ideia — mesmo que uma futura variante de conjugação escape ao
+        # answer_project_question, nunca perguntamos "Que estilo queres?".
         if not has_clip and result.get("intent") == "idea_proposal":
+            low_guard = norm_chat_text(text)
+            if "analis" in low_guard or "anális" in low_guard:
+                guarded = answer_project_question(
+                    text, context, has_clip=has_clip,
+                    has_texts=bool(context["job"]["texts"]),
+                )
+                if guarded is not None:
+                    logger.info("chat_turn intent=question has_clip=%s chars=%d guarded=analysis",
+                                has_clip, len(text))
+                    return await _chat_response(guarded, text, has_clip, context=context, context_text=context_text)
+                logger.info("chat_turn intent=question has_clip=%s chars=%d guarded=analysis_fallback",
+                            has_clip, len(text))
+                return await _chat_response({
+                    "intent": "question",
+                    "reply": (
+                        "Ainda não analisei esse vídeo — sem análise não adivinho o conteúdo. "
+                        "Seleciona-o nos Recursos e prime «Analisar vídeo» no painel "
+                        "Propriedades; eu vejo-o de verdade e depois respondo sobre o que lá está."
+                    ),
+                    "needs_confirmation": False,
+                    "pending_text": None,
+                    "pending_kind": None,
+                }, text, has_clip, context=context, context_text=context_text)
+            if "selecion" in low_guard and ("video" in low_guard or "vídeo" in low_guard or "clipe" in low_guard or "qual" in low_guard or "que" in low_guard):
+                guarded = answer_project_question(
+                    text, context, has_clip=has_clip,
+                    has_texts=bool(context["job"]["texts"]),
+                )
+                if guarded is not None:
+                    logger.info("chat_turn intent=question has_clip=%s chars=%d guarded=selection",
+                                has_clip, len(text))
+                    return await _chat_response(guarded, text, has_clip, context=context, context_text=context_text)
             provided = body.interview.model_dump(exclude_none=True) if body.interview else {}
             turn = _interview_turn(text, provided)
             payload = {
@@ -1538,7 +2622,7 @@ def create_app(
             text, context, has_clip=bool(context["job"]["has_clip"]),
             has_texts=bool(context["job"]["texts"]),
         ) is not None:
-            return dict(payload, pending_text=None, pending_kind=None, pending_tool_calls=[])
+            return dict(payload, pending_text=None, pending_kind=None, pending_tool_calls=[], pending_segment=None, pending_estimate=None)
         return payload
 
     async def _chat_response(
@@ -1697,19 +2781,17 @@ def create_app(
 
     @app.post("/api/jobs/{job_id}/trim", response_model=None)
     async def set_trim(job_id: str, body: TrimRequest) -> JobResponse | JSONResponse:
-        """ADR-041 upload trim. Allowed only before voice input (queued, not
-        ready): the worker materializes a trimmed working copy and re-probes,
-        so masks, render and verification all bind the trimmed clip while the
-        original file stays untouched. Both null clears the trim."""
+        """ADR-041 upload trim (ADR-056: allowed in live mode too). Allowed only
+        before voice input (queued, not ready): the worker materializes a trimmed
+        working copy and re-probes, so masks, render and verification all bind the
+        trimmed clip while the original file stays untouched. Live SAM consent
+        binds the original hash plus this window; changing it later requires
+        fresh consent. Both null clears the trim."""
         record = store.get(job_id)
         if record.status.value != "queued" or record.ready:
             return _error(409, "trim_not_allowed",
                           f"Job {job_id} is {record.status.value} (ready={record.ready}); "
                           "trim applies only before voice input.")
-        if bundle.segmentation_mode == "live":
-            return _error(409, "trim_live_sam_unsupported",
-                           "Trim is not supported with live SAM segmentation: consent binds "
-                           "the original source hash. Clear the trim or use mock segmentation.")
         # Trims are always absolute in the ORIGINAL clip, so repeated edits
         # stay consistent after source_info switches to the trimmed copy.
         original_duration = record.original_duration_s or record.source_info.duration_seconds

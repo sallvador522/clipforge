@@ -9,6 +9,21 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ClipTrimAudio, type ClipAudio, type ClipTrim } from "./ClipTrimAudio";
 import { CLIP_TEXT_COLOURS } from "@/lib/textOverlays";
+import type { VideoAnalysisData } from "@/lib/api";
+
+export type VideoAnalysisStatus =
+  | "idle" | "loading" | "confirm" | "working" | "done" | "error" | "stale";
+
+export interface VideoAnalysisPanelState {
+  status: VideoAnalysisStatus;
+  analysis: VideoAnalysisData | null;
+  error: string | null;
+  estimateText: string;
+  onCheck: () => void;
+  onStartConfirm: () => void;
+  onCancelConfirm: () => void;
+  onAnalyze: () => void;
+}
 
 export interface SelectedAssetInfo {
   asset_id: string;
@@ -70,6 +85,8 @@ interface Props {
   hasPlan: boolean;
   /** ADR-044: the library asset selected in Recursos. */
   selectedAsset?: SelectedAssetInfo | null;
+  /** ADR-057: native video understanding for the selected video asset. */
+  videoAnalysis?: VideoAnalysisPanelState | null;
   onClearSelection?: () => void;
   clipEdit?: {
     canEdit: boolean;
@@ -105,8 +122,9 @@ function Row({ label, value, mono = true }: { label: string; value: string; mono
   );
 }
 
-export function PropertiesPanel({ children, fileName, statusText, meta, planSummary, resultReady, activeScene, onOpenPlanReview, hasPlan, clipEdit, selectedAsset, onClearSelection, selectedText, onUpdateText, onDeleteText, colourEdit }: Props) {
-  const hasContent = Boolean(children || meta || fileName || activeScene || hasPlan || clipEdit?.canEdit || selectedAsset || selectedText || colourEdit);
+export function PropertiesPanel({ children, fileName, statusText, meta, planSummary, resultReady, activeScene, onOpenPlanReview, hasPlan, clipEdit, selectedAsset, videoAnalysis, onClearSelection, selectedText, onUpdateText, onDeleteText, colourEdit }: Props) {
+  const hasSelectedVideo = selectedAsset != null && selectedAsset.kind === "video";
+  const hasContent = Boolean(children || meta || fileName || activeScene || hasPlan || clipEdit?.canEdit || selectedAsset || selectedText || colourEdit || (videoAnalysis && hasSelectedVideo));
   // Colour sliders: local draft, applied explicitly (each render is real work).
   const [contrast, setContrast] = useState(colourEdit?.contrast ?? 1);
   const [brightness, setBrightness] = useState(colourEdit?.brightness ?? 0);
@@ -310,6 +328,132 @@ export function PropertiesPanel({ children, fileName, statusText, meta, planSumm
                   Arrasta para uma faixa da timeline para usar.
                 </p>
               ) : null}
+              {selectedAsset.kind === "video" && videoAnalysis && (
+                <div className="mt-2 rounded-[6px] border border-border/70 bg-raised/40 p-2.5" role="group" aria-label="Análise do vídeo">
+                  <p className="text-[11px] font-medium">Análise do vídeo</p>
+                  {videoAnalysis.status === "idle" && (
+                    <div className="mt-1.5">
+                      <button
+                        type="button"
+                        onClick={videoAnalysis.onCheck}
+                        className="w-full rounded-[6px] border border-accent/50 px-2.5 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-accent hover:text-[#14110C] focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        Analisar vídeo
+                      </button>
+                    </div>
+                  )}
+                  {videoAnalysis.status === "loading" && (
+                    <p className="mt-1.5 text-[11px] text-muted" role="status">A verificar análise…</p>
+                  )}
+                  {videoAnalysis.status === "confirm" && (
+                    <div className="mt-1.5">
+                      <p className="text-[11px] leading-relaxed text-muted">
+                        Isto envia o vídeo para a Meta para análise visual. {videoAnalysis.estimateText}
+                      </p>
+                      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={videoAnalysis.onAnalyze}
+                          className="rounded-[6px] bg-accent px-2.5 py-1.5 text-[12px] font-semibold text-[#14110C] transition-colors hover:bg-[#ff8a70] focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          Analisar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={videoAnalysis.onCancelConfirm}
+                          className="rounded-[6px] border border-border px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {videoAnalysis.status === "working" && (
+                    <p className="mt-1.5 text-[11px] text-muted" role="status">A analisar o vídeo… pode demorar um minuto. Não feches o painel.</p>
+                  )}
+                  {videoAnalysis.status === "error" && (
+                    <div className="mt-1.5">
+                      <p className="text-[11px] leading-relaxed text-danger" role="alert">{videoAnalysis.error ?? "A análise falhou. Tenta de novo."}</p>
+                      <button
+                        type="button"
+                        onClick={videoAnalysis.onCheck}
+                        className="mt-1.5 w-full rounded-[6px] border border-border px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        Tentar de novo
+                      </button>
+                    </div>
+                  )}
+                  {videoAnalysis.status === "stale" && (
+                    <div className="mt-1.5">
+                      <p className="text-[11px] leading-relaxed text-muted">O vídeo mudou desde a última análise.</p>
+                      <button
+                        type="button"
+                        onClick={videoAnalysis.onStartConfirm}
+                        className="mt-1.5 w-full rounded-[6px] border border-accent/50 px-2.5 py-1.5 text-[12px] font-medium text-foreground transition-colors hover:bg-accent hover:text-[#14110C] focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        Analisar de novo
+                      </button>
+                    </div>
+                  )}
+                  {videoAnalysis.status === "done" && videoAnalysis.analysis && (
+                    <div className="mt-1.5 space-y-1.5">
+                      {videoAnalysis.analysis.is_mock && (
+                        <p className="text-[10px] font-medium text-accent">Análise simulada — sem chamada ao modelo.</p>
+                      )}
+                      {videoAnalysis.analysis.overall_summary && (
+                        <p className="text-[12px] leading-relaxed">{videoAnalysis.analysis.overall_summary}</p>
+                      )}
+                      {!videoAnalysis.analysis.overall_summary && videoAnalysis.analysis.raw_text && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-[11px] text-muted underline underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent">
+                            Ver análise completa (texto do modelo)
+                          </summary>
+                          <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/90">{videoAnalysis.analysis.raw_text}</p>
+                        </details>
+                      )}
+                      {videoAnalysis.analysis.important_moments.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Momentos</p>
+                          <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-[12px] leading-relaxed">
+                            {videoAnalysis.analysis.important_moments.slice(0, 4).map((m, i) => (
+                              <li key={i}>
+                                {m.at_s != null && (
+                                  <span className="font-mono text-[11px] text-accent">
+                                    {String(Math.floor(m.at_s / 60)).padStart(2, "0")}:{String(Math.floor(m.at_s % 60)).padStart(2, "0")}{" "}
+                                  </span>
+                                )}
+                                {m.label}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {videoAnalysis.analysis.editing_opportunities.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Melhorias</p>
+                          <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-[12px] leading-relaxed">
+                            {videoAnalysis.analysis.editing_opportunities.slice(0, 4).map((op, i) => (
+                              <li key={i}>{op}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {videoAnalysis.analysis.uncertainties.length > 0 && (
+                        <p className="text-[11px] leading-relaxed text-muted">
+                          Por confirmar: {videoAnalysis.analysis.uncertainties.slice(0, 2).join(" · ")}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={videoAnalysis.onStartConfirm}
+                        className="w-full text-center text-[11px] text-muted underline underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        Analisar de novo
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {activeScene && (
